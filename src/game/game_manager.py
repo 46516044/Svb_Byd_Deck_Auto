@@ -83,7 +83,10 @@ class GameManager:
 
         # 加载HP检测遮罩
         self.hp_mask = None
-        mask_path = os.path.join("src", "templates", "hp_mask.png")
+        # 根据设备配置选择模板目录
+        is_global = device_state.device_config.get('is_global', False)
+        templates_dir = "templates_global" if is_global else "templates"
+        mask_path = os.path.join(templates_dir, "hp_mask.png")
         if os.path.exists(mask_path):
             self.hp_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
             logger.info(f"HP遮罩已加载: {mask_path}, 尺寸: {self.hp_mask.shape}")

@@ -1007,7 +1007,11 @@ class GameActions:
         使用相同的SIFT识别，但应用旧版简单策略规则（无优先级、无曲线检查）。
         """
         try:
-            from utils.card_swap_strategy_enhanced import determine_card_swaps_unified
+            # 修复pyinstaller打包时的导入问题
+            try:
+                from utils.card_swap_strategy_enhanced import determine_card_swaps_unified
+            except ImportError:
+                from src.utils.card_swap_strategy_enhanced import determine_card_swaps_unified
 
             self.device_state.logger.info("[Fallback] 使用SIFT识别 + 旧策略规则")
 
@@ -1141,7 +1145,7 @@ class GameActions:
         Returns:
             (is_valid, reason): 是否有效及原因
         """
-        # 检查1：必须恰好4张
+        # 检查1：必须恰好4张（严格遵循游戏规则）
         if len(cards) != 4:
             return False, f"卡牌数量错误: {len(cards)}张（预期4张）"
 
@@ -1152,15 +1156,15 @@ class GameActions:
         expected_positions = [282, 479, 676, 873]
 
         for i, (actual_x, expected_x) in enumerate(zip(x_coords, expected_positions)):
-            if abs(actual_x - expected_x) > 120:  # 允许±120px误差
-                return False, f"第{i+1}张卡位置异常: X={actual_x} (预期{expected_x}±120)"
+            if abs(actual_x - expected_x) > 150:  # 放宽误差到±150px
+                return False, f"第{i+1}张卡位置异常: X={actual_x} (预期{expected_x}±150)"
 
         # 检查3：Y坐标必须基本一致
         y_coords = [c['center'][1] for c in cards]
         y_mean = sum(y_coords) / len(y_coords)
         for i, y in enumerate(y_coords):
-            if abs(y - y_mean) > 50:  # Y轴偏差不应超过50px
-                return False, f"第{i+1}张卡Y坐标异常: {y} (平均{y_mean:.0f}±50)"
+            if abs(y - y_mean) > 80:  # 放宽Y轴误差到±80px
+                return False, f"第{i+1}张卡Y坐标异常: {y} (平均{y_mean:.0f}±80)"
 
         return True, "验证通过"
 
@@ -1170,8 +1174,13 @@ class GameActions:
         替代旧的_detect_change_card方法
         """
         try:
-            from utils.card_swap_strategy_enhanced import determine_card_swaps_enhanced
-            from config.card_priorities import get_high_priority_cards
+            # 修复pyinstaller打包时的导入问题
+            try:
+                from utils.card_swap_strategy_enhanced import determine_card_swaps_enhanced
+                from config.card_priorities import get_high_priority_cards
+            except ImportError:
+                from src.utils.card_swap_strategy_enhanced import determine_card_swaps_enhanced
+                from src.config.card_priorities import get_high_priority_cards
 
             # 1. 获取截图
             screenshot = self.device_state.take_screenshot()
@@ -1183,8 +1192,8 @@ class GameActions:
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
             # 2. 复用单例SIFT识别器（避免重复加载模板）
-            # 换牌区域: (182, 402, 971, 633)
-            mulligan_region = (182, 402, 971, 633)
+            # 换牌区域: (170, 390, 980, 645) - 扩大区域以确保捕捉到所有4张卡牌
+            mulligan_region = (170, 390, 980, 645)
             sift_recognizer = self.hand_manager.sift_recognition
 
             # 临时设置换牌区域
@@ -1282,6 +1291,51 @@ class GameActions:
                         f"[SIFT换牌] {max_retries}次重试均失败，放弃识别"
                     )
                     return False
+                
+                # 自动补全机制：如果识别到3张卡牌，尝试根据位置信息补全第4张
+                if len(cards) == 3:
+                    self.device_state.logger.warning("[SIFT换牌] 识别到3张卡牌，尝试自动补全第4张")
+                    # 计算已识别卡牌的X坐标间隔
+                    x_coords = sorted([c['center'][0] for c in cards])
+                    intervals = [x_coords[i+1] - x_coords[i] for i in range(2)]
+                    avg_interval = sum(intervals) / len(intervals)
+                    
+                    # 检查缺失的位置 - 放宽匹配阈值到150
+                    expected_positions = [282, 479, 676, 873]
+                    missing_pos = None
+                    for pos in expected_positions:
+                        if not any(abs(c['center'][0] - pos) < 150 for c in cards):
+                            missing_pos = pos
+                            break
+                    
+                    # 如果没有找到缺失的位置，尝试通过间隔计算
+                    if not missing_pos and len(x_coords) == 3:
+                        # 检查是否在开头或结尾缺失
+                        if x_coords[0] > 350:  # 开头缺失
+                            missing_pos = x_coords[0] - avg_interval
+                        elif x_coords[-1] < 800:  # 结尾缺失
+                            missing_pos = x_coords[-1] + avg_interval
+                        else:  # 中间缺失
+                            # 检查哪个间隔异常大
+                            if intervals[0] > avg_interval * 1.5:
+                                missing_pos = x_coords[0] + avg_interval
+                            elif intervals[1] > avg_interval * 1.5:
+                                missing_pos = x_coords[1] + avg_interval
+                    
+                    if missing_pos:
+                        # 确保位置在合理范围内
+                        missing_pos = max(200, min(900, missing_pos))
+                        # 创建一个虚拟卡牌补全
+                        virtual_card = {
+                            'cost': 0,
+                            'name': '未知卡牌',
+                            'center': (int(missing_pos), cards[0]['center'][1]),
+                            'confidence': 0.5
+                        }
+                        cards.append(virtual_card)
+                        self.device_state.logger.info(f"[SIFT换牌] 已补全第4张卡牌，位置: {int(missing_pos)}")
+                    else:
+                        self.device_state.logger.warning("[SIFT换牌] 无法确定缺失卡牌的位置，补全失败")
 
                 # 记录识别结果（含详细位置信息）
                 card_names = [f"{c['cost']}费_{c['name']}" for c in cards]

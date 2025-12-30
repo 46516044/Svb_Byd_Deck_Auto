@@ -28,10 +28,10 @@ class SiftCardRecognition:
         self.card_images_dir = card_images_dir
         self.card_templates = {}  # 缓存卡牌模板
         self.sift = cv2.SIFT_create()
-        self.scale_factor = 0.3  # 缩放因子（匹配游戏中卡牌的实际大小）
+        self.scale_factor = 0.33  # 进一步调整缩放因子，匹配游戏中卡牌的实际大小
         self.hand_area = (229, 539, 1130, 710)  # 手牌区域 (x1, y1, x2, y2) - 更新为新坐标
-        self.min_matches = 4  # 最小匹配点数
-        self.match_threshold = 0.01  # 匹配阈值
+        self.min_matches = 3  # 暂时降低到3，提高识别成功率，后续会在findHomography前检查
+        self.match_threshold = 0.025  # 进一步放宽匹配阈值，提高识别成功率
         
         # 加载卡牌模板
         self._load_card_templates()
@@ -164,9 +164,9 @@ class SiftCardRecognition:
                     # 根据区域动态调整聚类阈值
                     region_width = self.hand_area[2] - self.hand_area[0]
                     if region_width > 700:  # 换牌区域（789px）
-                        distance_thresh = 100  # 增大阈值以应对换牌时的特殊情况
+                        distance_thresh = 120  # 进一步增大阈值以应对换牌时的特殊情况
                     else:  # 战斗手牌区域（901px）
-                        distance_thresh = 80
+                        distance_thresh = 100
                     for i, pt in enumerate(dst_pts):
                         found = False
                         for cidx, c in enumerate(clusters):
@@ -179,13 +179,18 @@ class SiftCardRecognition:
                             clusters.append(pt.copy())
                             cluster_indices.append([i])
                     for idx_list in cluster_indices:
-                        if len(idx_list) < self.min_matches:
+                        if len(idx_list) < 4:  # findHomography至少需要4个点
                             continue
                         cluster_good_matches = [good_matches[i] for i in idx_list]
                         src_pts = np.float32([template_info['keypoints'][m.queryIdx].pt for m in cluster_good_matches]).reshape(-1, 1, 2)
                         dst_pts_c = np.float32([hand_keypoints[m.trainIdx].pt for m in cluster_good_matches]).reshape(-1, 1, 2)
                         M, mask = cv2.findHomography(src_pts, dst_pts_c, cv2.RANSAC, 5.0)
+                        # 优化Homography检查：确保有足够的内点
                         if M is not None:
+                            inliers = mask.ravel().tolist()
+                            inlier_count = sum(inliers)
+                            if inlier_count < self.min_matches:
+                                continue
                             h, w = template_info['template'].shape[:2]
                             template_center = np.array([[w/2, h/2, 1]], dtype=np.float32)
                             target_center = M.dot(template_center.T)

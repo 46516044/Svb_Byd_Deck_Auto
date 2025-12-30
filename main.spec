@@ -65,7 +65,9 @@ excluded_files = [
 hiddenimports = collect_submodules('PyQt5') + [
     'numpy', 'pandas', 'cv2', 'PIL', 'torch', 'torchvision',
     'requests', 'scipy', 'sklearn', 'shapely', 'easyocr',
-    'adbutils', 'uiautomator2', 'flask', 'colorama', 'click'
+    'adbutils', 'uiautomator2', 'flask', 'colorama', 'click',
+    'utils.card_swap_strategy_enhanced',
+    'config.card_priorities'
 ]
 
 binaries = []
@@ -130,7 +132,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,  # 是否启用控制台窗口，因为程序需要获取用户输入以确认同意声明
+    console=False,  # 是否启用控制台窗口，因为程序需要获取用户输入以确认同意声明
     icon=os.path.join(project_root, 'app_icon.ico') if os.path.exists(os.path.join(project_root, 'app_icon.ico')) else None,
 )
 
