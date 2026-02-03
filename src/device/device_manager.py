@@ -241,6 +241,17 @@ class DeviceManager:
                     time.sleep(3)
                     device_state.logger.debug(f"调用start_new_match后 - in_match: {device_state.in_match}")
                     continue
+                
+                # 处理庆典模式按钮
+                if key == 'gala_war' or key == 'gala_Ok' or key == 'gala_index':
+                    # 检测到庆典模式按钮，计算中心点并点击
+                    device_state.logger.debug(f"检测到庆典模式按钮: {template_info['name']}")
+                    # 计算中心点并点击
+                    center_x = max_loc[0] + template_info['w'] // 2
+                    center_y = max_loc[1] + template_info['h'] // 2
+                    device_state.u2_device.click(center_x + random.randint(-2, 2), center_y + random.randint(-2, 2))
+                    time.sleep(1)
+                    continue
 
                 if key == 'decision':
                     device_state.start_new_match()
@@ -277,19 +288,27 @@ class DeviceManager:
                 if key == 'end_round':
                     device_state.logger.debug(f"处理结束回合按钮 - in_match: {device_state.in_match}, 当前回合: {device_state.current_round_count}")
                     
-                    # 根据是否有额外费用点决定进化/超进化执行回合
-                    if device_state.extra_cost_available_this_match:
-                        evolution_rounds = range(4, 25)  # 4到14，包含4和14
+                    # 检查是否启用空过功能
+                    enable_auto_pass = config_manager.get("game", {}).get("enable_auto_pass", False)
+                    device_state.logger.debug(f"空过功能状态: {enable_auto_pass}")
+                    
+                    if enable_auto_pass:
+                        # 启用空过，直接点击结束回合按钮
+                        device_state.logger.info("启用空过，直接结束回合")
                     else:
-                        evolution_rounds = range(5, 25) # 5到14，包含5和14
-                    if device_state.current_round_count in evolution_rounds:
-                        game_manager.game_actions.perform_fullPlus_actions()
-                    else:
-                        game_manager.game_actions.perform_full_actions()
-                    if device_state.current_round_count == 15:
-                        device_state.restart_emulator()
+                        # 未启用空过，执行原有逻辑
+                        # 根据是否有额外费用点决定进化/超进化执行回合
+                        if device_state.extra_cost_available_this_match:
+                            evolution_rounds = range(4, 25)  # 4到14，包含4和14
+                        else:
+                            evolution_rounds = range(5, 25) # 5到14，包含5和14
+                        if device_state.current_round_count in evolution_rounds:
+                            game_manager.game_actions.perform_fullPlus_actions()
+                        else:
+                            game_manager.game_actions.perform_full_actions()
+                        if device_state.current_round_count == 15:
+                            device_state.restart_emulator()
                    
-                        
                     # 记录当前回合的费用使用情况（在回合结束时）
                     device_state.last_round_available_cost = device_state.current_round_count  # 当前回合的基础费用
                     # 如果有激活的额外费用点，加上额外费用（PP）

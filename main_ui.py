@@ -127,10 +127,11 @@ class ConfigPage(QWidget):
         
         main_layout.addWidget(restart_group)
         
-        # 换牌策略设置
-        strategy_group = QGroupBox("换牌策略设置")
-        strategy_layout = QVBoxLayout(strategy_group)
+        # 出牌设置
+        play_group = QGroupBox("出牌设置")
+        play_layout = QVBoxLayout(play_group)
         
+        # 换牌策略设置
         # 策略选择
         strategy_selection_layout = QHBoxLayout()
         strategy_selection_layout.addWidget(QLabel("选择换牌策略:"))
@@ -149,14 +150,16 @@ class ConfigPage(QWidget):
         self.strategy_help_btn.clicked.connect(self.show_strategy_help)
         strategy_selection_layout.addWidget(self.strategy_help_btn)
         
-        strategy_layout.addLayout(strategy_selection_layout)
+        play_layout.addLayout(strategy_selection_layout)
         
         # 添加说明
         strategy_desc = QLabel("说明: 根据费用档次策略自动换牌，确保关键回合能准时展开，每次切换换牌策略后，需重启软件才能生效。")
         strategy_desc.setStyleSheet("font-size: 12px; color: #AACCFF;")
-        strategy_layout.addWidget(strategy_desc)
+        play_layout.addWidget(strategy_desc)
         
-        main_layout.addWidget(strategy_group)
+
+        
+        main_layout.addWidget(play_group)
 
         # 操作按钮
         btn_layout = QHBoxLayout()
@@ -378,6 +381,8 @@ class ConfigPage(QWidget):
         # 保存换牌策略设置
         strategy = self.strategy_combo.currentText()
         self.config_data["game"]["card_replacement_strategy"] = strategy
+        
+
         
         # 注意：卡牌优先级设置已迁移到独立页面 CardPriorityPage，由它单独保存该部分配置。
         # 这里只保存与参数设置相关的其他字段（如 'game' 和 'auto_restart'）。
@@ -2233,6 +2238,17 @@ class ShadowverseUI(QMainWindow):
         
     def show_startup_dialog(self):
         """显示启动弹窗"""
+        # 检查是否已经同意过协议
+        config_path = os.path.join(get_exe_dir(), "config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+                if config_data.get("agreed_to_disclaimer", False):
+                    return True
+            except Exception:
+                pass
+        
         # 创建自定义消息框
         dialog = QMessageBox()
         dialog.setWindowTitle("免责声明")
@@ -2252,6 +2268,10 @@ class ShadowverseUI(QMainWindow):
         dialog.setTextFormat(Qt.RichText)
         dialog.setText(message)
         
+        # 添加复选框
+        checkbox = QCheckBox("同意一次后不再显示此弹窗")
+        dialog.setCheckBox(checkbox)
+        
         # 设置按钮
         dialog.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         dialog.button(QMessageBox.Yes).setText("同意")
@@ -2259,6 +2279,25 @@ class ShadowverseUI(QMainWindow):
         
         # 执行弹窗并获取结果
         result = dialog.exec_()
+        
+        # 如果同意且勾选了不再显示，保存配置
+        if result == QMessageBox.Yes and checkbox.isChecked():
+            try:
+                # 读取现有配置
+                if os.path.exists(config_path):
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+                else:
+                    config_data = {}
+                
+                # 更新配置
+                config_data["agreed_to_disclaimer"] = True
+                
+                # 保存配置
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config_data, f, indent=4, ensure_ascii=False)
+            except Exception:
+                pass
         
         # 返回是否同意（Yes对应QMessageBox.Yes）
         return result == QMessageBox.Yes
@@ -2538,14 +2577,24 @@ class ShadowverseUI(QMainWindow):
         adb_layout.addStretch()
         frame_layout.addLayout(adb_layout)
         
-        # 深色识别
-        dark_layout = QHBoxLayout()
-        dark_layout.addWidget(QLabel("深色识别:"))
+        # 深色识别、庆典模式和空过设置
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("深色识别:"))
         self.deep_color_checkbox = QCheckBox()
         self.deep_color_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
-        dark_layout.addWidget(self.deep_color_checkbox)
-        dark_layout.addStretch()
-        frame_layout.addLayout(dark_layout)
+        mode_layout.addWidget(self.deep_color_checkbox)
+        mode_layout.addSpacing(30)
+        mode_layout.addWidget(QLabel("庆典模式:"))
+        self.gala_mode_checkbox = QCheckBox()
+        self.gala_mode_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
+        mode_layout.addWidget(self.gala_mode_checkbox)
+        mode_layout.addSpacing(30)
+        mode_layout.addWidget(QLabel("启用空过:"))
+        self.auto_pass_checkbox = QCheckBox()
+        self.auto_pass_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
+        mode_layout.addWidget(self.auto_pass_checkbox)
+        mode_layout.addStretch()
+        frame_layout.addLayout(mode_layout)
         
         left_layout.addWidget(status_frame)
         
@@ -2680,6 +2729,12 @@ class ShadowverseUI(QMainWindow):
                     
                     # 设置深色识别选项
                     self.deep_color_checkbox.setChecked(last_device.get("screenshot_deep_color", False))
+                    # 设置庆典模式选项
+                    self.gala_mode_checkbox.setChecked(last_device.get("gala_mode", False))
+                    # 设置空过选项
+                    # 从config.json的game部分读取enable_auto_pass设置
+                    game_config = config.get("game", {})
+                    self.auto_pass_checkbox.setChecked(game_config.get("enable_auto_pass", False))
                 else:
                     # 如果没有设备配置，设置默认值
                     self.adb_input.setText("127.0.0.1:16384")
@@ -2704,9 +2759,11 @@ class ShadowverseUI(QMainWindow):
         self.append_log(f"正在连接设备: {adb_port}...")
         self.connect_btn.setEnabled(False)
         
-        # 获取服务器和深色识别设置
+        # 获取服务器、深色识别、庆典模式和空过设置
         is_global = self.server_combo.currentText() == "国际服"
         deep_color = self.deep_color_checkbox.isChecked()
+        gala_mode = self.gala_mode_checkbox.isChecked()
+        auto_pass = self.auto_pass_checkbox.isChecked()
         
         # 更新配置文件
         config_path = os.path.join(get_exe_dir(), "config.json")
@@ -2726,15 +2783,21 @@ class ShadowverseUI(QMainWindow):
                 "name": f"模拟器-{adb_port}",
                 "serial": adb_port,
                 "is_global": is_global,
-                "screenshot_deep_color": deep_color
+                "screenshot_deep_color": deep_color,
+                "gala_mode": gala_mode
             }
             config["devices"].append(new_device)
+            
+            # 更新game配置中的enable_auto_pass
+            if "game" not in config:
+                config["game"] = {}
+            config["game"]["enable_auto_pass"] = auto_pass
             
             # 保存配置
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
             
-            self.append_log(f"设备设置已更新: 服务器={self.server_combo.currentText()}, 深色识别={'开启' if deep_color else '关闭'}")
+            self.append_log(f"设备设置已更新: 服务器={self.server_combo.currentText()}, 深色识别={'开启' if deep_color else '关闭'}, 庆典模式={'开启' if gala_mode else '关闭'}, 启用空过={'开启' if auto_pass else '关闭'}")
             
         except Exception as e:
             self.append_log(f"更新配置文件失败: {str(e)}")

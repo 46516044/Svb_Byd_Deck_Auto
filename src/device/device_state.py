@@ -139,6 +139,17 @@ class DeviceState:
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
 
+        # 添加队列处理器，让设备日志也能显示在UI界面
+        try:
+            from main import log_queue
+            from main import QueueHandler
+            queue_handler = QueueHandler(log_queue)
+            queue_handler.setFormatter(console_formatter)
+            logger.addHandler(queue_handler)
+        except Exception as e:
+            # 如果导入失败，可能是在其他模块中运行，不影响功能
+            pass
+
         # 设置不向上传递，避免重复输出
         logger.propagate = False
 
