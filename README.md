@@ -1,5 +1,3 @@
-<div align="center">
-
 <img alt="logo" src="logo.png" height="256" width="256" />
 
 # Shadowverse: Worlds Beyond 自动化脚本
