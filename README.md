@@ -54,7 +54,7 @@
    cd Svb_Byd_Deck_Auto
    ```
 
-2. 创建虚拟环境并安装依赖：
+2. 创建虚拟环境：
    ```powershell
    python -m venv .venv
    .venv\Scripts\activate  # Windows
