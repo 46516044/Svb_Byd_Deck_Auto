@@ -1834,12 +1834,12 @@ class CardPriorityPage(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(15)
 
-        title_label = QLabel("卡牌优先级")
+        title_label = QLabel("卡牌设置")
         title_label.setStyleSheet("font-size: 20px; color: #88AAFF; font-weight: bold;")
         title_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title_label)
 
-        desc_label = QLabel("为卡组中的卡片设置优先级 数字越大优先级越低，优先度上限是999(默认所有卡牌999)")
+        desc_label = QLabel("为卡组中的卡片设置优先级和模式选项 数字越大优先级越低，优先度上限是999(默认所有卡牌999，模式选项默认是空选项，即不执行任何特殊操作)")
         desc_label.setStyleSheet("font-size: 12px; color: #AACCFF;")
         main_layout.addWidget(desc_label)
 
@@ -1865,7 +1865,7 @@ class CardPriorityPage(QWidget):
         main_layout.addWidget(self.scroll_area)
 
         btn_layout = QHBoxLayout()
-        self.save_btn = QPushButton("保存优先级")
+        self.save_btn = QPushButton("保存设置")
         self.save_btn.clicked.connect(self.save_config)
         self.back_btn = QPushButton("返回主界面")
         self.back_btn.clicked.connect(lambda: self.parent.stacked_widget.setCurrentIndex(0))
@@ -1950,10 +1950,24 @@ class CardPriorityPage(QWidget):
                 evolve_priority_input.setText(str(evolve_priority.get("priority", "")))
             row_layout.addWidget(evolve_priority_input)
 
+            # 添加模式选项下拉菜单
+            row_layout.addWidget(QLabel("模式选项:"))
+            mode_combo = QComboBox()
+            mode_combo.addItems(["空选项", "选项1", "选项2"])
+            mode_combo.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+            mode_combo.setMaximumWidth(80)
+            # 加载当前模式选项设置
+            mode_option = self.config_data.get("card_mode_options", {}).get(card_name, "空选项")
+            index = mode_combo.findText(mode_option)
+            if index >= 0:
+                mode_combo.setCurrentIndex(index)
+            row_layout.addWidget(mode_combo)
+
             self.card_widgets.append({
                 "card_name": card_name,
                 "play_priority": play_priority_input,
-                "evolve_priority": evolve_priority_input
+                "evolve_priority": evolve_priority_input,
+                "mode_option": mode_combo
             })
 
             self.scroll_layout.addWidget(card_row)
@@ -1969,6 +1983,7 @@ class CardPriorityPage(QWidget):
     def get_current_config(self):
         high_priority_cards = {}
         evolve_priority_cards = {}
+        card_mode_options = {}
         for card in self.card_widgets:
             card_name = card["card_name"]
             play_priority_text = card["play_priority"].text().strip()
@@ -1985,17 +2000,24 @@ class CardPriorityPage(QWidget):
                     evolve_priority_cards[card_name] = {"priority": priority}
                 except Exception:
                     pass
+            # 保存模式选项
+            mode_option = card["mode_option"].currentText()
+            if mode_option != "空选项":
+                card_mode_options[card_name] = mode_option
         result = {}
         if high_priority_cards:
             result["high_priority_cards"] = high_priority_cards
         if evolve_priority_cards:
             result["evolve_priority_cards"] = evolve_priority_cards
+        if card_mode_options:
+            result["card_mode_options"] = card_mode_options
         return result
 
     def save_config(self):
         # 仅保存卡牌优先级部分，合并磁盘上的其余配置
         high_priority_cards = {}
         evolve_priority_cards = {}
+        card_mode_options = {}
         for card in self.card_widgets:
             card_name = card["card_name"]
             play_priority_text = card["play_priority"].text().strip()
@@ -2018,6 +2040,10 @@ class CardPriorityPage(QWidget):
                 except Exception as e:
                     QMessageBox.warning(self, "输入错误", f"卡片 '{card_name}' 的进化优先级设置错误: {str(e)}")
                     return
+            # 保存模式选项
+            mode_option = card["mode_option"].currentText()
+            if mode_option != "空选项":
+                card_mode_options[card_name] = mode_option
 
         config_path = os.path.join(get_exe_dir(), "config.json")
         existing = {}
@@ -2038,14 +2064,19 @@ class CardPriorityPage(QWidget):
         elif "evolve_priority_cards" in existing:
             del existing["evolve_priority_cards"]
 
+        if card_mode_options:
+            existing["card_mode_options"] = card_mode_options
+        elif "card_mode_options" in existing:
+            del existing["card_mode_options"]
+
         try:
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(existing, f, indent=4, ensure_ascii=False)
-            QMessageBox.information(self, "成功", "卡牌优先级已保存！")
+            QMessageBox.information(self, "成功", "卡牌设置已保存！")
             if hasattr(self.parent, 'log_output'):
-                self.parent.log_output.append("[配置] 卡牌优先级已更新")
+                self.parent.log_output.append("[配置] 卡牌设置已更新")
         except Exception as e:
-            QMessageBox.warning(self, "保存失败", f"保存卡牌优先级失败: {str(e)}")
+            QMessageBox.warning(self, "保存失败", f"保存卡牌设置失败: {str(e)}")
 
 class SharePage(QWidget):
     def __init__(self, parent=None):
@@ -2396,6 +2427,8 @@ class ShadowverseUI(QMainWindow):
         message += "<p>&nbsp;</p>"
         message += "<p><span style='color: red; font-weight: bold;'>本工具属于免费发布，禁止任何形式倒卖！！！</span></p>"
         message += "<p><span style='color: blue;'>工具交流开发群：892100160</span></p>"
+        message += "<p><span style='color: blue;'>工具交流群：1070074638</span></p>"
+        message += "<p><span style='color: blue;'>工具开发群：883457604</span></p>"
         
         dialog.setTextFormat(Qt.RichText)
         dialog.setText(message)
@@ -2800,7 +2833,7 @@ class ShadowverseUI(QMainWindow):
         self.config_btn.setFixedHeight(35)
         self.config_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(2))
         
-        self.card_priority_btn = QPushButton("卡牌优先级")
+        self.card_priority_btn = QPushButton("卡牌设置")
         self.card_priority_btn.setFixedHeight(35)
         self.card_priority_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(5))
         
@@ -2815,7 +2848,7 @@ class ShadowverseUI(QMainWindow):
         # 紧凑排列按钮
         right_layout.addWidget(self.card_select_btn) # 卡组选择按钮        
         right_layout.addWidget(self.my_deck_btn) # 我的卡组按钮
-        right_layout.addWidget(self.card_priority_btn) # 卡牌优先级按钮
+        right_layout.addWidget(self.card_priority_btn) # 卡牌设置按钮
         right_layout.addWidget(self.config_btn) # 参数设置按钮
         right_layout.addWidget(self.share_btn) # 卡组应用和分享按钮
         right_layout.addStretch() # 底部间距

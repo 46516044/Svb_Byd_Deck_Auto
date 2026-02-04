@@ -6,6 +6,8 @@
 import time
 import random
 import logging
+import json
+import os
 from typing import TYPE_CHECKING
 from src.config.card_priorities import get_high_priority_cards
 from src.config import settings
@@ -16,6 +18,18 @@ if TYPE_CHECKING:
     from src.device.device_state import DeviceState
 
 logger = logging.getLogger(__name__)
+
+# 获取卡牌模式选项配置
+def get_card_mode_options():
+    """获取卡牌模式选项配置"""
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.json')
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            return config.get('card_mode_options', {})
+    except Exception as e:
+        logger.warning(f"读取卡牌模式选项配置失败: {str(e)}")
+        return {}
 
 # 手牌出牌时特殊处理卡牌（需要特殊操作逻辑）
 SPECIAL_CARDS = {
@@ -69,35 +83,58 @@ class CardPlaySpecialActions:
         # 导入特殊卡牌配置
         special_cards = get_special_cards()
         high_priority_names = set(get_high_priority_cards().keys())
+        card_mode_options = get_card_mode_options()
         
-        # 检查是否为特殊处理卡牌
-        if card_name in special_cards:
-            special_info = special_cards[card_name]
-            target_type = special_info.get('target_type', '')
+        # 检查是否为模式卡牌（有模式选项设置）
+        if card_name in card_mode_options:
+            mode_option = card_mode_options[card_name]
+            self.device_state.logger.info(f"检测到模式卡牌{card_name}，选项: {mode_option}")
             
-            if target_type == 'enemy_player':
-                self._handle_enemy_player_target(card_name, center_x, center_y, target_x)
-            elif target_type == 'shield_or_highest_hp':
-                self._handle_shield_or_highest_hp_target(card_name, center_x, center_y, target_x)
-            elif target_type == 'double_enemy':
-                self._handle_double_destroy(card_name, center_x, center_y, target_x)
-            elif target_type == 'enemy_followers_hp_less_than_6':
-                self._handle_enemy_followers_hp_less_than_6_target(card_name, center_x, center_y, target_x)
-            elif target_type == 'scan_our_follower_to_choose':
-                self._handle_scan_our_follower_to_choose_target(card_name, center_x, center_y, target_x)
-            elif target_type == 'shield_or_highest_hp_no_enemy_retrun_point':
-                result = self._handle_shield_or_highest_hp_noenemy_retrun_point_target(card_name, center_x, center_y, target_x)
-                if result is False:
-                    # 特殊处理：不消耗费用，且需要从手牌中移除
-                    self._should_not_consume_cost = True
-                    self._should_remove_from_hand = True
-                    return False
-            else:
-                # 其他特殊卡牌，使用默认处理
-                self._default_card_play(center_x, center_y, target_x)
+            # 划出卡牌
+            human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
+            time.sleep(0.2)  # 等待
+            
+            # 根据选择的选项执行相应的坐标点击操作
+            if mode_option == "选项1":
+                # 执行坐标点击操作：click_x, click_y = 748, 328
+                click_x, click_y = 748, 328
+                self.device_state.logger.info(f"执行选项1操作，点击坐标: ({click_x}, {click_y})")
+                self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
+            elif mode_option == "选项2":
+                # 执行坐标点击操作：click_x, click_y = 724, 429
+                click_x, click_y = 724, 429
+                self.device_state.logger.info(f"执行选项2操作，点击坐标: ({click_x}, {click_y})")
+                self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
+            # 空选项不需要处理，按正常流程执行
         else:
-            # 普通卡牌，正常打出
-            self._default_card_play(center_x, center_y, target_x)
+            # 检查是否为特殊处理卡牌
+            if card_name in special_cards:
+                special_info = special_cards[card_name]
+                target_type = special_info.get('target_type', '')
+                
+                if target_type == 'enemy_player':
+                    self._handle_enemy_player_target(card_name, center_x, center_y, target_x)
+                elif target_type == 'shield_or_highest_hp':
+                    self._handle_shield_or_highest_hp_target(card_name, center_x, center_y, target_x)
+                elif target_type == 'double_enemy':
+                    self._handle_double_destroy(card_name, center_x, center_y, target_x)
+                elif target_type == 'enemy_followers_hp_less_than_6':
+                    self._handle_enemy_followers_hp_less_than_6_target(card_name, center_x, center_y, target_x)
+                elif target_type == 'scan_our_follower_to_choose':
+                    self._handle_scan_our_follower_to_choose_target(card_name, center_x, center_y, target_x)
+                elif target_type == 'shield_or_highest_hp_no_enemy_retrun_point':
+                    result = self._handle_shield_or_highest_hp_noenemy_retrun_point_target(card_name, center_x, center_y, target_x)
+                    if result is False:
+                        # 特殊处理：不消耗费用，且需要从手牌中移除
+                        self._should_not_consume_cost = True
+                        self._should_remove_from_hand = True
+                        return False
+                else:
+                    # 其他特殊卡牌，使用默认处理
+                    self._default_card_play(center_x, center_y, target_x)
+            else:
+                # 普通卡牌，正常打出
+                self._default_card_play(center_x, center_y, target_x)
         
         # 特殊费用处理：勇武的堕天使奥莉薇打出后增加2点费用
         if card_name == "勇武的堕天使奥莉薇":
