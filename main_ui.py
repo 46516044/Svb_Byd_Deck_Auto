@@ -97,9 +97,12 @@ class ConfigPage(QWidget):
         
         main_layout.addWidget(drag_group)
         
-        # 自动重启设置
-        restart_group = QGroupBox("自动重启设置 (防止游戏卡死)")
-        restart_layout = QGridLayout(restart_group)
+        # 运行设置
+        run_group = QGroupBox("运行设置")
+        run_layout = QVBoxLayout(run_group)
+        
+        # 自动重启设置子区域
+        auto_restart_layout = QGridLayout()
         
         # 获取当前自动重启设置
         auto_restart_config = self.config_data.get("auto_restart", {})
@@ -110,22 +113,72 @@ class ConfigPage(QWidget):
         self.restart_enabled_checkbox = QCheckBox("启用自动重启功能")
         self.restart_enabled_checkbox.setChecked(self.auto_restart_enabled)
         self.restart_enabled_checkbox.setStyleSheet("color: #FFFFFF;")
-        restart_layout.addWidget(self.restart_enabled_checkbox, 0, 0, 1, 2)
+        auto_restart_layout.addWidget(self.restart_enabled_checkbox, 0, 0, 1, 2)
         
         # 无操作重启时间输入
-        restart_layout.addWidget(QLabel("无操作自动重启时间 (分钟):"), 1, 0)
+        auto_restart_layout.addWidget(QLabel("无操作自动重启时间 (分钟):"), 1, 0)
         self.restart_time_input = QLineEdit(str(self.output_timeout))
         self.restart_time_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
         self.restart_time_input.setEnabled(self.auto_restart_enabled)
-        restart_layout.addWidget(self.restart_time_input, 1, 1)
+        auto_restart_layout.addWidget(self.restart_time_input, 1, 1)
         
         # 连接复选框状态变化信号
         self.restart_enabled_checkbox.stateChanged.connect(self.on_restart_enabled_changed)
         
         # 添加说明
-        restart_layout.addWidget(QLabel("说明: 设置无操作后自动重启游戏的时间间隔，建议设置在3-10分钟之间"), 2, 0, 1, 2)
+        auto_restart_layout.addWidget(QLabel("说明: 设置无操作后自动重启游戏的时间间隔，建议设置在3-10分钟之间"), 2, 0, 1, 2)
         
-        main_layout.addWidget(restart_group)
+        # 将自动重启设置添加到运行设置中
+        auto_restart_widget = QWidget()
+        auto_restart_widget.setLayout(auto_restart_layout)
+        run_layout.addWidget(auto_restart_widget)
+        
+        # 运行终止条件设置
+        termination_layout = QGridLayout()
+        
+        # 运行时长设置
+        termination_layout.addWidget(QLabel("运行时长 (分钟):"), 0, 0)
+        self.run_duration_input = QLineEdit("0")
+        self.run_duration_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+        termination_layout.addWidget(self.run_duration_input, 0, 1)
+        
+        # 对战次数阈值设置
+        termination_layout.addWidget(QLabel("对战次数阈值:"), 1, 0)
+        self.battle_count_input = QLineEdit("0")
+        self.battle_count_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+        termination_layout.addWidget(self.battle_count_input, 1, 1)
+        
+        # 添加说明
+        termination_layout.addWidget(QLabel("说明: 运行时长或对战次数达到设定值时，脚本将停止运行。设置为0表示不限制。"), 2, 0, 1, 2)
+        
+        # 将终止条件设置添加到运行设置中
+        termination_widget = QWidget()
+        termination_widget.setLayout(termination_layout)
+        run_layout.addWidget(termination_widget)
+        
+        # 关闭模式选择和帮助按钮（横向对齐）
+        close_mode_layout = QVBoxLayout()
+        
+        # 强制关闭复选框和帮助按钮（横向布局）
+        force_close_help_layout = QHBoxLayout()
+        self.force_close_checkbox = QCheckBox("启用强制关闭模式")
+        self.force_close_checkbox.setStyleSheet("color: #FFFFFF;")
+        force_close_help_layout.addWidget(self.force_close_checkbox)
+        force_close_help_layout.addStretch()
+        self.run_help_btn = QPushButton("帮助")
+        self.run_help_btn.clicked.connect(self.show_run_help)
+        force_close_help_layout.addWidget(self.run_help_btn)
+        close_mode_layout.addLayout(force_close_help_layout)
+        
+        # 添加说明
+        close_mode_layout.addWidget(QLabel("说明: 强制关闭模式会忽略当前运行状态，直接强制关闭模拟器。"))
+        
+        # 将关闭模式设置添加到运行设置中
+        close_mode_widget = QWidget()
+        close_mode_widget.setLayout(close_mode_layout)
+        run_layout.addWidget(close_mode_widget)
+        
+        main_layout.addWidget(run_group)
         
         # 出牌设置
         play_group = QGroupBox("出牌设置")
@@ -195,6 +248,11 @@ class ConfigPage(QWidget):
                 "enabled": self.restart_enabled_checkbox.isChecked(),
                 "output_timeout": int(self.restart_time_input.text()) * 60,  # 转换为秒
                 "match_timeout": 900
+            },
+            "run_settings": {
+                "max_run_duration": int(self.run_duration_input.text()) * 60,  # 转换为秒
+                "max_battle_count": int(self.battle_count_input.text()),
+                "force_close": self.force_close_checkbox.isChecked()
             }
         }
         return config
@@ -226,6 +284,37 @@ class ConfigPage(QWidget):
 """
         msg = QMessageBox()
         msg.setWindowTitle("换牌策略说明")
+        msg.setText(help_text)
+        msg.setIcon(QMessageBox.Information)
+        msg.exec_()
+    
+    def show_run_help(self):
+        """显示运行设置说明"""
+        help_text = """
+运行设置说明：
+
+【自动重启设置】
+• 启用自动重启功能：当游戏长时间无操作时，自动重启游戏
+• 无操作自动重启时间：设置无操作后自动重启游戏的时间间隔
+• 建议设置：3-10分钟之间
+
+【运行终止条件】
+• 运行时长：设置脚本运行的最大时间（分钟）
+• 对战次数阈值：设置脚本运行的最大对战次数
+• 终止逻辑：当达到任一条件时，脚本停止运行
+• 优先级：两个条件同时设置时，先达到哪个就触发哪个
+• 特殊值：设置为0表示不限制
+
+【关闭模式】
+• 普通关闭模式：脚本将完成当前正在进行的对战后，再执行关闭操作
+• 强制关闭模式：勾选后将忽略当前对战状态，直接强制关闭模拟器
+
+【注意事项】
+• 运行时长和对战次数阈值设置为0时，表示不限制
+• 自动重启功能和运行终止条件可以同时使用
+"""
+        msg = QMessageBox()
+        msg.setWindowTitle("运行设置说明")
         msg.setText(help_text)
         msg.setIcon(QMessageBox.Information)
         msg.exec_()
@@ -362,7 +451,6 @@ class ConfigPage(QWidget):
             # 更新自动重启配置
             if "auto_restart" not in self.config_data:
                 self.config_data["auto_restart"] = {}
-            
             self.config_data["auto_restart"]["enabled"] = self.restart_enabled_checkbox.isChecked()
             
             if self.restart_enabled_checkbox.isChecked():
@@ -376,6 +464,27 @@ class ConfigPage(QWidget):
                 self.config_data["auto_restart"]["match_timeout"] = 900
         except Exception as e:
             QMessageBox.warning(self, "输入错误", f"自动重启设置错误: {str(e)}")
+            return
+        
+        # 验证并保存运行设置
+        try:
+            # 更新运行设置配置
+            if "run_settings" not in self.config_data:
+                self.config_data["run_settings"] = {}
+            
+            run_duration = int(self.run_duration_input.text())
+            battle_count = int(self.battle_count_input.text())
+            
+            if run_duration < 0:
+                raise ValueError("运行时长不能为负数")
+            if battle_count < 0:
+                raise ValueError("对战次数不能为负数")
+            
+            self.config_data["run_settings"]["max_run_duration"] = run_duration * 60  # 转换为秒
+            self.config_data["run_settings"]["max_battle_count"] = battle_count
+            self.config_data["run_settings"]["force_close"] = self.force_close_checkbox.isChecked()
+        except Exception as e:
+            QMessageBox.warning(self, "输入错误", f"运行设置错误: {str(e)}")
             return
         
         # 保存换牌策略设置
@@ -417,6 +526,29 @@ class ConfigPage(QWidget):
             drag_range = self.config_data["game"]["human_like_drag_duration_range"]
         self.min_drag_input.setText(str(drag_range[0]))
         self.max_drag_input.setText(str(drag_range[1]))
+        
+        # 刷新自动重启设置
+        auto_restart_config = self.config_data.get("auto_restart", {})
+        self.auto_restart_enabled = auto_restart_config.get("enabled", True)
+        self.output_timeout = auto_restart_config.get("output_timeout", 300) // 60  # 转换为分钟
+        self.restart_enabled_checkbox.setChecked(self.auto_restart_enabled)
+        self.restart_time_input.setText(str(self.output_timeout))
+        self.restart_time_input.setEnabled(self.auto_restart_enabled)
+        
+        # 刷新运行设置
+        run_settings_config = self.config_data.get("run_settings", {})
+        max_run_duration = run_settings_config.get("max_run_duration", 0) // 60  # 转换为分钟
+        max_battle_count = run_settings_config.get("max_battle_count", 0)
+        force_close = run_settings_config.get("force_close", False)
+        self.run_duration_input.setText(str(max_run_duration))
+        self.battle_count_input.setText(str(max_battle_count))
+        self.force_close_checkbox.setChecked(force_close)
+        
+        # 刷新换牌策略设置
+        current_strategy = self.config_data.get("game", {}).get("card_replacement_strategy", "3费档次")
+        index = self.strategy_combo.findText(current_strategy)
+        if index >= 0:
+            self.strategy_combo.setCurrentIndex(index)
         
         # 卡片优先级已移至独立页面，主配置页不再直接刷新该部分
         return
@@ -2635,7 +2767,7 @@ class ShadowverseUI(QMainWindow):
         stats_frame.setObjectName("StatsFrame")
         grid_layout = QGridLayout(stats_frame)
         
-        # 只保留当前状态和运行时间
+        # 当前状态和运行时间
         grid_layout.addWidget(QLabel("当前状态:"), 0, 0)
         self.status_label = QLabel("未连接")
         self.status_label.setStyleSheet("color: #FF5555;")
@@ -2645,6 +2777,12 @@ class ShadowverseUI(QMainWindow):
         self.run_time_label = QLabel("00:00:00")
         self.run_time_label.setObjectName("StatValue")
         grid_layout.addWidget(self.run_time_label, 1, 1)
+        
+        # 对战次数
+        grid_layout.addWidget(QLabel("对战次数:"), 2, 0)
+        self.battle_count_label = QLabel("0")
+        self.battle_count_label.setObjectName("StatValue")
+        grid_layout.addWidget(self.battle_count_label, 2, 1)
         
         stats_layout.addWidget(stats_frame)
         control_layout.addWidget(stats_widget)

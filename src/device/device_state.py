@@ -470,7 +470,15 @@ class DeviceState:
         self.cost_history.clear()
 
         self.update_match_time()
-        self.logger.debug("检测到新对战开始")
+        self.logger.info(f"检测到新对战开始 - 第{self.current_run_matches}场对战")
+        # 将对战次数信息发送到日志队列，供UI界面显示
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+        try:
+            from main import log_queue
+            log_queue.put(f"[对战开始] 第{self.current_run_matches}场对战")
+        except Exception:
+            pass
 
     def get_run_summary(self) -> Dict[str, Any]:
         """获取本次运行总结"""

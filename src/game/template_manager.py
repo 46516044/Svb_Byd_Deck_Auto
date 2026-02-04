@@ -49,6 +49,9 @@ class TemplateManager:
             'LoginPage': self._create_template_info('LoginPage.png', "排队主界面"),
             'enterGame': self._create_template_info('enterGame.png', "排队进入"),
             'dailyCard': self._create_template_info('dailyCard.png', "跳过每日一抽"),
+            'gala_Ok': self._create_template_info('gala_Ok.png', "庆典广场_准备完成"),
+            'gala_war': self._create_template_info('gala_war.png', "庆典广场_对战"),
+            'gala_index': self._create_template_info('gala_index.png', "庆典广场_索引对战"),
         }
 
         # 加载额外模板

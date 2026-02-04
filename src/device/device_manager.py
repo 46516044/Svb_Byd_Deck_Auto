@@ -234,6 +234,8 @@ class DeviceManager:
                 if key == 'war':
                     # 检测到"决斗"按钮，表示新对战开始
                     device_state.logger.debug(f"检测到决斗按钮 - 当前in_match: {device_state.in_match}")
+                    # 记录新对战
+                    device_state.start_new_match()
                     # 计算中心点并点击
                     center_x = max_loc[0] + template_info['w'] // 2
                     center_y = max_loc[1] + template_info['h'] // 2
