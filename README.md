@@ -1,8 +1,10 @@
+<div align="center">
+
 <img alt="logo" src="logo.png" height="256" width="256" />
 
 # Shadowverse: Worlds Beyond 自动化脚本
-
 一个用于Shadowverse: Worlds Beyond游戏的自动化脚本工具，提供图形界面操作，支持多服务器配置、换牌策略选择和战斗自动化功能。
+</div>
 
 ## 功能一览
 
