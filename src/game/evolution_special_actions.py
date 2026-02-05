@@ -69,6 +69,13 @@ class EvolutionSpecialActions:
                 self._handle_attack_enemy_follower_hp_less_than_4(follower_name)
             elif action == 'attack_two_enemy_followers_hp_highest':
                 self._handle_attack_two_enemy_followers_hp_highest(follower_name)
+        
+        # 处理进化后模式选项的点击操作
+        from .card_play_special_actions import CardPlaySpecialActions
+        card_play_actions = CardPlaySpecialActions(self.device_state)
+        # 执行点击操作
+        card_play_actions.handle_evolve_mode_option(follower_name)
+        
         # 以后可扩展更多action
     
     def _handle_attack_two_enemy_followers_hp_less_than_4(self, follower_name, is_super_evolution=False):

@@ -158,8 +158,54 @@ class DeviceManager:
         # 主工作循环
         device_state.logger.debug("脚本初始化完成，开始运行...")
 
+        # 获取运行设置
+        run_settings = device_state.config.get("run_settings", {})
+        max_run_duration = run_settings.get("max_run_duration", 0)
+        max_battle_count = run_settings.get("max_battle_count", 0)
+        force_close = run_settings.get("force_close", False)
+        
+        # 记录脚本启动时间
+        script_start_time = time.time()
+        
+        # 标记是否达到停止条件
+        stop_condition_reached = False
+        # 标记是否已经显示过等待对战完成的日志
+        wait_log_shown = False
+
         while device_state.script_running:
             start_time = time.time()
+
+            # 检查运行时长限制
+            if max_run_duration > 0 and not stop_condition_reached:
+                current_duration = time.time() - script_start_time
+                if current_duration >= max_run_duration:
+                    device_state.logger.info(f"运行时长达到限制 ({max_run_duration} 秒)")
+                    stop_condition_reached = True
+
+            # 检查对战次数限制
+            if max_battle_count > 0 and not stop_condition_reached:
+                if device_state.current_run_matches >= max_battle_count:
+                    device_state.logger.info(f"对战次数达到限制 ({max_battle_count} 场)")
+                    stop_condition_reached = True
+
+            # 如果达到停止条件
+            if stop_condition_reached:
+                # 检查是否为强制关闭模式
+                if force_close:
+                    device_state.logger.info("强制关闭模式，立即停止脚本")
+                    device_state.script_running = False
+                    break
+                else:
+                    # 普通模式，等待当前对战完成
+                    if not device_state.in_match:
+                        device_state.logger.info("普通模式，当前无对战，停止脚本")
+                        device_state.script_running = False
+                        break
+                    else:
+                        # 只显示一次等待对战完成的日志
+                        if not wait_log_shown:
+                            device_state.logger.info("普通模式，等待当前对战完成后停止脚本")
+                            wait_log_shown = True
 
             # 检查超时并重启游戏
             # if device_state.check_timeout_and_restart():
@@ -178,8 +224,10 @@ class DeviceManager:
                 time.sleep(1)
                 continue
 
-            # 主要游戏逻辑
-            self._process_game_logic(device_state, game_manager, skip_buttons, self.config_manager)
+            # 如果达到停止条件，不再处理游戏逻辑
+            if not stop_condition_reached:
+                # 主要游戏逻辑
+                self._process_game_logic(device_state, game_manager, skip_buttons, self.config_manager)
 
             # 计算处理时间并调整等待
             process_time = time.time() - start_time
@@ -396,6 +444,27 @@ class DeviceManager:
         device_state.logger.info(f"运行时长: {summary['duration']}")
         device_state.logger.info(f"完成对战次数: {summary['matches_completed']}")
         device_state.logger.info("===== 脚本结束运行 =====")
+        
+        # 关闭模拟器
+        run_settings = device_state.config.get("run_settings", {})
+        force_close = run_settings.get("force_close", False)
+        
+        # 只有在强制关闭模式下才关闭模拟器
+        if force_close:
+            try:
+                if device_state.u2_device:
+                    device_state.logger.info("正在关闭模拟器...")
+                    # 使用uiautomator2的方法关闭应用
+                    device_state.u2_device.app_stop_all()
+                    # 对于模拟器，我们可以尝试使用adb命令关闭
+                    if device_state.adb_device:
+                        # 这里可以根据不同的模拟器类型执行不同的关闭命令
+                        # 例如，对于夜神模拟器：adb shell am force-stop com.yeshen.nexusplay
+                        # 对于蓝叠模拟器：adb shell am force-stop com.bluestacks.home
+                        # 但为了通用性，我们只停止游戏应用
+                        device_state.logger.info("已停止所有应用")
+            except Exception as e:
+                device_state.logger.warning(f"关闭模拟器时出错: {str(e)}")
     
     def wait_for_completion(self):
         """等待所有设备完成"""

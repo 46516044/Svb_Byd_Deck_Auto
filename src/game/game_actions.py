@@ -259,8 +259,8 @@ class GameActions:
                         self.device_state.logger.info(f"检测到超进化按钮并点击，剩余超进化次数：{self.device_state.super_evolution_point}")
                     time.sleep(3.5)
 
-                    # 特殊超进化后操作（如铁拳神父）
-                    if follower_name and is_evolve_special_action_card(follower_name):
+                    # 特殊超进化后操作（如铁拳神父）以及进化模式选项处理
+                    if follower_name:
                         self._handle_evolve_special_action(follower_name, pos, is_super_evolution=True, existing_followers=all_followers)
                     # 如果超进化到突进或者普通随从，则再检查无护盾后攻击敌方随从
                     if follower_type in ["yellow", "normal"]:
@@ -314,8 +314,8 @@ class GameActions:
                         self.device_state.logger.info(f"执行了进化，剩余进化次数：{self.device_state.evolution_point}")
                     time.sleep(3.5)
 
-                    # 特殊进化后操作（如铁拳神父）
-                    if follower_name and is_evolve_special_action_card(follower_name):
+                    # 特殊进化后操作（如铁拳神父）以及进化模式选项处理
+                    if follower_name:
                         self._handle_evolve_special_action(follower_name, pos, is_super_evolution=False, existing_followers=all_followers)
                 break
             time.sleep(0.01)

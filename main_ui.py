@@ -1963,11 +1963,32 @@ class CardPriorityPage(QWidget):
                 mode_combo.setCurrentIndex(index)
             row_layout.addWidget(mode_combo)
 
+            # 添加进化模式选项下拉菜单
+            row_layout.addWidget(QLabel("进化选项:"))
+            evolve_mode_combo = QComboBox()
+            evolve_mode_combo.addItems(["空选项", "选项1 (进化)", "选项2 (进化)"])
+            evolve_mode_combo.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+            evolve_mode_combo.setMaximumWidth(100)
+            # 加载当前进化模式选项设置
+            evolve_mode_option = self.config_data.get("card_evolve_mode_options", {}).get(card_name, "空选项")
+            # 转换进化模式选项格式
+            if evolve_mode_option == "选项1":
+                display_option = "选项1 (进化)"
+            elif evolve_mode_option == "选项2":
+                display_option = "选项2 (进化)"
+            else:
+                display_option = "空选项"
+            index = evolve_mode_combo.findText(display_option)
+            if index >= 0:
+                evolve_mode_combo.setCurrentIndex(index)
+            row_layout.addWidget(evolve_mode_combo)
+
             self.card_widgets.append({
                 "card_name": card_name,
                 "play_priority": play_priority_input,
                 "evolve_priority": evolve_priority_input,
-                "mode_option": mode_combo
+                "mode_option": mode_combo,
+                "evolve_mode_option": evolve_mode_combo
             })
 
             self.scroll_layout.addWidget(card_row)
@@ -1981,43 +2002,33 @@ class CardPriorityPage(QWidget):
         self.load_card_priority_settings() 
 
     def get_current_config(self):
-        high_priority_cards = {}
-        evolve_priority_cards = {}
-        card_mode_options = {}
-        for card in self.card_widgets:
-            card_name = card["card_name"]
-            play_priority_text = card["play_priority"].text().strip()
-            if play_priority_text:
-                try:
-                    priority = int(play_priority_text)
-                    high_priority_cards[card_name] = {"priority": priority}
-                except Exception:
-                    pass
-            evolve_priority_text = card["evolve_priority"].text().strip()
-            if evolve_priority_text:
-                try:
-                    priority = int(evolve_priority_text)
-                    evolve_priority_cards[card_name] = {"priority": priority}
-                except Exception:
-                    pass
-            # 保存模式选项
-            mode_option = card["mode_option"].currentText()
-            if mode_option != "空选项":
-                card_mode_options[card_name] = mode_option
-        result = {}
-        if high_priority_cards:
-            result["high_priority_cards"] = high_priority_cards
-        if evolve_priority_cards:
-            result["evolve_priority_cards"] = evolve_priority_cards
-        if card_mode_options:
-            result["card_mode_options"] = card_mode_options
-        return result
+        # 仅返回通用参数（卡牌优先级已拆分至 CardPriorityPage，完整配置可从磁盘读取）
+        config = {
+            "game": {
+                "human_like_drag_duration_range": [
+                    float(self.min_drag_input.text()),
+                    float(self.max_drag_input.text())
+                ]
+            },
+            "auto_restart": {
+                "enabled": self.restart_enabled_checkbox.isChecked(),
+                "output_timeout": int(self.restart_time_input.text()) * 60,  # 转换为秒
+                "match_timeout": 900
+            },
+            "run_settings": {
+                "max_run_duration": int(self.run_duration_input.text()) * 60,  # 转换为秒
+                "max_battle_count": int(self.battle_count_input.text()),
+                "force_close": self.force_close_checkbox.isChecked()
+            }
+        }
+        return config
 
     def save_config(self):
         # 仅保存卡牌优先级部分，合并磁盘上的其余配置
         high_priority_cards = {}
         evolve_priority_cards = {}
         card_mode_options = {}
+        card_evolve_mode_options = {}
         for card in self.card_widgets:
             card_name = card["card_name"]
             play_priority_text = card["play_priority"].text().strip()
@@ -2044,6 +2055,18 @@ class CardPriorityPage(QWidget):
             mode_option = card["mode_option"].currentText()
             if mode_option != "空选项":
                 card_mode_options[card_name] = mode_option
+            
+            # 保存进化模式选项
+            evolve_mode_option = card["evolve_mode_option"].currentText()
+            # 转换进化模式选项格式，去除" (进化)"后缀
+            if evolve_mode_option == "选项1 (进化)":
+                save_option = "选项1"
+            elif evolve_mode_option == "选项2 (进化)":
+                save_option = "选项2"
+            else:
+                save_option = "空选项"
+            if save_option != "空选项":
+                card_evolve_mode_options[card_name] = save_option
 
         config_path = os.path.join(get_exe_dir(), "config.json")
         existing = {}
@@ -2068,6 +2091,11 @@ class CardPriorityPage(QWidget):
             existing["card_mode_options"] = card_mode_options
         elif "card_mode_options" in existing:
             del existing["card_mode_options"]
+
+        if card_evolve_mode_options:
+            existing["card_evolve_mode_options"] = card_evolve_mode_options
+        elif "card_evolve_mode_options" in existing:
+            del existing["card_evolve_mode_options"]
 
         try:
             with open(config_path, 'w', encoding='utf-8') as f:

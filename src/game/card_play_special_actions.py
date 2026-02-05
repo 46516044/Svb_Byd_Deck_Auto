@@ -31,6 +31,18 @@ def get_card_mode_options():
         logger.warning(f"读取卡牌模式选项配置失败: {str(e)}")
         return {}
 
+# 获取卡牌进化模式选项配置
+def get_card_evolve_mode_options():
+    """获取卡牌进化模式选项配置"""
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.json')
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            return config.get('card_evolve_mode_options', {})
+    except Exception as e:
+        logger.warning(f"读取卡牌进化模式选项配置失败: {str(e)}")
+        return {}
+
 # 手牌出牌时特殊处理卡牌（需要特殊操作逻辑）
 SPECIAL_CARDS = {
     "蛇神之怒": {
@@ -99,12 +111,22 @@ class CardPlaySpecialActions:
                 # 执行坐标点击操作：click_x, click_y = 748, 328
                 click_x, click_y = 748, 328
                 self.device_state.logger.info(f"执行选项1操作，点击坐标: ({click_x}, {click_y})")
+                # 等待卡牌动画完成
+                time.sleep(0.3)
+                # 执行点击
                 self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
+                # 等待点击响应
+                time.sleep(0.5)
             elif mode_option == "选项2":
                 # 执行坐标点击操作：click_x, click_y = 724, 429
                 click_x, click_y = 724, 429
                 self.device_state.logger.info(f"执行选项2操作，点击坐标: ({click_x}, {click_y})")
+                # 等待卡牌动画完成
+                time.sleep(0.3)
+                # 执行点击
                 self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
+                # 等待点击响应
+                time.sleep(0.5)
             # 空选项不需要处理，按正常流程执行
         else:
             # 检查是否为特殊处理卡牌
@@ -129,6 +151,8 @@ class CardPlaySpecialActions:
                         self._should_not_consume_cost = True
                         self._should_remove_from_hand = True
                         return False
+
+                        
                 else:
                     # 其他特殊卡牌，使用默认处理
                     self._default_card_play(center_x, center_y, target_x)
@@ -479,4 +503,45 @@ class CardPlaySpecialActions:
         # 这里需要调用原有的扫描方法，通过device_state访问
         if hasattr(self.device_state, 'game_manager') and self.device_state.game_manager:
             return self.device_state.game_manager.scan_our_followers(screenshot)
-        return [] 
+        return []
+    
+    def handle_evolve_mode_option(self, card_name):
+        """处理进化后模式选项的点击操作"""
+        # 获取卡牌进化模式选项配置
+        card_evolve_mode_options = get_card_evolve_mode_options()
+        card_mode_options = get_card_mode_options()
+        
+        # 优先使用进化模式选项配置，如果没有则使用普通模式选项配置
+        if card_name in card_evolve_mode_options:
+            mode_option = card_evolve_mode_options[card_name]
+            self.device_state.logger.info(f"检测到进化模式卡牌{card_name}，选项: {mode_option}")
+        elif card_name in card_mode_options:
+            mode_option = card_mode_options[card_name]
+            self.device_state.logger.info(f"检测到进化模式卡牌{card_name}，使用普通模式选项配置: {mode_option}")
+        else:
+            # 不是进化模式卡牌，返回False
+            return False
+        
+        # 根据选择的选项执行相应的坐标点击操作
+        if mode_option == "选项1":
+            # 执行坐标点击操作：click_x, click_y = 748, 328
+            click_x, click_y = 748, 328
+            self.device_state.logger.info(f"执行进化选项1操作，点击坐标: ({click_x}, {click_y})")
+            # 等待卡牌动画完成
+            time.sleep(0.3)
+            # 执行点击
+            self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
+            # 等待点击响应
+            time.sleep(0.5)
+        elif mode_option == "选项2":
+            # 执行坐标点击操作：click_x, click_y = 724, 429
+            click_x, click_y = 724, 429
+            self.device_state.logger.info(f"执行进化选项2操作，点击坐标: ({click_x}, {click_y})")
+            # 等待卡牌动画完成
+            time.sleep(0.3)
+            # 执行点击
+            self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
+            # 等待点击响应
+            time.sleep(0.5)
+        # 空选项不需要处理
+        return True 

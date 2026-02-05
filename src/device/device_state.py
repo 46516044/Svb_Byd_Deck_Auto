@@ -255,6 +255,7 @@ class DeviceState:
 
         # 重置对战状态
         self.match_start_time = None
+        self.in_match = False
         self.current_round_count = 1
         self.evolution_point = 2
         self.super_evolution_point = 2
@@ -455,6 +456,7 @@ class DeviceState:
 
         self.current_run_matches += 1
         self.match_start_time = time.time()
+        self.in_match = True
         self.current_round_count = 1
         self.evolution_point = 2
         self.super_evolution_point = 2
