@@ -22,26 +22,82 @@ logger = logging.getLogger(__name__)
 # 获取卡牌模式选项配置
 def get_card_mode_options():
     """获取卡牌模式选项配置"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.json')
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-            return config.get('card_mode_options', {})
-    except Exception as e:
-        logger.warning(f"读取卡牌模式选项配置失败: {str(e)}")
-        return {}
+    import sys
+    
+    # 尝试多种路径来找到config.json
+    possible_paths = []
+    
+    # 1. 相对于当前文件的路径（开发环境）
+    current_dir = os.path.dirname(__file__)
+    possible_paths.append(os.path.join(current_dir, '../../config.json'))
+    
+    # 2. 相对于可执行文件的路径（PyInstaller打包后）
+    if getattr(sys, 'frozen', False):
+        # PyInstaller打包后的情况
+        exe_dir = os.path.dirname(sys.executable)
+        possible_paths.append(os.path.join(exe_dir, 'config.json'))
+    
+    # 3. 相对于工作目录的路径
+    possible_paths.append('config.json')
+    
+    # 4. 相对于脚本运行目录的路径
+    script_dir = os.getcwd()
+    possible_paths.append(os.path.join(script_dir, 'config.json'))
+    
+    for config_path in possible_paths:
+        config_path = os.path.abspath(config_path)
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    logger.debug(f"成功加载配置文件: {config_path}")
+                    return config.get('card_mode_options', {})
+            except Exception as e:
+                logger.warning(f"加载配置文件失败 {config_path}: {str(e)}")
+                continue
+    
+    logger.warning("未找到config.json文件，使用默认配置")
+    return {}
 
 # 获取卡牌进化模式选项配置
 def get_card_evolve_mode_options():
     """获取卡牌进化模式选项配置"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.json')
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-            return config.get('card_evolve_mode_options', {})
-    except Exception as e:
-        logger.warning(f"读取卡牌进化模式选项配置失败: {str(e)}")
-        return {}
+    import sys
+    
+    # 尝试多种路径来找到config.json
+    possible_paths = []
+    
+    # 1. 相对于当前文件的路径（开发环境）
+    current_dir = os.path.dirname(__file__)
+    possible_paths.append(os.path.join(current_dir, '../../config.json'))
+    
+    # 2. 相对于可执行文件的路径（PyInstaller打包后）
+    if getattr(sys, 'frozen', False):
+        # PyInstaller打包后的情况
+        exe_dir = os.path.dirname(sys.executable)
+        possible_paths.append(os.path.join(exe_dir, 'config.json'))
+    
+    # 3. 相对于工作目录的路径
+    possible_paths.append('config.json')
+    
+    # 4. 相对于脚本运行目录的路径
+    script_dir = os.getcwd()
+    possible_paths.append(os.path.join(script_dir, 'config.json'))
+    
+    for config_path in possible_paths:
+        config_path = os.path.abspath(config_path)
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    logger.debug(f"成功加载配置文件: {config_path}")
+                    return config.get('card_evolve_mode_options', {})
+            except Exception as e:
+                logger.warning(f"加载配置文件失败 {config_path}: {str(e)}")
+                continue
+    
+    logger.warning("未找到config.json文件，使用默认配置")
+    return {}
 
 # 手牌出牌时特殊处理卡牌（需要特殊操作逻辑）
 SPECIAL_CARDS = {
