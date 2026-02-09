@@ -149,8 +149,8 @@ class ConfigPage(QWidget):
         termination_layout.addWidget(self.battle_count_input, 1, 1)
         
         # 添加说明
-        termination_layout.addWidget(QLabel("说明: 运行时长或对战次数达到设定值时，脚本将停止运行。设置为0表示不限制。"), 2, 0, 1, 2)
-        
+        termination_layout.addWidget(QLabel("说明: 运行时长或对战次数达到设定值时，脚本将会关闭模拟器上的所有程序，并自动停止运行。设置为0表示不限制。"), 2, 0, 1, 2)
+        termination_layout.addWidget(QLabel("对战次数检测目前内测来看并不准确，大概率可能会把不正常的对战次数给算进去，导致脚本提前结束，如需使用对战次数检测，建议设置的数值大一点，最好是原本想对战次数的2倍或3倍。"), 3, 0, 1, 2)
         # 将终止条件设置添加到运行设置中
         termination_widget = QWidget()
         termination_widget.setLayout(termination_layout)
@@ -160,18 +160,19 @@ class ConfigPage(QWidget):
         close_mode_layout = QVBoxLayout()
         
         # 强制关闭复选框和帮助按钮（横向布局）
-        force_close_help_layout = QHBoxLayout()
-        self.force_close_checkbox = QCheckBox("启用强制关闭模式")
-        self.force_close_checkbox.setStyleSheet("color: #FFFFFF;")
-        force_close_help_layout.addWidget(self.force_close_checkbox)
-        force_close_help_layout.addStretch()
-        self.run_help_btn = QPushButton("帮助")
-        self.run_help_btn.clicked.connect(self.show_run_help)
-        force_close_help_layout.addWidget(self.run_help_btn)
-        close_mode_layout.addLayout(force_close_help_layout)
+        # force_close_help_layout = QHBoxLayout()
+        # # 隐藏强制关闭模式选项，默认启用
+        # # self.force_close_checkbox = QCheckBox("启用强制关闭模式")
+        # # self.force_close_checkbox.setStyleSheet("color: #FFFFFF;")
+        # # force_close_help_layout.addWidget(self.force_close_checkbox)
+        # force_close_help_layout.addStretch()
+        # self.run_help_btn = QPushButton("帮助")
+        # self.run_help_btn.clicked.connect(self.show_run_help)
+        # force_close_help_layout.addWidget(self.run_help_btn)
+        # close_mode_layout.addLayout(force_close_help_layout)
         
         # 添加说明
-        close_mode_layout.addWidget(QLabel("说明: 强制关闭模式会忽略当前运行状态，直接强制关闭模拟器。"))
+        # close_mode_layout.addWidget(QLabel("说明: 强制关闭模式会忽略当前运行状态，直接强制关闭模拟器。"))
         
         # 将关闭模式设置添加到运行设置中
         close_mode_widget = QWidget()
@@ -252,7 +253,7 @@ class ConfigPage(QWidget):
             "run_settings": {
                 "max_run_duration": int(self.run_duration_input.text()) * 60,  # 转换为秒
                 "max_battle_count": int(self.battle_count_input.text()),
-                "force_close": self.force_close_checkbox.isChecked()
+                "force_close": True
             }
         }
         return config
@@ -482,7 +483,7 @@ class ConfigPage(QWidget):
             
             self.config_data["run_settings"]["max_run_duration"] = run_duration * 60  # 转换为秒
             self.config_data["run_settings"]["max_battle_count"] = battle_count
-            self.config_data["run_settings"]["force_close"] = self.force_close_checkbox.isChecked()
+            self.config_data["run_settings"]["force_close"] = True
         except Exception as e:
             QMessageBox.warning(self, "输入错误", f"运行设置错误: {str(e)}")
             return
@@ -542,7 +543,7 @@ class ConfigPage(QWidget):
         force_close = run_settings_config.get("force_close", False)
         self.run_duration_input.setText(str(max_run_duration))
         self.battle_count_input.setText(str(max_battle_count))
-        self.force_close_checkbox.setChecked(force_close)
+        # self.force_close_checkbox.setChecked(force_close)
         
         # 刷新换牌策略设置
         current_strategy = self.config_data.get("game", {}).get("card_replacement_strategy", "3费档次")
@@ -1839,9 +1840,16 @@ class CardPriorityPage(QWidget):
         title_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title_label)
 
+        # 说明文字和帮助按钮
+        desc_layout = QHBoxLayout()
         desc_label = QLabel("为卡组中的卡片设置优先级和模式选项 数字越大优先级越低，优先度上限是999(默认所有卡牌999，模式选项默认是空选项，即不执行任何特殊操作)")
         desc_label.setStyleSheet("font-size: 12px; color: #AACCFF;")
-        main_layout.addWidget(desc_label)
+        desc_layout.addWidget(desc_label)
+        desc_layout.addStretch()
+        self.help_btn = QPushButton("帮助")
+        self.help_btn.clicked.connect(self.show_card_settings_help)
+        desc_layout.addWidget(self.help_btn)
+        main_layout.addLayout(desc_layout)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
@@ -1876,6 +1884,70 @@ class CardPriorityPage(QWidget):
         main_layout.addLayout(btn_layout)
 
         self.load_card_priority_settings()
+
+    def show_card_settings_help(self):
+        """显示卡牌设置帮助"""
+        help_text = """
+卡牌设置详细说明
+
+一、优先级设置
+
+1. 出牌优先级
+   作用：控制卡牌的打出顺序
+   数值含义：数字越小优先级越高
+   默认值：999（最低优先级）
+   示例：设置为1的卡牌会比设置为2的卡牌优先打出
+
+2. 进化优先级
+   作用：控制进化时的选择顺序
+   数值含义：数字越小优先级越高
+   默认值：999（最低优先级）
+   示例：进化时会优先选择进化优先级高的随从
+
+二、模式选项设置
+
+1. 模式选项
+   作用：为双选择的模式卡牌选择对应的选项
+   空选项：不会把这张卡认作模式卡，将以普通卡牌处理
+
+2. 进化选项
+   作用：为双选择的模式卡牌选择进化时对于的选项
+   空选项：不会把这张卡认作进化时模式卡，将以普通卡牌处理
+   
+
+建议及后续更新：
+   1. 模式选项和进化选项的设置是独立的，互不影响
+   2. 为了避免错误操作，建议先设置好优先级，再设置模式选项和进化选项
+   3. 后续如果会有空，会添加三模式或四模式卡牌的选项设置（不保证一定有）
+"""
+        # 创建消息框
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("卡牌设置帮助")
+        msg_box.setText(help_text)
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.addButton(QMessageBox.Ok)
+        
+        # 设置样式表，将文字颜色改为黑色
+        msg_box.setStyleSheet("""
+            QMessageBox {
+                background-color: white;
+            }
+            QMessageBox QLabel {
+                color: black;
+                font-size: 12px;
+            }
+            QPushButton {
+                background-color: #4A4A7F;
+                color: white;
+                border-radius: 5px;
+                padding: 5px 15px;
+            }
+            QPushButton:hover {
+                background-color: #5A5A8F;
+            }
+        """)
+        
+        msg_box.exec_()
 
     def load_config(self):
         config_path = os.path.join(get_exe_dir(), "config.json")
@@ -2018,7 +2090,7 @@ class CardPriorityPage(QWidget):
             "run_settings": {
                 "max_run_duration": int(self.run_duration_input.text()) * 60,  # 转换为秒
                 "max_battle_count": int(self.battle_count_input.text()),
-                "force_close": self.force_close_checkbox.isChecked()
+                "force_close": True
             }
         }
         return config
@@ -3018,6 +3090,19 @@ class ShadowverseUI(QMainWindow):
         self.log_output.verticalScrollBar().setValue(
             self.log_output.verticalScrollBar().maximum()
         )
+        
+        # 解析对战开始日志，更新对战次数
+        if "[对战开始]" in message:
+            try:
+                # 提取对战次数，如"[对战开始] 第3场对战" -> 3
+                import re
+                match = re.search(r'第(\d+)场对战', message)
+                if match:
+                    battle_count = int(match.group(1))
+                    self.battle_count = battle_count
+                    self.battle_count_label.setText(str(battle_count))
+            except Exception:
+                pass
     
     def start_script(self):
         if self.script_thread and not self.script_thread.isRunning():

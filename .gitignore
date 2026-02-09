@@ -102,6 +102,12 @@ Thumbs.db
 *.rar
 *.7z
 
+# 文档文件
+*.docx
+*.doc
+*.pdf
+*.txt
+
 # 配置文件（可选，根据项目需要）
 config.json
 /saved_decks/*.json

@@ -144,9 +144,10 @@ class DeviceManager:
             # 检测是否已经在游戏中
             if game_manager.detect_existing_match(gray_init_screenshot, templates):
                 # 设置本次运行的对战次数
-                device_state.current_run_matches = 1
+                # 检测到已开始的对战，设置为第1场
+                device_state.current_run_matches = 0
                 device_state.in_match = True
-                device_state.logger.debug(f"本次运行对战次数: {device_state.current_run_matches} (包含已开始的对战)")
+                device_state.logger.debug(f"检测到已开始的对战，将作为第1场计算")
             else:
                 device_state.logger.debug("未检测到进行中的对战")
         else:
