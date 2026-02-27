@@ -311,14 +311,26 @@ class GameManager:
             logger.error(f"Enemy follower detection failed: {e}", exc_info=True)
             return []
 
-    def scan_our_followers(self, screenshot, debug_flag=False, extra_shots: int = 2, sort_desc: bool = False):
-        """检测场上的我方随从位置和状态，扫描结果合并去重结果（并发优化）
+    def scan_our_followers(
+        self,
+        screenshot,
+        debug_flag: bool = False,
+        extra_shots: int = 2,
+        sort_desc: bool = False,
+        shot_delay_range=(0.12, 0.22),
+    ):
+        """检测场上的我方随从位置和状态。
+
+        设计目标：把“补扫/重扫”的零碎逻辑收敛到一次扫描里。
+        默认会在较短的随机间隔内采样3帧（1 + extra_shots=2），再做去重与命名汇总，
+        用于降低动画/特效导致的单帧漏检。
 
         Args:
             screenshot: 当前截图（PIL Image）
             debug_flag: 是否输出debug图片
-            extra_shots: 额外补充截图次数（默认2，用于提高识别稳定性；攻击阶段可设为0提高速度）
+            extra_shots: 额外补充截图次数（默认2，即总共3帧）
             sort_desc: True=按x坐标从右到左排序；False=从左到右排序
+            shot_delay_range: 多帧采样的随机间隔范围（秒）
         """
         import time
         import random
@@ -329,25 +341,72 @@ class GameManager:
         import os
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        all_follower_positions = []
-
         screenshots = [screenshot]
-        # 再截图几次识别，每次间隔一段时间
+        # 多帧采样：随机短间隔补两帧，减少过渡帧/特效干扰
         if hasattr(self.device_state, "take_screenshot"):
             try:
                 extra = int(extra_shots)
             except Exception:
                 extra = 2
             extra = max(0, extra)
+            try:
+                dmin, dmax = float(shot_delay_range[0]), float(shot_delay_range[1])
+            except Exception:
+                dmin, dmax = 0.12, 0.22
+            if dmax < dmin:
+                dmin, dmax = dmax, dmin
+            dmin = max(0.0, dmin)
+            dmax = max(dmin, dmax)
             for _ in range(extra):
-                time.sleep(0.5)
+                time.sleep(random.uniform(dmin, dmax))
                 screenshots.append(self.device_state.take_screenshot())
 
-        # 修正：提前定义recognize_followers，确保作用域正确
+        def _type_priority(t: str) -> int:
+            return {"green": 3, "yellow": 2, "normal": 1}.get(t, 0)
+
+        def _dedup_by_x(followers, x_thresh: int = 54):
+            """按x轴聚类去重：同一随从保留更高优先级类型，并尽量保留名字"""
+            if not followers:
+                return []
+            followers_sorted = sorted(followers, key=lambda p: p[0])
+            clusters = []  # [{'x':float, 'items':[...]}]
+            for item in followers_sorted:
+                x = int(item[0])
+                matched = False
+                for c in clusters:
+                    if abs(x - c["x"]) < x_thresh:
+                        c["items"].append(item)
+                        # 更新中心（简单平均即可）
+                        c["x"] = (c["x"] * (len(c["items"]) - 1) + x) / len(c["items"])
+                        matched = True
+                        break
+                if not matched:
+                    clusters.append({"x": float(x), "items": [item]})
+
+            merged = []
+            for c in clusters:
+                items = c["items"]
+                # 选类型优先级最高的条目
+                best = max(items, key=lambda it: _type_priority(it[2]))
+                bx, by, bt = int(best[0]), best[1], best[2]
+
+                # 名字：优先取任意非空名字（若冲突取出现次数最多）
+                names = [it[3] for it in items if len(it) > 3 and it[3]]
+                name = None
+                if names:
+                    from collections import Counter
+
+                    name = Counter(names).most_common(1)[0][0]
+
+                merged.append((bx, by, bt, name))
+
+            return merged
+
+        # 单帧识别：返回(positions, rectangles)
         def recognize_followers(shot, debug_flag):
             # 原有的单次随从识别逻辑
             if shot is None:
-                return []
+                return [], []
             # 创建debug文件夹
             if debug_flag:
                 os.makedirs("debug", exist_ok=True)
@@ -432,6 +491,7 @@ class GameManager:
                 yellow1_contours = future_yellow1.result()
                 blue_contours = future_blue.result()
             follower_positions = []
+            shot_all_follower_positions = []
             green_rects = []
             green_centers = []
             yellow_centers = []
@@ -729,7 +789,7 @@ class GameManager:
                 min_dim = min(w, h)
                 max_dim = max(w, h)
                 if 15 < max_dim < 40 and 3 < min_dim < 15 and area < 200:
-                    all_follower_positions.append(
+                    shot_all_follower_positions.append(
                         ((int(center_x + 263), 330), (int(center_x + 263 + 103), 463))
                     )
                     # 区域截图中卡我方随从的中心位置
@@ -793,75 +853,55 @@ class GameManager:
                 )
                 cv2.imwrite(f"debug/our_hp_region_{timestamp}.png", debug_img_blue)
             follower_positions.sort(key=lambda pos: pos[0], reverse=sort_desc)
-            return follower_positions
+            return follower_positions, shot_all_follower_positions
 
-        # 并发执行HSV识别
-        all_positions = []
-        recognize_count = 0
-        success_count = 0
+        # 并发执行多帧HSV识别（先得到每帧结果，再做汇总）
+        per_shot_followers = []
+        all_rectangles = []
 
-        with ThreadPoolExecutor(max_workers=len(screenshots)) as executor:
-            # 提交HSV识别任务
-            hsv_futures = [
+        with ThreadPoolExecutor(max_workers=max(1, len(screenshots))) as executor:
+            futures = [
                 executor.submit(recognize_followers, shot, debug_flag)
                 for shot in screenshots
                 if shot is not None
             ]
-            recognize_count = len(hsv_futures)
             import logging
-
-            # 等待HSV识别结果
-            for future in as_completed(hsv_futures):
+            for future in as_completed(futures):
                 try:
-                    result = future.result()
-                    all_positions.extend(result)
-                    success_count += 1
+                    followers, rects = future.result()
+                    followers = _dedup_by_x([(x, y, t, None) for (x, y, t) in followers])
+                    per_shot_followers.append(followers)
+                    all_rectangles.extend(rects)
                 except Exception as e:
                     logging.error(f"recognize_followers线程异常: {e}")
-            if not hsv_futures:
+            if not futures:
                 return []
 
-        # HSV结果去重（x轴在54像素内的点视为同一个随从点）
-        hsv_positions = []
-        threshold = 54  # 距离阈值（x轴判断）
-        for pos in all_positions:
-            x1, y1, t1 = pos[:3]
-            found = False
-            for m in hsv_positions:
-                x2, y2, t2 = m[:3]
-                if t1 == t2 and abs(x1 - x2) < threshold:
-                    found = True
-                    break
-            if not found:
-                hsv_positions.append(pos)
-        hsv_positions.sort(key=lambda pos: pos[0], reverse=sort_desc)
-
-        # all_follower_positions去重（左上角的点x轴在54像素内的点视为同一个点）
+        # 矩形区域去重（左上角x轴在54像素内视为同一个随从区域）
         deduplicated_follower_positions = []
-        for rect_coords in all_follower_positions:
+        for rect_coords in all_rectangles:
             (x1, y1), (x2, y2) = rect_coords
-            # 确保坐标为整数
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             found = False
             for existing_rect in deduplicated_follower_positions:
                 (ex1, ey1), (ex2, ey2) = existing_rect
-                if abs(x1 - ex1) < 54:  # 左上角x轴距离小于54像素
+                if abs(x1 - ex1) < 54:
                     found = True
                     break
             if not found:
                 deduplicated_follower_positions.append(((x1, y1), (x2, y2)))
 
         # 新的SIFT识别逻辑：基于去重后的all_follower_positions矩形区域
-        def perform_sift_recognition_on_rectangles():
+        def perform_sift_recognition_on_rectangles(base_screenshot):
             """对去重后的all_follower_positions中的每个矩形区域进行SIFT识别"""
             import os
             from PIL import Image
 
             # 准备截图数据
-            if hasattr(screenshot, "shape"):
-                cv_img = screenshot
+            if hasattr(base_screenshot, "shape"):
+                cv_img = base_screenshot
             else:
-                cv_img = np.array(screenshot)
+                cv_img = np.array(base_screenshot)
                 cv_img = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
 
             # 加载模板图片
@@ -938,29 +978,32 @@ class GameManager:
                     }
                 return None
 
-            # 加载所有模板
-            template_dir = "shadowverse_cards_cost"
-            template_files = [f for f in os.listdir(template_dir) if f.endswith(".png")]
-            card_templates = {}
+            # 加载所有模板（缓存，避免每次扫描重复读取磁盘）
+            if getattr(self, "_board_sift_templates", None) is None:
+                template_dir = "shadowverse_cards_cost"
+                template_files = [f for f in os.listdir(template_dir) if f.endswith(".png")]
+                card_templates = {}
 
-            with ThreadPoolExecutor(
-                max_workers=min(8, len(template_files))
-            ) as executor:
-                futures = [
-                    executor.submit(load_template_features, filename)
-                    for filename in template_files
-                ]
-                for future in as_completed(futures):
-                    try:
-                        result = future.result()
-                        if result is not None:
-                            tname, template_info = result
-                            card_templates[tname] = template_info
-                    except Exception as e:
-                        import logging
+                with ThreadPoolExecutor(max_workers=min(8, len(template_files) or 1)) as executor:
+                    futures = [
+                        executor.submit(load_template_features, filename)
+                        for filename in template_files
+                    ]
+                    for future in as_completed(futures):
+                        try:
+                            result = future.result()
+                            if result is not None:
+                                tname, template_info = result
+                                card_templates[tname] = template_info
+                        except Exception as e:
+                            import logging
 
-                        logging.error(f"模板加载异常: {e}")
-                        continue
+                            logging.error(f"模板加载异常: {e}")
+                            continue
+
+                self._board_sift_templates = card_templates
+            else:
+                card_templates = self._board_sift_templates
 
             # 对每个矩形区域进行SIFT识别
             results = []
@@ -1043,54 +1086,82 @@ class GameManager:
 
             return results
 
-        # 执行SIFT识别
-        sift_results = perform_sift_recognition_on_rectangles()
+        # 执行SIFT识别：用最新一帧作为裁剪基准（避免跨帧矩形导致命名失败）
+        base_for_naming = None
+        for s in reversed(screenshots):
+            if s is not None:
+                base_for_naming = s
+                break
+        if base_for_naming is None:
+            base_for_naming = screenshot
 
-        # 用SIFT识别结果对HSV识别去重后的结果进行命名
-        result_with_name = []
-        for x, y, t in hsv_positions:
-            x = int(x)
-            name = None
-            best_match_distance = float("inf")
+        sift_results = perform_sift_recognition_on_rectangles(base_for_naming)
 
-            # 在SIFT结果中寻找最近的匹配（x轴距离在30像素内）
-            for sift_item in sift_results:
-                cx, cy, sift_name = sift_item
-                x_distance = abs(cx - x)
-                if x_distance < 30 and x_distance < best_match_distance:
-                    name = sift_name
-                    best_match_distance = x_distance
+        def attach_names(followers):
+            named = []
+            for x, y, t, _ in followers:
+                x = int(x)
+                name = None
+                best_match_distance = float("inf")
+                for cx, cy, sift_name in sift_results:
+                    x_distance = abs(cx - x)
+                    if x_distance < 30 and x_distance < best_match_distance:
+                        name = sift_name
+                        best_match_distance = x_distance
+                named.append((x, y, t, name))
+            return named
 
-            # 检查x, y是否为NaN，若是则跳过
-            import numpy as np
+        per_shot_followers = [attach_names(f) for f in per_shot_followers]
 
-            if np.isnan(x) or np.isnan(y):
+        # 选一帧作为基准（结果最多；若相同则名字更多；再相同则可攻击随从更多）
+        def score(followers):
+            total = len(followers)
+            named_cnt = sum(1 for it in followers if it[3])
+            atk_cnt = sum(1 for it in followers if it[2] in ("green", "yellow"))
+            return (total, named_cnt, atk_cnt)
+
+        anchor = max(per_shot_followers, key=score) if per_shot_followers else []
+
+        # 汇总：以anchor为骨架，补全名字/升级类型/补齐漏检随从
+        merged = list(anchor)
+        x_match_thresh = 54
+
+        def merge_one(candidate):
+            nonlocal merged
+            for x, y, t, name in candidate:
+                matched_idx = None
+                for i, (mx, my, mt, mname) in enumerate(merged):
+                    if abs(x - mx) < x_match_thresh:
+                        matched_idx = i
+                        break
+
+                if matched_idx is None:
+                    merged.append((x, y, t, name))
+                    continue
+
+                mx, my, mt, mname = merged[matched_idx]
+                # 类型升级：green > yellow > normal
+                if _type_priority(t) > _type_priority(mt):
+                    mt = t
+                # 名字补全
+                if (not mname) and name:
+                    mname = name
+                merged[matched_idx] = (mx, my, mt, mname)
+
+        for shot_followers in per_shot_followers:
+            if shot_followers is anchor:
                 continue
-            result_with_name.append((x, y, t, name))
+            merge_one(shot_followers)
 
-        # 强制校准我方随从在y轴的坐标
-        result_with_name = [
-            (x, 399 + random.randint(-7, 7), t, name)
-            for (x, y, t, name) in result_with_name
+        # 最终按x聚类去重一次，并强制校准y坐标
+        merged = _dedup_by_x(merged, x_thresh=x_match_thresh)
+        merged = [
+            (int(x), 399 + random.randint(-7, 7), t, name)
+            for (x, y, t, name) in merged
         ]
-
-        # 对最终结果去重筛选：green > yellow > normal
-        priority_type = {"green": 3, "yellow": 2, "normal": 1}
-        filtered_result = []
-        for x, y, color, name in result_with_name:
-            keep = True
-            for i, (fx, fy, fcolor, fname) in enumerate(filtered_result):
-                if abs(x - fx) < 30 and name == fname:
-                    if priority_type.get(color, 0) > priority_type.get(fcolor, 0):
-                        filtered_result[i] = (x, y, color, name)  # 用当前的替换
-                    keep = False  # 无论是否替换，都不追加当前
-                    break
-            if keep:
-                filtered_result.append((x, y, color, name))
-        filtered_result = sorted(filtered_result, key=lambda pos: pos[0], reverse=sort_desc)
-        self.device_state.logger.info(f"我方当前场上随从: {filtered_result}")
-
-        return filtered_result
+        merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
+        self.device_state.logger.info(f"我方当前场上随从: {merged}")
+        return merged
 
     def scan_shield_targets(self, debug_flag=False):
         """扫描护盾（多线程并发处理）"""

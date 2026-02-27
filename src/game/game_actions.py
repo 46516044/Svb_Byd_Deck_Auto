@@ -71,36 +71,14 @@ class GameActions:
             shield_detected = bool(shield_targets)
 
 
-        # 攻击阶段：每次从右往左优先处理（新召唤随从通常出现在右侧）
-        # 并且在关键动作后快速重扫，避免漏掉“本回合可攻击”的新随从。
-        all_followers = []
-        try:
-            screenshot = self.device_state.take_screenshot()
-            if screenshot:
-                all_followers = self._scan_our_followers(screenshot, extra_shots=0, sort_desc=True)
-                self.follower_manager.update_positions(all_followers)
-        except Exception:
-            all_followers = []
+        # 攻击阶段：从右往左优先处理（新召唤随从通常出现在右侧）
+        # 扫描/重扫由 _refresh_our_followers 统一处理，避免外层零散补扫。
+        all_followers = self._refresh_our_followers(sort_desc=True)
 
-        if not all_followers:
-            all_followers = self.follower_manager.get_positions()
-
-        # 如果没有任何可攻击随从：做一次“更稳”的补扫，避免刚出完牌/刚触发召唤时落在过渡帧
         attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
         if not attackable:
-            try:
-                time.sleep(0.35)
-                screenshot = self.device_state.take_screenshot()
-                if screenshot:
-                    all_followers = self._scan_our_followers(screenshot, extra_shots=1, sort_desc=True)
-                    self.follower_manager.update_positions(all_followers)
-            except Exception:
-                pass
-
-            attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
-            if not attackable:
-                self.device_state.logger.info("未检测到可进行攻击的随从，跳过攻击操作")
-                return
+            self.device_state.logger.info("未检测到可进行攻击的随从，跳过攻击操作")
+            return
 
         if shield_detected:
             max_attempts = 5  # 最多循环5次
@@ -142,11 +120,7 @@ class GameActions:
                     return # 退出循环
 
                 # 攻击后更新随从信息
-                new_screenshot = self.device_state.take_screenshot()
-                if new_screenshot:
-                    new_followers = self._scan_our_followers(new_screenshot, extra_shots=0, sort_desc=True)
-                    self.follower_manager.update_positions(new_followers)
-                    all_followers = new_followers
+                all_followers = self._refresh_our_followers(sort_desc=True)
 
                 # 检查更新后的随从是否还有突进/疾驰能力，没有则直接返回
                 has_attack_followers = False
@@ -202,12 +176,7 @@ class GameActions:
             green_attack_count += 1
             time.sleep(0.45)
 
-            # 攻击后快速重扫，更新可攻击随从（从右往左）
-            new_screenshot = self.device_state.take_screenshot()
-            if not new_screenshot:
-                break
-            all_followers = self._scan_our_followers(new_screenshot, extra_shots=0, sort_desc=True)
-            self.follower_manager.update_positions(all_followers)
+            all_followers = self._refresh_our_followers(sort_desc=True)
 
         # 使用黄色突进随从攻击敌方血量最小的随从（从右往左，每次攻击后快速重扫）
         if not shield_detected:
@@ -254,11 +223,7 @@ class GameActions:
                     self.device_state.logger.warning(f"突进敌方最小血量随从失败: {str(e)}")
 
                 # 攻击后快速重扫（从右往左），避免漏掉新突进/疾驰随从
-                new_screenshot = self.device_state.take_screenshot()
-                if not new_screenshot:
-                    break
-                all_followers = self._scan_our_followers(new_screenshot, extra_shots=0, sort_desc=True)
-                self.follower_manager.update_positions(all_followers)
+                all_followers = self._refresh_our_followers(sort_desc=True)
 
     def perform_evolution_actions(self):
         """执行进化/超进化操作"""
@@ -462,20 +427,11 @@ class GameActions:
             self.device_state.logger.warning(f"敌方随从检测失败: {str(e)}")
             enemy_check = []
 
-        # 获取随从位置
-        screenshot = self.device_state.take_screenshot()
-        if screenshot:
-            blue_positions = self._scan_our_followers(screenshot)
-            self.follower_manager.update_positions(blue_positions)
+        # 刷新一次我方随从信息（扫描/补扫在内部统一处理）
+        self._refresh_our_followers(sort_desc=False)
 
-        # 检查是否有疾驰或突进随从
-        followers = self.follower_manager.get_positions()
-        green_or_yellow_followers = [f for f in followers if f[2] in ['green', 'yellow']]
-
-        if green_or_yellow_followers:
-            self.perform_follower_attacks(enemy_check)
-        else:
-            self.device_state.logger.info("未检测到可进行攻击的随从，跳过攻击操作")
+        # 攻击阶段在 perform_follower_attacks 内会自行判断是否可攻击
+        self.perform_follower_attacks(enemy_check)
 
         time.sleep(1)
 
@@ -527,11 +483,8 @@ class GameActions:
             self.device_state.logger.warning(f"敌方随从检测失败: {str(e)}")
             enemy_check = []
 
-        # 获取随从位置和类型
-        screenshot = self.device_state.take_screenshot()
-        if screenshot:
-            our_followers_positions = self._scan_our_followers(screenshot)
-            self.follower_manager.update_positions(our_followers_positions)
+        # 获取随从位置和类型（扫描/补扫在内部统一处理）
+        self._refresh_our_followers(sort_desc=False)
         
 
         # 进化/超进化条件判断：敌方有随从，或者我方绿色疾驰随从，或者有优先进化随从
@@ -575,11 +528,8 @@ class GameActions:
             )
             time.sleep(1)
 
-            # 获取进化/超进化后的随从位置和类型
-            screenshot = self.device_state.take_screenshot()
-            if screenshot:
-                our_followers_positions = self._scan_our_followers(screenshot)
-                self.follower_manager.update_positions(our_followers_positions)
+            # 获取进化/超进化后的随从位置和类型（统一入口）
+            self._refresh_our_followers(sort_desc=False)
 
 
         # 攻击阶段在 perform_follower_attacks 内会快速重扫一次，避免此处偶发漏检导致直接跳过
@@ -1522,13 +1472,54 @@ class GameActions:
             return self.device_state.game_manager.scan_enemy_followers(screenshot, is_select=is_select)
         return []
 
-    def _scan_our_followers(self, screenshot, extra_shots: int = 2, sort_desc: bool = False):
+    def _refresh_our_followers(
+        self,
+        *,
+        sort_desc: bool = False,
+        extra_shots: int = 2,
+        shot_delay_range=(0.08, 0.16),
+        retries: int = 1,
+        debug_flag: bool = False,
+    ):
+        """统一的“扫描并刷新我方随从”入口。
+
+        通过短间隔多帧采样 + 必要时重试，减少外层零散补扫。
+        """
+        for attempt in range(max(0, int(retries)) + 1):
+            screenshot = self.device_state.take_screenshot()
+            if screenshot is None:
+                break
+            followers = self._scan_our_followers(
+                screenshot,
+                extra_shots=extra_shots,
+                sort_desc=sort_desc,
+                shot_delay_range=shot_delay_range,
+                debug_flag=debug_flag,
+            )
+            if followers:
+                self.follower_manager.update_positions(followers)
+                return followers
+            if attempt < retries:
+                time.sleep(random.uniform(0.12, 0.22))
+
+        return self.follower_manager.get_positions()
+
+    def _scan_our_followers(
+        self,
+        screenshot,
+        extra_shots: int = 2,
+        sort_desc: bool = False,
+        shot_delay_range=(0.12, 0.22),
+        debug_flag: bool = False,
+    ):
         """检测场上的我方随从位置和状态"""
         if hasattr(self.device_state, 'game_manager') and self.device_state.game_manager:
             return self.device_state.game_manager.scan_our_followers(
                 screenshot,
+                debug_flag=debug_flag,
                 extra_shots=extra_shots,
                 sort_desc=sort_desc,
+                shot_delay_range=shot_delay_range,
             )
         return []
 
@@ -1600,4 +1591,4 @@ def human_like_drag(u2_device, x1, y1, x2, y2, duration=None):
         except Exception:
             duration = 0.02
         duration = max(0.05, min(1.0, duration))  # 限制拖动时长在0.05~1秒
-    u2_device.swipe(sx, sy, ex, ey, duration) 
+    u2_device.swipe(sx, sy, ex, ey, duration)
