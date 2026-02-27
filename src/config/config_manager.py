@@ -85,8 +85,12 @@ class ConfigManager:
                 config[k] = {}
             config = config[k]
         
-        # 设置值
-        config[keys[-1]] = value
+        # 设置值（字典采用深合并，避免覆盖/丢失隐藏字段）
+        last_key = keys[-1]
+        if isinstance(config.get(last_key), dict) and isinstance(value, dict):
+            config[last_key] = self._merge_configs(config[last_key], value)
+        else:
+            config[last_key] = value
         return self._save_config(self.config)
     
     def get_devices(self) -> list:

@@ -45,6 +45,28 @@ def get_exe_dir():
     else:
         return os.path.dirname(os.path.abspath(__file__))  # 脚本所在目录
 
+
+def _deep_copy_json_like(value):
+    """深拷贝dict/list等JSON结构，避免引用共享。"""
+    if isinstance(value, dict):
+        return {k: _deep_copy_json_like(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_deep_copy_json_like(v) for v in value]
+    return value
+
+
+def deep_update_dict(base: dict, updates: dict) -> dict:
+    """递归更新字典：只覆盖updates里出现的字段，不删除base里已有但updates未提供的字段。"""
+    if not isinstance(base, dict) or not isinstance(updates, dict):
+        return base
+
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            deep_update_dict(base[key], value)
+        else:
+            base[key] = _deep_copy_json_like(value)
+    return base
+
 # 创建自定义字体
 def load_custom_font(size=10):
     font = QFont("Microsoft YaHei", size)  # 默认字体
@@ -508,8 +530,8 @@ class ConfigPage(QWidget):
                     except Exception:
                         existing = {}
 
-            # 合并
-            existing.update(self.config_data)
+            # 合并（深度更新：只覆盖更新字段，不删除其它/隐藏字段）
+            deep_update_dict(existing, self.config_data)
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(existing, f, indent=4, ensure_ascii=False)
             QMessageBox.information(self, "成功", "配置已保存！")
@@ -3044,31 +3066,55 @@ class ShadowverseUI(QMainWindow):
             # 读取现有配置
             if os.path.exists(config_path):
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-            
-            # 每次只保留当前连接的设备 - 优化点
-            config["devices"] = []  # 清空现有设备列表
-            
-            # 添加新设备
-            new_device = {
+                    try:
+                        config = json.load(f)
+                    except Exception as e:
+                        # 避免在配置损坏/写入中途时用空配置覆盖导致丢失隐藏字段
+                        self.append_log(f"更新配置文件失败: config.json解析错误: {str(e)}")
+                        config = None
+            else:
+                config = {}
+
+            # 添加/更新当前设备（保留config里其它所有字段，包括UI未暴露的隐藏字段）
+            device_update = {
                 "name": f"模拟器-{adb_port}",
                 "serial": adb_port,
                 "is_global": is_global,
                 "screenshot_deep_color": deep_color,
                 "gala_mode": gala_mode
             }
-            config["devices"].append(new_device)
-            
-            # 更新game配置中的enable_auto_pass
-            if "game" not in config:
-                config["game"] = {}
-            config["game"]["enable_auto_pass"] = auto_pass
-            
-            # 保存配置
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=4, ensure_ascii=False)
-            
-            self.append_log(f"设备设置已更新: 服务器={self.server_combo.currentText()}, 深色识别={'开启' if deep_color else '关闭'}, 庆典模式={'开启' if gala_mode else '关闭'}, 启用空过={'开启' if auto_pass else '关闭'}")
+
+            if config is not None:
+                # 每次只保留当前连接的设备，但保留该设备条目里可能存在的隐藏字段
+                base_device = {}
+                try:
+                    existing_devices = config.get("devices", [])
+                    if isinstance(existing_devices, list):
+                        for d in existing_devices:
+                            if isinstance(d, dict) and d.get("serial") == adb_port:
+                                base_device = dict(d)
+                                break
+                except Exception:
+                    base_device = {}
+
+                deep_update_dict(base_device, device_update)
+                deep_update_dict(config, {"devices": [base_device]})
+                deep_update_dict(config, {"game": {"enable_auto_pass": auto_pass}})
+
+                # 保存配置
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=4, ensure_ascii=False)
+
+                self.append_log(
+                    f"设备设置已更新: 服务器={self.server_combo.currentText()}, "
+                    f"深色识别={'开启' if deep_color else '关闭'}, "
+                    f"庆典模式={'开启' if gala_mode else '关闭'}, "
+                    f"启用空过={'开启' if auto_pass else '关闭'}"
+                )
+            else:
+                self.append_log(
+                    "设备设置未写入config.json（文件解析失败，请检查config.json格式是否为合法JSON）"
+                )
             
         except Exception as e:
             self.append_log(f"更新配置文件失败: {str(e)}")

@@ -847,17 +847,32 @@ class GameManager:
                 template_path = os.path.join("shadowverse_cards_cost", filename)
                 tname = os.path.splitext(filename)[0]
                 try:
-                    pil_img = Image.open(template_path)
+                    # 使用PIL读取图片（处理P/LA/L等模式，避免OpenCV通道数异常）
+                    with Image.open(template_path) as pil_img:
+                        if pil_img.mode not in ("RGB", "RGBA"):
+                            pil_img = pil_img.convert("RGBA")
+                        template_img = np.array(pil_img)
 
-                    # 确保图片为RGB模式（处理PAL8等调色板模式）
-                    if pil_img.mode != 'RGB' and pil_img.mode != 'RGBA':
-                        pil_img = pil_img.convert('RGB')
+                    if template_img is None:
+                        return None
+                    if template_img.dtype != np.uint8:
+                        template_img = template_img.astype(np.uint8, copy=False)
 
-                    template_img = np.array(pil_img)
-                    if len(template_img.shape) == 3 and template_img.shape[2] == 4:
-                        template_img = cv2.cvtColor(template_img, cv2.COLOR_RGBA2BGR)
-                    elif len(template_img.shape) == 3 and template_img.shape[2] == 3:
-                        template_img = cv2.cvtColor(template_img, cv2.COLOR_RGB2BGR)
+                    # 转为OpenCV常用BGR三通道
+                    if template_img.ndim == 2:  # Gray
+                        template_img = cv2.cvtColor(template_img, cv2.COLOR_GRAY2BGR)
+                    elif template_img.ndim == 3:
+                        ch = template_img.shape[2]
+                        if ch == 4:
+                            template_img = cv2.cvtColor(template_img, cv2.COLOR_RGBA2BGR)
+                        elif ch == 3:
+                            template_img = cv2.cvtColor(template_img, cv2.COLOR_RGB2BGR)
+                        elif ch == 1:
+                            template_img = cv2.cvtColor(template_img[:, :, 0], cv2.COLOR_GRAY2BGR)
+                        else:
+                            return None
+                    else:
+                        return None
                 except Exception as e:
                     return None
 
@@ -867,11 +882,15 @@ class GameManager:
                 TEMPLATE_RECT = (101, 151, 442, 568)
                 tx1, ty1, tx2, ty2 = TEMPLATE_RECT
                 template = template_img[ty1:ty2, tx1:tx2]
+                if template.size == 0:
+                    return None
 
                 # 仅对模板应用缩放（关键修改）
                 if TEMPLATE_SCALE_FACTOR != 1.0:
                     new_width = int(template.shape[1] * TEMPLATE_SCALE_FACTOR)
                     new_height = int(template.shape[0] * TEMPLATE_SCALE_FACTOR)
+                    if new_width <= 0 or new_height <= 0:
+                        return None
                     template = cv2.resize(
                         template, (new_width, new_height), interpolation=cv2.INTER_AREA
                     )

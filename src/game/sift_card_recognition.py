@@ -65,27 +65,46 @@ class SiftCardRecognition:
                         
                         # 使用PIL读取图片，确保UTF-8编码支持
                         from PIL import Image
-                        
-                        # 使用PIL读取图片
-                        pil_image = Image.open(card_file)
+                         
+                        # 使用PIL读取图片（处理P/LA/L等模式，避免OpenCV通道数异常）
+                        with Image.open(card_file) as pil_image:
+                            if pil_image.mode not in ("RGB", "RGBA"):
+                                # 例如：pal8(P)调色板PNG、灰度图(L)等
+                                pil_image = pil_image.convert("RGBA")
+                            template = np.array(pil_image)
 
-                        # 确保图片为RGB模式（处理PAL8等调色板模式）
-                        if pil_image.mode != 'RGB' and pil_image.mode != 'RGBA':
-                            pil_image = pil_image.convert('RGB')
+                        # 转换为BGR格式（OpenCV格式），兼容灰度/单通道
+                        if template is None:
+                            logger.warning(f"无法读取图片: {card_file}")
+                            continue
+                        if template.dtype != np.uint8:
+                            template = template.astype(np.uint8, copy=False)
 
-                        template = np.array(pil_image)
-
-                        # 转换为BGR格式（OpenCV格式）
-                        if len(template.shape) == 3 and template.shape[2] == 4:  # RGBA
-                            template = cv2.cvtColor(template, cv2.COLOR_RGBA2BGR)
-                        elif len(template.shape) == 3 and template.shape[2] == 3:  # RGB
-                            template = cv2.cvtColor(template, cv2.COLOR_RGB2BGR)
-                        
+                        if template.ndim == 2:  # Gray
+                            template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
+                        elif template.ndim == 3:
+                            ch = template.shape[2]
+                            if ch == 4:  # RGBA
+                                template = cv2.cvtColor(template, cv2.COLOR_RGBA2BGR)
+                            elif ch == 3:  # RGB
+                                template = cv2.cvtColor(template, cv2.COLOR_RGB2BGR)
+                            elif ch == 1:  # 单通道
+                                template = cv2.cvtColor(template[:, :, 0], cv2.COLOR_GRAY2BGR)
+                            else:
+                                logger.warning(f"图片通道数异常({ch})，跳过: {card_file}")
+                                continue
+                        else:
+                            logger.warning(f"图片维度异常({template.ndim})，跳过: {card_file}")
+                            continue
+                         
                         if template is not None:
                             # 缩放到0.3倍以匹配游戏中卡牌的实际大小
                             height, width = template.shape[:2]
                             new_height = int(height * self.scale_factor)
                             new_width = int(width * self.scale_factor)
+                            if new_height <= 0 or new_width <= 0:
+                                logger.warning(f"图片尺寸过小，缩放后为0，跳过: {card_file}")
+                                continue
                             scaled_template = cv2.resize(template, (new_width, new_height))
                             
                             # 转换为灰度图像进行SIFT特征提取
