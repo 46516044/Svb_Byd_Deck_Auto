@@ -1864,7 +1864,7 @@ class CardPriorityPage(QWidget):
 
         # 说明文字和帮助按钮
         desc_layout = QHBoxLayout()
-        desc_label = QLabel("为卡组中的卡片设置优先级和模式选项 数字越大优先级越低，优先度上限是999(默认所有卡牌999，模式选项默认是空选项，即不执行任何特殊操作)")
+        desc_label = QLabel("为卡组中的卡片设置优先级和模式选项。数字越小优先级越高，优先级上限是999（默认所有卡牌999）。出牌优先级支持进化前/进化后两个阶段。模式选项默认是空选项（不执行任何特殊操作）。")
         desc_label.setStyleSheet("font-size: 12px; color: #AACCFF;")
         desc_layout.addWidget(desc_label)
         desc_layout.addStretch()
@@ -1892,7 +1892,6 @@ class CardPriorityPage(QWidget):
             }
         """)
         self.scroll_content.setObjectName("ScrollContent")
-        main_layout.addWidget(self.scroll_area)
 
         btn_layout = QHBoxLayout()
         self.save_btn = QPushButton("保存设置")
@@ -1914,17 +1913,17 @@ class CardPriorityPage(QWidget):
 
 一、优先级设置
 
-1. 出牌优先级
-   作用：控制卡牌的打出顺序
+1. 出牌优先级（进化前/进化后）
+   作用：控制出牌顺序，会根据进化是否解锁切换不同阶段的优先级
    数值含义：数字越小优先级越高
    默认值：999（最低优先级）
-   示例：设置为1的卡牌会比设置为2的卡牌优先打出
+   示例：若“进化前=1、进化后=5”，则前期更倾向优先打出；进化解锁后优先级会降低
 
 2. 进化优先级
-   作用：控制进化时的选择顺序
+   作用：控制进化/超进化时的选择顺序
    数值含义：数字越小优先级越高
    默认值：999（最低优先级）
-   示例：进化时会优先选择进化优先级高的随从
+   示例：进化时会优先选择进化优先级更高（数字更小）的随从
 
 二、模式选项设置
 
@@ -2026,14 +2025,26 @@ class CardPriorityPage(QWidget):
             name_label.setAlignment(Qt.AlignCenter)
             row_layout.addWidget(name_label)
 
-            row_layout.addWidget(QLabel("出牌优先级:"))
-            play_priority_input = QLineEdit()
-            play_priority_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
-            play_priority_input.setMaximumWidth(50)
+            # 出牌优先级（进化前/进化后）
             high_priority = self.config_data.get("high_priority_cards", {}).get(card_name, {})
+
+            row_layout.addWidget(QLabel("出牌(进化前):"))
+            play_priority_pre_input = QLineEdit()
+            play_priority_pre_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+            play_priority_pre_input.setMaximumWidth(50)
             if high_priority:
-                play_priority_input.setText(str(high_priority.get("priority", "")))
-            row_layout.addWidget(play_priority_input)
+                pre_priority = high_priority.get("priority_pre_evolution", high_priority.get("priority", ""))
+                play_priority_pre_input.setText(str(pre_priority) if pre_priority != "" else "")
+            row_layout.addWidget(play_priority_pre_input)
+
+            row_layout.addWidget(QLabel("出牌(进化后):"))
+            play_priority_post_input = QLineEdit()
+            play_priority_post_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+            play_priority_post_input.setMaximumWidth(50)
+            if high_priority:
+                post_priority = high_priority.get("priority_post_evolution", high_priority.get("priority", ""))
+                play_priority_post_input.setText(str(post_priority) if post_priority != "" else "")
+            row_layout.addWidget(play_priority_post_input)
 
             row_layout.addWidget(QLabel("进化优先级:"))
             evolve_priority_input = QLineEdit()
@@ -2079,7 +2090,8 @@ class CardPriorityPage(QWidget):
 
             self.card_widgets.append({
                 "card_name": card_name,
-                "play_priority": play_priority_input,
+                "play_priority_pre": play_priority_pre_input,
+                "play_priority_post": play_priority_post_input,
                 "evolve_priority": evolve_priority_input,
                 "mode_option": mode_combo,
                 "evolve_mode_option": evolve_mode_combo
@@ -2125,16 +2137,38 @@ class CardPriorityPage(QWidget):
         card_evolve_mode_options = {}
         for card in self.card_widgets:
             card_name = card["card_name"]
-            play_priority_text = card["play_priority"].text().strip()
-            if play_priority_text:
-                try:
-                    priority = int(play_priority_text)
-                    if priority < 0 or priority > 999:
-                        raise ValueError("优先级必须在0-999之间")
-                    high_priority_cards[card_name] = {"priority": priority}
-                except Exception as e:
-                    QMessageBox.warning(self, "输入错误", f"卡片 '{card_name}' 的出牌优先级设置错误: {str(e)}")
-                    return
+            play_pre_text = card["play_priority_pre"].text().strip()
+            play_post_text = card["play_priority_post"].text().strip()
+            if play_pre_text or play_post_text:
+                pre_val = None
+                post_val = None
+                if play_pre_text:
+                    try:
+                        pre_val = int(play_pre_text)
+                        if pre_val < 0 or pre_val > 999:
+                            raise ValueError("优先级必须在0-999之间")
+                    except Exception as e:
+                        QMessageBox.warning(self, "输入错误", f"卡片 '{card_name}' 的出牌优先级(进化前)设置错误: {str(e)}")
+                        return
+                if play_post_text:
+                    try:
+                        post_val = int(play_post_text)
+                        if post_val < 0 or post_val > 999:
+                            raise ValueError("优先级必须在0-999之间")
+                    except Exception as e:
+                        QMessageBox.warning(self, "输入错误", f"卡片 '{card_name}' 的出牌优先级(进化后)设置错误: {str(e)}")
+                        return
+
+                # 只填了一个阶段时，默认另一阶段同值，避免出现999导致策略异常
+                if pre_val is None and post_val is not None:
+                    pre_val = post_val
+                if post_val is None and pre_val is not None:
+                    post_val = pre_val
+
+                high_priority_cards[card_name] = {
+                    "priority_pre_evolution": pre_val,
+                    "priority_post_evolution": post_val
+                }
             evolve_priority_text = card["evolve_priority"].text().strip()
             if evolve_priority_text:
                 try:

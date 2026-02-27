@@ -311,8 +311,15 @@ class GameManager:
             logger.error(f"Enemy follower detection failed: {e}", exc_info=True)
             return []
 
-    def scan_our_followers(self, screenshot, debug_flag=False):
-        """检测场上的我方随从位置和状态，扫描结果合并去重结果（并发优化）"""
+    def scan_our_followers(self, screenshot, debug_flag=False, extra_shots: int = 2, sort_desc: bool = False):
+        """检测场上的我方随从位置和状态，扫描结果合并去重结果（并发优化）
+
+        Args:
+            screenshot: 当前截图（PIL Image）
+            debug_flag: 是否输出debug图片
+            extra_shots: 额外补充截图次数（默认2，用于提高识别稳定性；攻击阶段可设为0提高速度）
+            sort_desc: True=按x坐标从右到左排序；False=从左到右排序
+        """
         import time
         import random
         from math import hypot
@@ -327,7 +334,12 @@ class GameManager:
         screenshots = [screenshot]
         # 再截图几次识别，每次间隔一段时间
         if hasattr(self.device_state, "take_screenshot"):
-            for _ in range(2):
+            try:
+                extra = int(extra_shots)
+            except Exception:
+                extra = 2
+            extra = max(0, extra)
+            for _ in range(extra):
                 time.sleep(0.5)
                 screenshots.append(self.device_state.take_screenshot())
 
@@ -372,14 +384,27 @@ class GameManager:
             hsv_color = cv2.cvtColor(region_color_cv, cv2.COLOR_BGR2HSV)
             hsv_blue = cv2.cvtColor(region_blue_cv, cv2.COLOR_BGR2HSV)
             settings = OUR_FOLLOWER_HSV
+
+            # 说明：游戏里“可攻击”的光圈/边框在不同动画/超进化等状态下颜色范围会漂移。
+            # 这里把 green/green2、yellow1/yellow2 合并成一个mask，提高检出率。
             lower_green = np.array(settings["green"][:3])
             upper_green = np.array(settings["green"][3:])
+            lower_green2 = np.array(settings.get("green2", settings["green"])[:3])
+            upper_green2 = np.array(settings.get("green2", settings["green"])[3:])
+
             lower_yellow1 = np.array(settings["yellow1"][:3])
             upper_yellow1 = np.array(settings["yellow1"][3:])
+            lower_yellow2 = np.array(settings.get("yellow2", settings["yellow1"])[:3])
+            upper_yellow2 = np.array(settings.get("yellow2", settings["yellow1"])[3:])
             lower_blue = np.array(settings["blue"][:3])
             upper_blue = np.array(settings["blue"][3:])
-            green_mask = cv2.inRange(hsv_color, lower_green, upper_green)
-            yellow1_mask = cv2.inRange(hsv_color, lower_yellow1, upper_yellow1)
+            green_mask1 = cv2.inRange(hsv_color, lower_green, upper_green)
+            green_mask2 = cv2.inRange(hsv_color, lower_green2, upper_green2)
+            green_mask = cv2.bitwise_or(green_mask1, green_mask2)
+
+            yellow_mask1 = cv2.inRange(hsv_color, lower_yellow1, upper_yellow1)
+            yellow_mask2 = cv2.inRange(hsv_color, lower_yellow2, upper_yellow2)
+            yellow1_mask = cv2.bitwise_or(yellow_mask1, yellow_mask2)
             blue_mask = cv2.inRange(hsv_blue, lower_blue, upper_blue)
             kernel = np.ones((1, 1), np.uint8)
             green_eroded = cv2.erode(
@@ -767,7 +792,7 @@ class GameManager:
                     f"debug/our_follower_region_{timestamp}.png", debug_img_color
                 )
                 cv2.imwrite(f"debug/our_hp_region_{timestamp}.png", debug_img_blue)
-            follower_positions.sort(key=lambda pos: pos[0])
+            follower_positions.sort(key=lambda pos: pos[0], reverse=sort_desc)
             return follower_positions
 
         # 并发执行HSV识别
@@ -809,7 +834,7 @@ class GameManager:
                     break
             if not found:
                 hsv_positions.append(pos)
-        hsv_positions.sort(key=lambda pos: pos[0])
+        hsv_positions.sort(key=lambda pos: pos[0], reverse=sort_desc)
 
         # all_follower_positions去重（左上角的点x轴在54像素内的点视为同一个点）
         deduplicated_follower_positions = []
@@ -1062,7 +1087,7 @@ class GameManager:
                     break
             if keep:
                 filtered_result.append((x, y, color, name))
-        filtered_result = sorted(filtered_result, key=lambda pos: pos[0])
+        filtered_result = sorted(filtered_result, key=lambda pos: pos[0], reverse=sort_desc)
         self.device_state.logger.info(f"我方当前场上随从: {filtered_result}")
 
         return filtered_result
@@ -1128,14 +1153,32 @@ class GameManager:
 
                     logging.error(f"护盾检测并发任务异常: {str(e)}")
 
-            # 合并去重（中心点距离小于40像素视为同一护盾）
-            final_shields = []
-            for pos in all_positions:
-                if not any(
-                    abs(pos[0] - p[0]) < 40 and abs(pos[1] - p[1]) < 40
-                    for p in final_shields
-                ):
-                    final_shields.append(pos)
+            # 合并去重 + 多帧一致性过滤
+            # 过去是“任意一帧命中就算护盾”，容易被特效/闪光误触发。
+            # 这里要求同一位置在多帧中重复出现，提高准确率。
+            clusters = []  # [{'x':float,'y':float,'count':int}]
+            for x, y in all_positions:
+                matched = False
+                for c in clusters:
+                    if abs(x - c['x']) < 40 and abs(y - c['y']) < 40:
+                        # 在线更新均值
+                        c['count'] += 1
+                        c['x'] = (c['x'] * (c['count'] - 1) + x) / c['count']
+                        c['y'] = (c['y'] * (c['count'] - 1) + y) / c['count']
+                        matched = True
+                        break
+                if not matched:
+                    clusters.append({'x': float(x), 'y': float(y), 'count': 1})
+
+            # 根据采样帧数动态决定一致性要求
+            # - >=3帧：至少2帧命中
+            # - <3帧：放宽到1帧（避免截图失败导致永远检测不到）
+            support_required = 2 if len(images) >= 3 else 1
+            final_shields = [
+                (int(c['x']), int(c['y']))
+                for c in clusters
+                if c['count'] >= support_required
+            ]
 
         shield_targets = []
 

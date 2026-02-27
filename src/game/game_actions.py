@@ -20,7 +20,16 @@ from src.config.game_constants import (
     BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
 )
 import math
-from src.config.card_priorities import get_card_priority, is_evolve_priority_card, get_evolve_priority_cards, is_evolve_special_action_card, get_evolve_special_actions
+from src.config.card_priorities import (
+    get_card_priority,
+    get_card_priority_pre_evolution,
+    get_card_priority_post_evolution,
+    is_evolution_unlocked,
+    is_evolve_priority_card,
+    get_evolve_priority_cards,
+    is_evolve_special_action_card,
+    get_evolve_special_actions,
+)
 from src.config.config_manager import ConfigManager
 import glob
 
@@ -55,15 +64,43 @@ class GameActions:
         )
 
         should_check_shield = enemy_check
+        shield_targets = []
+        shield_detected = False
         if should_check_shield:
             shield_targets = self._scan_shield_targets()
             shield_detected = bool(shield_targets)
-        else:
-            shield_detected = False
 
 
-        # 获取当前随从位置和类型
-        all_followers = self.follower_manager.get_positions()
+        # 攻击阶段：每次从右往左优先处理（新召唤随从通常出现在右侧）
+        # 并且在关键动作后快速重扫，避免漏掉“本回合可攻击”的新随从。
+        all_followers = []
+        try:
+            screenshot = self.device_state.take_screenshot()
+            if screenshot:
+                all_followers = self._scan_our_followers(screenshot, extra_shots=0, sort_desc=True)
+                self.follower_manager.update_positions(all_followers)
+        except Exception:
+            all_followers = []
+
+        if not all_followers:
+            all_followers = self.follower_manager.get_positions()
+
+        # 如果没有任何可攻击随从：做一次“更稳”的补扫，避免刚出完牌/刚触发召唤时落在过渡帧
+        attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
+        if not attackable:
+            try:
+                time.sleep(0.35)
+                screenshot = self.device_state.take_screenshot()
+                if screenshot:
+                    all_followers = self._scan_our_followers(screenshot, extra_shots=1, sort_desc=True)
+                    self.follower_manager.update_positions(all_followers)
+            except Exception:
+                pass
+
+            attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
+            if not attackable:
+                self.device_state.logger.info("未检测到可进行攻击的随从，跳过攻击操作")
+                return
 
         if shield_detected:
             max_attempts = 5  # 最多循环5次
@@ -107,7 +144,7 @@ class GameActions:
                 # 攻击后更新随从信息
                 new_screenshot = self.device_state.take_screenshot()
                 if new_screenshot:
-                    new_followers = self._scan_our_followers(new_screenshot)
+                    new_followers = self._scan_our_followers(new_screenshot, extra_shots=0, sort_desc=True)
                     self.follower_manager.update_positions(new_followers)
                     all_followers = new_followers
 
@@ -129,52 +166,99 @@ class GameActions:
                 time.sleep(0.2)
             
             # 检查是否因为达到最大尝试次数而退出循环
-            if attempt_count >= max_attempts :
+            if attempt_count >= max_attempts:
                 self.device_state.logger.warning(f"达到最大破盾尝试次数({max_attempts}次)，停止破盾操作")
 
-        # 没有护盾，使用绿色随从攻击敌方主人
-        green_followers = [(x, y, name) for x, y, t, name in all_followers if t == "green"]
-        if green_followers:
-            for x, y, name in green_followers:
-                if name:
-                    self.device_state.logger.info(f"使用疾驰随从[{name}]攻击敌方玩家")
-                else:
-                    self.device_state.logger.info("使用疾驰随从攻击敌方玩家")
-                target_x, target_y = default_target
-                human_like_drag(self.device_state.u2_device, x, y, target_x, target_y, duration=random.uniform(*settings.get_human_like_drag_duration_range()))
-                time.sleep(0.45)
+            # 破盾结束后，基于最新扫描结果决定是否继续后续攻击
+            shield_detected = bool(shield_targets)
+            if shield_detected:
+                # 护盾仍存在：继续攻击脸/随从都会被护盾干扰，直接结束攻击阶段
+                self.device_state.logger.info("护盾仍存在，停止后续攻击操作")
+                return
 
-        # 使用黄色突进随从攻击敌方血量最小的随从
+        # 没有护盾，使用绿色随从攻击敌方主人（从右往左，每次攻击后快速重扫）
+        max_green_attacks = 12
+        green_attack_count = 0
+        while green_attack_count < max_green_attacks:
+            green_followers = [(x, y, name) for x, y, t, name in all_followers if t == "green"]
+            if not green_followers:
+                break
+
+            x, y, name = green_followers[0]  # 已按x从右到左排序
+            if name:
+                self.device_state.logger.info(f"使用疾驰随从[{name}]攻击敌方玩家")
+            else:
+                self.device_state.logger.info("使用疾驰随从攻击敌方玩家")
+
+            target_x, target_y = default_target
+            human_like_drag(
+                self.device_state.u2_device,
+                x,
+                y,
+                target_x,
+                target_y,
+                duration=random.uniform(*settings.get_human_like_drag_duration_range()),
+            )
+            green_attack_count += 1
+            time.sleep(0.45)
+
+            # 攻击后快速重扫，更新可攻击随从（从右往左）
+            new_screenshot = self.device_state.take_screenshot()
+            if not new_screenshot:
+                break
+            all_followers = self._scan_our_followers(new_screenshot, extra_shots=0, sort_desc=True)
+            self.follower_manager.update_positions(all_followers)
+
+        # 使用黄色突进随从攻击敌方血量最小的随从（从右往左，每次攻击后快速重扫）
         if not shield_detected:
-            yellow_followers = [(x, y, name) for x, y, t, name in all_followers if t == "yellow"]
-            if yellow_followers:
-                for i, (x, y, name) in enumerate(yellow_followers):
-                    # 检查是否是最后一个黄色随从
-                    is_last_yellow = (i == len(yellow_followers) - 1)
-                    
-                    # 每次攻击前都扫描敌方随从和血量
-                    enemy_screenshot = self.device_state.take_screenshot()
-                    if enemy_screenshot:
-                        enemy_followers = self._scan_enemy_followers(enemy_screenshot)
-                        if enemy_followers:
-                            try:
-                                min_hp_follower = min(enemy_followers, key=lambda x: int(x[3]) if x[3].isdigit() else 0)
-                                enemy_x, enemy_y, _, _ = min_hp_follower
-                                if name:
-                                    self.device_state.logger.info(f"使用突进随从[{name}]攻击敌方血量较小的随从")
-                                else:
-                                    self.device_state.logger.info("使用突进随从攻击敌方血量较小的随从")
-                                human_like_drag(self.device_state.u2_device, x, y, enemy_x, enemy_y, duration=random.uniform(*settings.get_human_like_drag_duration_range()))
-                                time.sleep(1.5)
-                                
-                                # 如果是最后一个黄色随从，攻击完成后直接跳出循环，不再进行后续扫描
-                                if is_last_yellow:
-                                    break
-                                    
-                            except Exception as e:
-                                self.device_state.logger.warning(f"突进敌方最小血量随从失败: {str(e)}")
+            max_yellow_attacks = 12
+            yellow_attack_count = 0
+            while yellow_attack_count < max_yellow_attacks:
+                yellow_followers = [(x, y, name) for x, y, t, name in all_followers if t == "yellow"]
+                if not yellow_followers:
+                    break
+
+                x, y, name = yellow_followers[0]  # 已按x从右到左排序
+
+                enemy_screenshot = self.device_state.take_screenshot()
+                if not enemy_screenshot:
+                    self.device_state.logger.warning("截图失败，跳过攻击")
+                    break
+
+                enemy_followers = self._scan_enemy_followers(enemy_screenshot)
+                if not enemy_followers:
+                    self.device_state.logger.info("未检测到敌方随从，突进攻击结束")
+                    break
+
+                try:
+                    min_hp_follower = min(
+                        enemy_followers,
+                        key=lambda x: int(x[3]) if x[3].isdigit() else 0,
+                    )
+                    enemy_x, enemy_y, _, _ = min_hp_follower
+                    if name:
+                        self.device_state.logger.info(f"使用突进随从[{name}]攻击敌方血量较小的随从")
                     else:
-                        self.device_state.logger.warning("截图失败，跳过攻击")
+                        self.device_state.logger.info("使用突进随从攻击敌方血量较小的随从")
+                    human_like_drag(
+                        self.device_state.u2_device,
+                        x,
+                        y,
+                        enemy_x,
+                        enemy_y,
+                        duration=random.uniform(*settings.get_human_like_drag_duration_range()),
+                    )
+                    yellow_attack_count += 1
+                    time.sleep(1.5)
+                except Exception as e:
+                    self.device_state.logger.warning(f"突进敌方最小血量随从失败: {str(e)}")
+
+                # 攻击后快速重扫（从右往左），避免漏掉新突进/疾驰随从
+                new_screenshot = self.device_state.take_screenshot()
+                if not new_screenshot:
+                    break
+                all_followers = self._scan_our_followers(new_screenshot, extra_shots=0, sort_desc=True)
+                self.follower_manager.update_positions(all_followers)
 
     def perform_evolution_actions(self):
         """执行进化/超进化操作"""
@@ -498,14 +582,8 @@ class GameActions:
                 self.follower_manager.update_positions(our_followers_positions)
 
 
-        # 检查是否有疾驰或突进随从
-        can_attack_followers = self.follower_manager.get_positions()
-        can_attack_followers = [f for f in can_attack_followers if f[2] in ['green', 'yellow']]
-
-        if can_attack_followers:
-            self.perform_follower_attacks(enemy_check)
-        else:
-            self.device_state.logger.info("未检测到可进行攻击的随从，跳过攻击操作")
+        # 攻击阶段在 perform_follower_attacks 内会快速重扫一次，避免此处偶发漏检导致直接跳过
+        self.perform_follower_attacks(enemy_check)
 
         time.sleep(1)
 
@@ -763,7 +841,7 @@ class GameActions:
                     high_priority_names = set(high_priority_cards_cfg.keys())
                     priority_cards = [c for c in planned_cards if c.get('name', '') in high_priority_names]
                     normal_cards = [c for c in planned_cards if c.get('name', '') not in high_priority_names]
-                    priority_cards.sort(key=lambda x: (get_card_priority(x.get('name', '')), -x.get('cost', 0)))
+                    priority_cards.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
                     normal_cards.sort(key=lambda x: x.get('cost', 0), reverse=True)
                     planned_cards = priority_cards + normal_cards
                 if not new_cards:
@@ -792,6 +870,12 @@ class GameActions:
 
     def _extra_scan_after_add_newcards(self, hand_manager, high_priority_cards_cfg,last_played_card):
         """用完费用后的额外扫描逻辑"""
+        # 与主出牌逻辑保持一致：根据进化是否解锁选择对应阶段的优先级
+        if is_evolution_unlocked(self.device_state):
+            get_priority_fn = get_card_priority_post_evolution
+        else:
+            get_priority_fn = get_card_priority_pre_evolution
+
         self.device_state.logger.info(f"检测到打出{last_played_card}用完费用，额外扫描一次手牌")
         time.sleep(0.2)
         # 点击展牌位置
@@ -821,7 +905,7 @@ class GameActions:
                 high_priority_names = set(high_priority_cards_cfg.keys())
                 priority_zero = [c for c in zero_cost_cards if c.get('name', '') in high_priority_names]
                 normal_zero = [c for c in zero_cost_cards if c.get('name', '') not in high_priority_names]
-                priority_zero.sort(key=lambda x: (get_card_priority(x.get('name', '')), -x.get('cost', 0)))
+                priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
                 normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
                 sorted_zero_cards = priority_zero + normal_zero
                 
@@ -865,7 +949,7 @@ class GameActions:
                         high_priority_names = set(high_priority_cards_cfg.keys())
                         priority_zero = [c for c in zero_cost_cards if c.get('name', '') in high_priority_names]
                         normal_zero = [c for c in zero_cost_cards if c.get('name', '') not in high_priority_names]
-                        priority_zero.sort(key=lambda x: (get_card_priority(x.get('name', '')), -x.get('cost', 0)))
+                        priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
                         normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
                         sorted_zero_cards = priority_zero + normal_zero
                         
@@ -913,7 +997,7 @@ class GameActions:
                     high_priority_names = set(high_priority_cards_cfg.keys())
                     priority_zero = [c for c in zero_cost_cards if c.get('name', '') in high_priority_names]
                     normal_zero = [c for c in zero_cost_cards if c.get('name', '') not in high_priority_names]
-                    priority_zero.sort(key=lambda x: (get_card_priority(x.get('name', '')), -x.get('cost', 0)))
+                    priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
                     normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
                     sorted_zero_cards = priority_zero + normal_zero
                     
@@ -1438,10 +1522,14 @@ class GameActions:
             return self.device_state.game_manager.scan_enemy_followers(screenshot, is_select=is_select)
         return []
 
-    def _scan_our_followers(self, screenshot):
+    def _scan_our_followers(self, screenshot, extra_shots: int = 2, sort_desc: bool = False):
         """检测场上的我方随从位置和状态"""
         if hasattr(self.device_state, 'game_manager') and self.device_state.game_manager:
-            return self.device_state.game_manager.scan_our_followers(screenshot)
+            return self.device_state.game_manager.scan_our_followers(
+                screenshot,
+                extra_shots=extra_shots,
+                sort_desc=sort_desc,
+            )
         return []
 
     def _scan_shield_targets(self):

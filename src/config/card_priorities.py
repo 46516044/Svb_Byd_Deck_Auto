@@ -100,7 +100,25 @@ def is_special_card(card_name):
 def get_card_priority(card_name):
     """获取卡牌优先级（数字越小优先级越高）"""
     if card_name in _HIGH_PRIORITY_CARDS:
-        return _HIGH_PRIORITY_CARDS[card_name].get("priority", 999)
+        cfg = _HIGH_PRIORITY_CARDS[card_name]
+        # 旧格式：priority
+        if "priority" in cfg:
+            return cfg.get("priority", 999)
+
+        # 新格式：priority_pre_evolution / priority_post_evolution
+        has_pre = "priority_pre_evolution" in cfg
+        has_post = "priority_post_evolution" in cfg
+        if has_pre and has_post:
+            try:
+                return int((cfg["priority_pre_evolution"] + cfg["priority_post_evolution"]) / 2)
+            except Exception:
+                return 999
+        if has_pre:
+            return cfg.get("priority_pre_evolution", 999)
+        if has_post:
+            return cfg.get("priority_post_evolution", 999)
+
+        return 999
     return 999  # 默认低优先级
 
 def get_card_info(card_name):

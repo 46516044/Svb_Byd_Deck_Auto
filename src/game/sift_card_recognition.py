@@ -28,10 +28,11 @@ class SiftCardRecognition:
         self.card_images_dir = card_images_dir
         self.card_templates = {}  # 缓存卡牌模板
         self.sift = cv2.SIFT_create()
-        self.scale_factor = 0.33  # 进一步调整缩放因子，匹配游戏中卡牌的实际大小
+        # 恢复到 d5d10c5 的识别参数（更稳，减少误识别/漏识别）
+        self.scale_factor = 0.3  # 缩放因子（匹配游戏中卡牌的实际大小）
         self.hand_area = (229, 539, 1130, 710)  # 手牌区域 (x1, y1, x2, y2) - 更新为新坐标
-        self.min_matches = 3  # 暂时降低到3，提高识别成功率，后续会在findHomography前检查
-        self.match_threshold = 0.025  # 进一步放宽匹配阈值，提高识别成功率
+        self.min_matches = 4  # 最小匹配点数
+        self.match_threshold = 0.01  # 匹配阈值
         
         # 加载卡牌模板
         self._load_card_templates()
@@ -183,9 +184,9 @@ class SiftCardRecognition:
                     # 根据区域动态调整聚类阈值
                     region_width = self.hand_area[2] - self.hand_area[0]
                     if region_width > 700:  # 换牌区域（789px）
-                        distance_thresh = 120  # 进一步增大阈值以应对换牌时的特殊情况
+                        distance_thresh = 100  # d5d10c5: 更紧的聚类阈值
                     else:  # 战斗手牌区域（901px）
-                        distance_thresh = 100
+                        distance_thresh = 80
                     for i, pt in enumerate(dst_pts):
                         found = False
                         for cidx, c in enumerate(clusters):
@@ -256,21 +257,44 @@ class SiftCardRecognition:
                         recognized_cards.extend(future.result())
                     except Exception as e:
                         logger.error(f"SIFT并发识别任务异常: {str(e)}")
-            # --- 同名卡牌中心点去重 ---
-            final_cards = []
+            # --- 位置去重（NMS）：同一张实体卡可能匹配到多个模板，按置信度保留最优 ---
+            # 以中心点距离阈值进行抑制，优先保留置信度高的候选。
+            recognized_cards.sort(key=lambda c: c.get('confidence', 0), reverse=True)
+            final_cards: List[Dict] = []
             for card in recognized_cards:
+                cx, cy = card.get('center', (None, None))
+                if cx is None or cy is None:
+                    continue
+
                 too_close = False
-                for fc in final_cards:
-                    if card['name'] == fc['name']:
-                        dx = card['center'][0] - fc['center'][0]
-                        dy = card['center'][1] - fc['center'][1]
-                        if dx*dx + dy*dy < 1600:  # 40像素内认为是同一张（从30px放宽到40px）
-                            too_close = True
-                            break
+                for kept in final_cards:
+                    kx, ky = kept.get('center', (0, 0))
+                    dx = cx - kx
+                    dy = cy - ky
+                    if dx * dx + dy * dy < 1600:  # 40px 内认为是同一张
+                        too_close = True
+                        break
+
                 if not too_close:
                     final_cards.append(card)
-            final_cards.sort(key=lambda card: card['center'][0])
-            return final_cards
+
+            # 再做一次同名去重（极少数情况下同名双卡会靠得很近）
+            dedup_by_name: List[Dict] = []
+            for card in final_cards:
+                too_close_same_name = False
+                for kept in dedup_by_name:
+                    if card.get('name') != kept.get('name'):
+                        continue
+                    dx = card['center'][0] - kept['center'][0]
+                    dy = card['center'][1] - kept['center'][1]
+                    if dx * dx + dy * dy < 1600:
+                        too_close_same_name = True
+                        break
+                if not too_close_same_name:
+                    dedup_by_name.append(card)
+
+            dedup_by_name.sort(key=lambda card: card['center'][0])
+            return dedup_by_name
         except Exception as e:
             logger.error(f"SIFT卡牌识别出错: {str(e)}")
             return []
