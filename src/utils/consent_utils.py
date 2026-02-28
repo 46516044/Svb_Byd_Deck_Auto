@@ -3,9 +3,13 @@
 处理免责声明和用户同意
 """
 
+import json
 import os
 import logging
+
+from src.config.paths import get_app_root, get_config_path
 from src.config.settings import DISCLAIMER
+from src.core.json_io import write_json_atomic, write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +21,30 @@ def check_consent_file() -> bool:
     Returns:
         bool: 是否已同意
     """
+    # 1) Preferred: config flag (shared by UI/CLI)
+    try:
+        config_path = get_config_path()
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+            if bool(config_data.get("agreed_to_disclaimer", False)):
+                return True
+    except Exception:
+        pass
+
+    # 2) Preferred: consent file in app root (independent of CWD)
+    try:
+        consent_path = os.path.join(get_app_root(), "consent.txt")
+        if os.path.exists(consent_path):
+            return True
+    except Exception:
+        pass
+
+    # 3) Backward compatibility: consent file in current working directory
     return os.path.exists("consent.txt")
 
 
-def save_consent() -> bool:
+def save_consent(*, persist_to_config: bool = True) -> bool:
     """
     保存用户同意状态到文件
     
@@ -28,8 +52,28 @@ def save_consent() -> bool:
         bool: 是否保存成功
     """
     try:
-        with open("consent.txt", "w", encoding="utf-8") as f:
-            f.write("用户已同意免责声明")
+        consent_path = os.path.join(get_app_root(), "consent.txt")
+        write_text_atomic(consent_path, "用户已同意免责声明\n", encoding="utf-8")
+
+        if persist_to_config:
+            try:
+                config_path = get_config_path()
+                config_data = {}
+                if os.path.exists(config_path):
+                    try:
+                        with open(config_path, "r", encoding="utf-8") as cf:
+                            config_data = json.load(cf)
+                    except Exception:
+                        # Don't overwrite a possibly corrupted config.
+                        config_data = None
+
+                if isinstance(config_data, dict):
+                    config_data["agreed_to_disclaimer"] = True
+                    write_json_atomic(config_path, config_data, indent=4, ensure_ascii=False)
+            except Exception:
+                # Consent file is enough; config persistence is best-effort.
+                pass
+
         return True
     except Exception as e:
         logger.error(f"保存同意状态失败: {str(e)}")
@@ -57,10 +101,16 @@ def display_disclaimer_and_get_consent() -> bool:
     
     # 获取用户同意
     while True:
-        response = input("\n请仔细阅读以上声明，输入'同意'表示您已理解并接受所有条款: ").strip()
+        try:
+            response = input(
+                "\n请仔细阅读以上声明，输入'同意'表示您已理解并接受所有条款: "
+            ).strip()
+        except EOFError:
+            # Non-interactive environment (e.g. pythonw / packaged GUI).
+            return False
         
         if response == "同意":
-            if save_consent():
+            if save_consent(persist_to_config=True):
                 print("\n感谢您的同意，现在可以正常使用本软件。")
                 return True
             else:
@@ -82,11 +132,33 @@ def remove_consent() -> bool:
         bool: 是否移除成功
     """
     try:
+        consent_path = os.path.join(get_app_root(), "consent.txt")
+        if os.path.exists(consent_path):
+            os.remove(consent_path)
+
+        # Backward compatibility: also remove legacy CWD file.
         if os.path.exists("consent.txt"):
-            os.remove("consent.txt")
-            logger.info("已移除用户同意文件")
-            return True
-        return False
+            try:
+                os.remove("consent.txt")
+            except Exception:
+                pass
+
+        # Best-effort: clear config flag.
+        try:
+            config_path = get_config_path()
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                if isinstance(config_data, dict) and config_data.get(
+                    "agreed_to_disclaimer", None
+                ) is not None:
+                    config_data.pop("agreed_to_disclaimer", None)
+                    write_json_atomic(config_path, config_data, indent=4, ensure_ascii=False)
+        except Exception:
+            pass
+
+        logger.info("已移除用户同意文件")
+        return True
     except Exception as e:
         logger.error(f"移除同意文件失败: {str(e)}")
         return False 

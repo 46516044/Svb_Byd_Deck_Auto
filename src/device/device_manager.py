@@ -6,15 +6,13 @@
 import threading
 import logging
 import time
-from adbutils import device
+
 import cv2
 import numpy as np
-import os
-import random
 from typing import Dict, Any, List
+from src.core.run_control import PauseRequested, StopRequested
 from src.device.device_state import DeviceState
 from src.game.game_manager import GameManager
-from src.game.game_actions import GameActions
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +20,10 @@ logger = logging.getLogger(__name__)
 class DeviceManager:
     """设备管理器类"""
     
-    def __init__(self, config_manager, notification_manager):
+    def __init__(self, config_manager, notification_manager, log_queue=None):
         self.config_manager = config_manager
         self.notification_manager = notification_manager
+        self.log_queue = log_queue
         self.device_states: Dict[str, DeviceState] = {}
         self.device_threads: Dict[str, threading.Thread] = {}
     
@@ -47,7 +46,9 @@ class DeviceManager:
                 continue
             
             # 创建设备状态
-            device_state = DeviceState(serial, self.config_manager.config, device_config)
+            device_state = DeviceState(
+                serial, self.config_manager.config, device_config, log_queue=self.log_queue
+            )
             self.device_states[serial] = device_state
             
             # 启动设备工作线程
@@ -109,7 +110,7 @@ class DeviceManager:
 
                 # 同时返回 u2 设备对象
                 u2_device = u2.connect(serial)
-                device_state.u2_device = u2_device
+                device_state.u2_device = device_state.wrap_u2_device(u2_device)
                 device_state.adb_device = adb_device
                 
                 logger.info(f"已连接设备: {serial}")
@@ -176,6 +177,12 @@ class DeviceManager:
         while device_state.script_running:
             start_time = time.time()
 
+            # If we just resumed, apply "new turn" semantics.
+            try:
+                device_state.apply_resume_policy_if_needed()
+            except Exception:
+                pass
+
             # 检查运行时长限制
             if max_run_duration > 0 and not stop_condition_reached:
                 current_duration = time.time() - script_start_time
@@ -220,187 +227,36 @@ class DeviceManager:
                 self._handle_command(device_state, cmd)
 
             # 检查脚本暂停状态
-            if device_state.script_paused:
+            if device_state.is_paused():
                 device_state.logger.debug("脚本暂停中...输入 'r' 继续")
-                time.sleep(1)
+                device_state.wait_while_paused()
                 continue
 
             # 如果达到停止条件，不再处理游戏逻辑
             if not stop_condition_reached:
                 # 主要游戏逻辑
-                self._process_game_logic(device_state, game_manager, skip_buttons, self.config_manager)
+                try:
+                    game_manager.state_machine.process(
+                        device_state, game_manager, skip_buttons
+                    )
+                except StopRequested:
+                    device_state.script_running = False
+                    break
+                except PauseRequested:
+                    device_state.wait_while_paused()
+                    continue
 
             # 计算处理时间并调整等待
             process_time = time.time() - start_time
             sleep_time = max(0, 1 - process_time)
-            time.sleep(sleep_time)
-    
-    def _process_game_logic(self, device_state: DeviceState, game_manager: GameManager, skip_buttons: List[str], config_manager):
-        """处理游戏逻辑"""
-        # 获取截图
-        screenshot = device_state.take_screenshot()
-        if screenshot is None:
-            time.sleep(2)
-            return
-
-        # 转换为OpenCV格式
-        screenshot_np = np.array(screenshot)
-        screenshot_cv = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
-        gray_screenshot = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
-
-        # 检查其他按钮
-        button_detected = False
-        templates = game_manager.template_manager.templates
-        
-        for key, template_info in templates.items():
-            if not template_info:
-                continue
-
-            max_loc, max_val = game_manager.template_manager.match_template(gray_screenshot, template_info)
-            if max_val >= template_info['threshold'] and max_loc is not None:
-                # 更新活动时间（检测到任何按钮都算作活动）
-                device_state.update_activity_time()
-                
-                if key in skip_buttons:
-                    continue
-                if key == 'LoginPage':
-                    device_state.u2_device.click(659 + random.randint(-10, 10), 338 + random.randint(-10, 10))
-                    continue
-
-                if key == 'mainPage':
-                    device_state.u2_device.click(987 + random.randint(-10, 10), 447 + random.randint(-10, 10))
-                    continue
-
-                if key == 'dailyCard':
-                    device_state.u2_device.click(640 + random.randint(-2, 2), 646 + random.randint(-2, 2))
-                    continue
-
-                if key != device_state.last_detected_button:
-                        if key == 'end_round' and device_state.in_match:
-                            device_state.logger.debug(f"已发现'结束回合'按钮 (当前回合: {device_state.current_round_count})")
-
-                # 处理对战开始/结束逻辑
-                if key == 'war':
-                    # 检测到"决斗"按钮，表示新对战开始
-                    device_state.logger.debug(f"检测到决斗按钮 - 当前in_match: {device_state.in_match}")
-                    # 记录新对战
-                    device_state.start_new_match()
-                    # 计算中心点并点击
-                    center_x = max_loc[0] + template_info['w'] // 2
-                    center_y = max_loc[1] + template_info['h'] // 2
-                    device_state.u2_device.click(center_x + random.randint(-2, 2), center_y + random.randint(-2, 2))
-                    time.sleep(3)
-                    device_state.logger.debug(f"调用start_new_match后 - in_match: {device_state.in_match}")
-                    continue
-                
-                # 处理庆典模式按钮
-                if key == 'gala_war' or key == 'gala_Ok' or key == 'gala_index':
-                    # 检测到庆典模式按钮，计算中心点并点击
-                    device_state.logger.debug(f"检测到庆典模式按钮: {template_info['name']}")
-                    # 计算中心点并点击
-                    center_x = max_loc[0] + template_info['w'] // 2
-                    center_y = max_loc[1] + template_info['h'] // 2
-                    device_state.u2_device.click(center_x + random.randint(-2, 2), center_y + random.randint(-2, 2))
-                    time.sleep(1)
-                    continue
-
-                if key == 'decision':
-                    device_state.start_new_match()
-                    # 读取配置：是否使用增强策略（默认False，使用旧策略）
-                    use_enhanced = config_manager.get("game", {}).get("use_enhanced_mulligan", False)
-                    strategy_setting = config_manager.get("game", {}).get("card_replacement_strategy", "4费档次")
-
-                    device_state.logger.info(f"执行换牌策略: {strategy_setting} ({'增强规则' if use_enhanced else '旧规则'})")
-
-                    # 等待换牌界面卡牌动画完成
-                    time.sleep(0.4)
-
-                    # 根据配置选择策略
-                    if use_enhanced:
-                        # 使用SIFT + 增强策略（默认）
-                        success = game_manager.game_actions._detect_change_card_sift()
-                    else:
-                        # 使用SIFT + 旧策略规则
-                        success = game_manager.game_actions._detect_change_card()
-
-                    if not success:
-                        device_state.logger.warning("换牌执行失败")
-                        # 如果增强策略失败，尝试fallback到旧规则
-                        if use_enhanced:
-                            device_state.logger.info("回退到旧策略规则")
-                            game_manager.game_actions._detect_change_card()
-
-                    time.sleep(0.5)
-                    center_x = max_loc[0] + template_info['w'] // 2
-                    center_y = max_loc[1] + template_info['h'] // 2
-                    device_state.u2_device.click(center_x + random.randint(-2, 2), center_y + random.randint(-2, 2))
-                    break
-
-                if key == 'end_round':
-                    device_state.logger.debug(f"处理结束回合按钮 - in_match: {device_state.in_match}, 当前回合: {device_state.current_round_count}")
-                    
-                    # 检查是否启用空过功能
-                    enable_auto_pass = config_manager.get("game", {}).get("enable_auto_pass", False)
-                    device_state.logger.debug(f"空过功能状态: {enable_auto_pass}")
-                    
-                    if enable_auto_pass:
-                        # 启用空过，直接点击结束回合按钮
-                        device_state.logger.info("启用空过，直接结束回合")
-                    else:
-                        # 未启用空过，执行原有逻辑
-                        # 根据是否有额外费用点决定进化/超进化执行回合
-                        if device_state.extra_cost_available_this_match:
-                            evolution_rounds = range(4, 25)  # 4到14，包含4和14
-                        else:
-                            evolution_rounds = range(5, 25) # 5到14，包含5和14
-                        if device_state.current_round_count in evolution_rounds:
-                            game_manager.game_actions.perform_fullPlus_actions()
-                        else:
-                            game_manager.game_actions.perform_full_actions()
-                        if device_state.current_round_count == 15:
-                            device_state.restart_emulator()
-                   
-                    # 记录当前回合的费用使用情况（在回合结束时）
-                    device_state.last_round_available_cost = device_state.current_round_count  # 当前回合的基础费用
-                    # 如果有激活的额外费用点，加上额外费用（PP）
-                    if device_state.extra_cost_active and device_state.extra_cost_remaining_uses > 0:
-                        device_state.last_round_available_cost += 1
-                    
-                    # 记录实际使用的费用（从cost_history获取）
-                    if hasattr(device_state, 'cost_history') and device_state.cost_history:
-                        device_state.last_round_cost_used = device_state.cost_history[-1] if device_state.cost_history else 0
-                    else:
-                        device_state.last_round_cost_used = 0
-                    
-                    device_state.current_round_count += 1
-                    device_state.has_clicked_plus_this_round = False
-                    
-                    # 自动点击结束回合按钮
-                    center_x = max_loc[0] + template_info['w'] // 2
-                    center_y = max_loc[1] + template_info['h'] // 2
-                    device_state.u2_device.click(center_x + random.randint(-2, 2), center_y + random.randint(-2, 2))
-                    device_state.logger.info("结束回合")
-                    button_detected = True
-                    if key != device_state.last_detected_button:
-                        device_state.logger.debug(f"检测到按钮并处理: {template_info['name']} ")
-                    device_state.last_detected_button = key
-                    time.sleep(0.5)
-                    break
-
-
-                # 计算中心点并点击（除了结束回合按钮）
-                center_x = max_loc[0] + template_info['w'] // 2
-                center_y = max_loc[1] + template_info['h'] // 2
-                device_state.u2_device.click(center_x + random.randint(-2, 2), center_y + random.randint(-2, 2))
-                button_detected = True
-
-                if key != device_state.last_detected_button:
-                    device_state.logger.debug(f"检测到按钮并点击: {template_info['name']} ")
-
-                # 更新状态跟踪
-                device_state.last_detected_button = key
-                time.sleep(0.5)
+            try:
+                device_state.sleep(sleep_time)
+            except StopRequested:
+                device_state.script_running = False
                 break
+            except PauseRequested:
+                device_state.wait_while_paused()
+                continue
     
     def _handle_command(self, device_state: DeviceState, cmd: str):
         """处理用户命令"""
@@ -411,11 +267,11 @@ class DeviceManager:
         serial = device_state.serial
         
         if cmd == "p":
-            device_state.script_paused = True
+            device_state.request_pause(reason="device_queue")
             logger.warning("用户请求暂停脚本")
             print(f">>> 脚本已暂停 (设备: {serial}) <<<")
         elif cmd == "r":
-            device_state.script_paused = False
+            device_state.request_resume(reason="device_queue")
             logger.info("用户请求恢复脚本")
             print(f">>> 脚本已恢复 (设备: {serial}) <<<")
         elif cmd == "e":
@@ -453,7 +309,14 @@ class DeviceManager:
         # 只有在强制关闭模式下才关闭模拟器
         if force_close:
             try:
-                if device_state.u2_device:
+                raw_u2 = getattr(device_state, "u2_device_raw", None)
+                if raw_u2:
+                    device_state.logger.info("正在关闭模拟器...")
+                    # Use raw device to avoid pause/stop gating during cleanup.
+                    raw_u2.app_stop_all()
+                    if device_state.adb_device:
+                        device_state.logger.info("已停止所有应用")
+                elif device_state.u2_device:
                     device_state.logger.info("正在关闭模拟器...")
                     # 使用uiautomator2的方法关闭应用
                     device_state.u2_device.app_stop_all()

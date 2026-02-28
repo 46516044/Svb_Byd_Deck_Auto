@@ -3,21 +3,20 @@
 实现核心游戏逻辑和操作
 """
 
-# from re import T
 import cv2
-from easyocr.craft import F
 import numpy as np
 import random
 import time
 import logging
 import os
-import gc
 import onnxruntime as ort
 from src.game.follower_manager import FollowerManager
-from src.game.cost_recognition import CostRecognition
 from src.game.template_manager import TemplateManager
 from src.game.game_actions import GameActions
+from src.game.state_machine import GameStateMachine
 from src.utils.gpu_utils import get_easyocr_reader
+from src.utils.resource_utils import resource_path
+from src.utils.card_filename import parse_card_stem
 from src.utils.hp_detection import (
     detect_hp_in_window,
     sliding_window_detect,
@@ -62,16 +61,18 @@ class GameManager:
     def __init__(self, device_state):
         self.device_state = device_state
         self.follower_manager = FollowerManager()
-        self.cost_recognition = CostRecognition()
         # 传递设备配置给模板管理器
         self.template_manager = TemplateManager(device_state.device_config)
         self.game_actions = GameActions(device_state)
+        self.state_machine = GameStateMachine()
         self.reader = get_easyocr_reader()
 
         # 加载MNIST模型用于HP识别的后备方案
         self.mnist_session = None
         self.logger = logger
         mnist_path = "models/mnist_adv.onnx"
+        if not os.path.exists(mnist_path):
+            mnist_path = resource_path(mnist_path)
         if os.path.exists(mnist_path):
             try:
                 self.mnist_session = ort.InferenceSession(mnist_path, providers=["CPUExecutionProvider"])
@@ -83,10 +84,7 @@ class GameManager:
 
         # 加载HP检测遮罩
         self.hp_mask = None
-        # 根据设备配置选择模板目录
-        is_global = device_state.device_config.get('is_global', False)
-        templates_dir = "templates_global" if is_global else "templates"
-        mask_path = os.path.join(templates_dir, "hp_mask.png")
+        mask_path = self.template_manager.get_template_path("hp_mask.png")
         if os.path.exists(mask_path):
             self.hp_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
             logger.info(f"HP遮罩已加载: {mask_path}, 尺寸: {self.hp_mask.shape}")
@@ -910,6 +908,8 @@ class GameManager:
                 if not filename.endswith(".png"):
                     return None
                 template_path = os.path.join("shadowverse_cards_cost", filename)
+                if not os.path.exists(template_path):
+                    template_path = resource_path(template_path)
                 tname = os.path.splitext(filename)[0]
                 try:
                     # 使用PIL读取图片（处理P/LA/L等模式，避免OpenCV通道数异常）
@@ -981,6 +981,8 @@ class GameManager:
             # 加载所有模板（缓存，避免每次扫描重复读取磁盘）
             if getattr(self, "_board_sift_templates", None) is None:
                 template_dir = "shadowverse_cards_cost"
+                if not os.path.exists(template_dir):
+                    template_dir = resource_path(template_dir)
                 template_files = [f for f in os.listdir(template_dir) if f.endswith(".png")]
                 card_templates = {}
 
@@ -1078,7 +1080,10 @@ class GameManager:
 
                     # 去除前缀的费用数字和下划线，只保留随从名
                     if "_" in best_match:
-                        name = best_match.split("_", 1)[1]
+                        try:
+                            _, _, name = parse_card_stem(best_match)
+                        except Exception:
+                            name = best_match.split("_", 1)[1]
                     else:
                         name = best_match
 

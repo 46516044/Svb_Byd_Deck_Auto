@@ -3,7 +3,6 @@
 实现所有游戏动作和策略
 """
 
-from errno import ECANCELED
 import cv2
 import numpy as np
 import random
@@ -11,27 +10,19 @@ import time
 import logging
 import os
 from typing import List, Dict, Tuple
-
-from torch import device
 from src.config import settings
 from src.config.game_constants import (
     DEFAULT_ATTACK_TARGET, DEFAULT_ATTACK_RANDOM,
     POSITION_RANDOM_RANGE, SHOW_CARDS_BUTTON, SHOW_CARDS_RANDOM_X, SHOW_CARDS_RANDOM_Y,
     BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
 )
-import math
 from src.config.card_priorities import (
-    get_card_priority,
     get_card_priority_pre_evolution,
     get_card_priority_post_evolution,
     is_evolution_unlocked,
     is_evolve_priority_card,
     get_evolve_priority_cards,
-    is_evolve_special_action_card,
-    get_evolve_special_actions,
 )
-from src.config.config_manager import ConfigManager
-import glob
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +35,17 @@ class GameActions:
         # 初始化手牌管理器，只创建一次
         from .hand_card_manager import HandCardManager
         self.hand_manager = HandCardManager(device_state)
+
+        # Keep a small observation cache for logging.
+        self._last_observed_hand_cards = []
+
+        # Policy hook (default preserves legacy behavior).
+        try:
+            from src.game.policy.base import LegacyBattlePolicy
+
+            self.battle_policy = LegacyBattlePolicy()
+        except Exception:
+            self.battle_policy = None
     
     @property
     def follower_manager(self):
@@ -74,6 +76,10 @@ class GameActions:
         # 攻击阶段：从右往左优先处理（新召唤随从通常出现在右侧）
         # 扫描/重扫由 _refresh_our_followers 统一处理，避免外层零散补扫。
         all_followers = self._refresh_our_followers(sort_desc=True)
+
+        # Structured observation log (no extra recognition).
+        enemy_positions = enemy_check if isinstance(enemy_check, (list, tuple)) else []
+        self._log_observed_state(note="attack/start", enemy=enemy_positions, ward=shield_targets)
 
         attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
         if not attackable:
@@ -112,7 +118,7 @@ class GameActions:
                         else:
                             self.device_state.logger.info(f"使用{type_name}随从攻击护盾")
                         human_like_drag(self.device_state.u2_device, closest_follower[0], closest_follower[1], shield_x, shield_y, duration=random.uniform(*settings.get_human_like_drag_duration_range()))
-                        time.sleep(1)
+                        self.device_state.sleep(1)
                         break  # 已攻击则跳出类型循环
 
                 if not closest_follower:
@@ -137,7 +143,7 @@ class GameActions:
                 # 重新扫描护盾，检查当前护盾是否还在
                 shield_targets = self._scan_shield_targets()
                 
-                time.sleep(0.2)
+                self.device_state.sleep(0.2)
             
             # 检查是否因为达到最大尝试次数而退出循环
             if attempt_count >= max_attempts:
@@ -174,7 +180,7 @@ class GameActions:
                 duration=random.uniform(*settings.get_human_like_drag_duration_range()),
             )
             green_attack_count += 1
-            time.sleep(0.45)
+            self.device_state.sleep(0.45)
 
             all_followers = self._refresh_our_followers(sort_desc=True)
 
@@ -218,7 +224,7 @@ class GameActions:
                         duration=random.uniform(*settings.get_human_like_drag_duration_range()),
                     )
                     yellow_attack_count += 1
-                    time.sleep(1.5)
+                    self.device_state.sleep(1.5)
                 except Exception as e:
                     self.device_state.logger.warning(f"突进敌方最小血量随从失败: {str(e)}")
 
@@ -232,14 +238,15 @@ class GameActions:
             self.device_state.logger.info("没有随从可进化")
             return
 
-        from src.config.card_priorities import is_evolve_priority_card, get_evolve_priority_cards, is_evolve_special_action_card, get_evolve_special_actions
-        evolve_priority_cards_cfg = get_evolve_priority_cards()
+        from src.config.card_priorities import is_evolve_priority_card, get_evolve_priority_cards
+        runtime_cfg = getattr(self.device_state, "config", None)
+        evolve_priority_cards_cfg = get_evolve_priority_cards(runtime_cfg)
         # 先筛选进化优先卡牌
         evolve_priority_followers = []
         other_followers = []
         for f in all_followers:
             follower_name = f[3] if len(f) > 3 else None
-            if follower_name and is_evolve_priority_card(follower_name):
+            if follower_name and is_evolve_priority_card(follower_name, runtime_cfg):
                 evolve_priority_followers.append(f)
             else:
                 other_followers.append(f)
@@ -278,13 +285,13 @@ class GameActions:
                     break
             # 点击该位置
             self.device_state.u2_device.click(x, y)
-            time.sleep(0.5)  # 等待进化按钮出现
+            self.device_state.sleep(0.5)  # 等待进化按钮出现
 
             # 获取新截图检测进化按钮
             new_screenshot = self.device_state.take_screenshot()
             if new_screenshot is None:
                 self.device_state.logger.warning(f"位置 {pos} 无法获取截图，跳过检测")
-                time.sleep(0.1)
+                self.device_state.sleep(0.1)
                 continue
 
             # 转换为OpenCV格式
@@ -301,12 +308,12 @@ class GameActions:
                     self.device_state.u2_device.click(center_x, center_y)
                     self.device_state.super_evolution_point -= 1
                     if follower_name:
-                        if is_evolve_priority_card(follower_name):
+                        if is_evolve_priority_card(follower_name, runtime_cfg):
                             self.device_state.logger.info(f"优先超进化了[{follower_name}]")
                         self.device_state.logger.info(f"超进化了[{follower_name}]，剩余超进化次数：{self.device_state.super_evolution_point}")
                     else:
                         self.device_state.logger.info(f"检测到超进化按钮并点击，剩余超进化次数：{self.device_state.super_evolution_point}")
-                    time.sleep(3.5)
+                    self.device_state.sleep(3.5)
 
                     # 特殊超进化后操作（如铁拳神父）以及进化模式选项处理
                     if follower_name:
@@ -314,7 +321,7 @@ class GameActions:
                     # 如果超进化到突进或者普通随从，则再检查无护盾后攻击敌方随从
                     if follower_type in ["yellow", "normal"]:
                         # 等待超进化动画完成
-                        time.sleep(1)
+                        self.device_state.sleep(1)
                         
                         # 检查敌方护盾
                         shield_targets = self._scan_shield_targets()
@@ -340,7 +347,7 @@ class GameActions:
                                     enemy_x, enemy_y, _, hp_value = max_hp_follower
                                     # 使用原来的随从位置作为起始点
                                     human_like_drag(self.device_state.u2_device, pos[0], pos[1], enemy_x, enemy_y, duration=random.uniform(*settings.get_human_like_drag_duration_range()))
-                                    time.sleep(1)
+                                    self.device_state.sleep(1)
                                     if follower_name:
                                         self.device_state.logger.info(f"超进化了[{follower_name}]并攻击了敌方较高血量随从")
                                     else:
@@ -356,19 +363,19 @@ class GameActions:
                     self.device_state.u2_device.click(center_x, center_y)
                     self.device_state.evolution_point -= 1
                     if follower_name:
-                        if is_evolve_priority_card(follower_name):
+                        if is_evolve_priority_card(follower_name, runtime_cfg):
                             self.device_state.logger.info(f"优先进化了[{follower_name}]")
                         self.device_state.logger.info(f"进化了[{follower_name}]，剩余进化次数：{self.device_state.evolution_point}")
                     else:
                         self.device_state.logger.info(f"执行了进化，剩余进化次数：{self.device_state.evolution_point}")
-                    time.sleep(3.5)
+                    self.device_state.sleep(3.5)
 
                     # 特殊进化后操作（如铁拳神父）以及进化模式选项处理
                     if follower_name:
                         self._handle_evolve_special_action(follower_name, pos, is_super_evolution=False, existing_followers=all_followers)
                 break
-            time.sleep(0.01)
-        time.sleep(2)  # 短暂等待
+            self.device_state.sleep(0.01)
+        self.device_state.sleep(2)  # 短暂等待
 
     def _handle_evolve_special_action(self, follower_name, pos=None, is_super_evolution=False, existing_followers=None):
         """
@@ -382,172 +389,129 @@ class GameActions:
         evolution_actions = EvolutionSpecialActions(self.device_state)
         evolution_actions.handle_evolve_special_action(follower_name, pos, is_super_evolution, existing_followers)
 
+    def _show_cards_once(self):
+        """点击一次展牌按钮（不包含额外 sleep，调用方保持原顺序控制时序）。"""
+        self.device_state.u2_device.click(
+            SHOW_CARDS_BUTTON[0]
+            + random.randint(SHOW_CARDS_RANDOM_X[0], SHOW_CARDS_RANDOM_X[1]),
+            SHOW_CARDS_BUTTON[1]
+            + random.randint(SHOW_CARDS_RANDOM_Y[0], SHOW_CARDS_RANDOM_Y[1]),
+        )
+
+    def _click_blank_panel(self, *, sleep_seconds: float):
+        """点击绝对无遮挡处关闭面板，并按需等待。"""
+        self.device_state.u2_device.click(
+            BLANK_CLICK_POSITION[0]
+            + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM),
+            BLANK_CLICK_POSITION[1]
+            + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM),
+        )
+        self.device_state.sleep(float(sleep_seconds))
+
+    def _take_screenshot_bgr(self):
+        screenshot = self.device_state.take_screenshot()
+        if screenshot is None:
+            return None
+        image = np.array(screenshot)
+        return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    def _await_enemy_check(self, enemy_future):
+        try:
+            return enemy_future.result()
+        except Exception as e:
+            self.device_state.logger.warning(f"敌方随从检测失败: {str(e)}")
+            return []
+
+    def _log_observed_state(self, *, note: str, enemy=None, ward=None):
+        """Log a minimal ObservedGameState without changing battle behavior."""
+
+        try:
+            from src.game.domain import ObservedGameState
+        except Exception:
+            return
+
+        try:
+            board_ours = []
+            try:
+                fm = getattr(self.device_state, "follower_manager", None)
+                if fm is not None:
+                    board_ours = fm.get_positions() or []
+            except Exception:
+                board_ours = []
+
+            state = ObservedGameState(
+                turn=getattr(self.device_state, "current_round_count", None),
+                is_second_player=getattr(self.device_state, "extra_cost_available_this_match", None),
+                pp_available=None,
+                ep=getattr(self.device_state, "evolution_point", None),
+                sep=getattr(self.device_state, "super_evolution_point", None),
+                hand=list(getattr(self, "_last_observed_hand_cards", []) or []),
+                board_ours=board_ours,
+                board_enemy=list(enemy or []),
+                ward_enemy=list(ward or []),
+                ui={"last_button": getattr(self.device_state, "last_detected_button", None)},
+                note=str(note or ""),
+            )
+            self.device_state.logger.info(f"[OBS] {state.brief()}")
+        except Exception as e:
+            # Don't break battle loop for logging failures.
+            try:
+                self.device_state.logger.debug(f"[OBS] build failed: {e}")
+            except Exception:
+                pass
+
     def perform_full_actions(self):
         """720P分辨率下的出牌攻击操作"""
         from concurrent.futures import ThreadPoolExecutor
-        # 并发调用scan_enemy_ATK
+
+        from src.game.battle.phases import AttackPhase, PlayPhase
+
+        # 保持原有语义：提交后立刻退出 executor（实际会等待完成）
         with ThreadPoolExecutor(max_workers=3) as executor:
-            enemy_future = executor.submit(self._scan_enemy_ATK, self.device_state.take_screenshot())
-        
-        # 展牌一次
-        self.device_state.u2_device.click(
-            SHOW_CARDS_BUTTON[0] + random.randint(SHOW_CARDS_RANDOM_X[0], SHOW_CARDS_RANDOM_X[1]),
-            SHOW_CARDS_BUTTON[1] + random.randint(SHOW_CARDS_RANDOM_Y[0], SHOW_CARDS_RANDOM_Y[1])
-        )
-        
-        
-        
-        #移除手牌光标提高识别率
-        #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
-        time.sleep(0.3)
-        
-        # 获取截图
-        screenshot = self.device_state.take_screenshot()
-        image = np.array(screenshot)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        
-        # 执行出牌逻辑
-        self._play_cards(image)
-        time.sleep(1)
+            enemy_future = executor.submit(
+                self._scan_enemy_ATK, self.device_state.take_screenshot()
+            )
 
-        # 点击绝对无遮挡处关闭可能扰乱识别的面板
-        from src.config.game_constants import BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
-        self.device_state.u2_device.click(
-            BLANK_CLICK_POSITION[0] + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM),
-            BLANK_CLICK_POSITION[1] + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM)
-        )
-        time.sleep(1.5)
+        if not PlayPhase(self).run(post_show_sleep=0.3):
+            return
 
-
-        # 获取并发调用的敌方检测结果
-        try:
-            enemy_check = enemy_future.result()
-            # self.device_state.logger.info(f"出牌前有 {len(enemy_check)} 个敌方随从")
-        except Exception as e:
-            self.device_state.logger.warning(f"敌方随从检测失败: {str(e)}")
-            enemy_check = []
-
-        # 刷新一次我方随从信息（扫描/补扫在内部统一处理）
-        self._refresh_our_followers(sort_desc=False)
-
-        # 攻击阶段在 perform_follower_attacks 内会自行判断是否可攻击
-        self.perform_follower_attacks(enemy_check)
-
-        time.sleep(1)
+        enemy_check = self._await_enemy_check(enemy_future)
+        AttackPhase(self).run(enemy_check)
+        self.device_state.sleep(1)
 
     def perform_fullPlus_actions(self):
         """执行进化/超进化与攻击操作"""
         from concurrent.futures import ThreadPoolExecutor
 
-        # 并发调用scan_enemy_ATK
+        from src.game.battle.phases import AttackPhase, EvolvePhase, PlayPhase
+        from src.game.policy.base import LegacyBattlePolicy
+
         with ThreadPoolExecutor(max_workers=3) as executor:
-            enemy_future = executor.submit(self._scan_enemy_ATK, self.device_state.take_screenshot())
+            enemy_future = executor.submit(
+                self._scan_enemy_ATK, self.device_state.take_screenshot()
+            )
 
-        # 展牌
-        self.device_state.u2_device.click(
-            SHOW_CARDS_BUTTON[0] + random.randint(SHOW_CARDS_RANDOM_X[0], SHOW_CARDS_RANDOM_X[1]),
-            SHOW_CARDS_BUTTON[1] + random.randint(SHOW_CARDS_RANDOM_Y[0], SHOW_CARDS_RANDOM_Y[1])
-        )
-        time.sleep(0.2)
-        #移除手牌光标提高识别率
-        #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
-        time.sleep(0.3)
-
-        # 获取截图
-        screenshot = self.device_state.take_screenshot()
-        if screenshot is None:
-            self.device_state.logger.warning("无法获取截图，跳过出牌")
+        if not PlayPhase(self).run(post_show_sleep=0.5):
             return
 
-        # 转换为OpenCV格式
-        image = np.array(screenshot)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        enemy_check = self._await_enemy_check(enemy_future)
 
-        # 执行出牌逻辑
-        self._play_cards(image)
-        time.sleep(1)
-
-        # # 点击绝对无遮挡处关闭可能扰乱识别的面板
-        from src.config.game_constants import BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
-        self.device_state.u2_device.click(
-            BLANK_CLICK_POSITION[0] + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM),
-            BLANK_CLICK_POSITION[1] + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM)
-        )
-        time.sleep(1.5)
-
-        #获取并发调用的敌方检测结果
-        try:
-            enemy_check = enemy_future.result()
-            # self.device_state.logger.info(f"出牌前有 {len(enemy_check)} 个敌方随从")
-        except Exception as e:
-            self.device_state.logger.warning(f"敌方随从检测失败: {str(e)}")
-            enemy_check = []
-
-        # 获取随从位置和类型（扫描/补扫在内部统一处理）
+        # 旧逻辑：进化判断前先刷新一次随从
         self._refresh_our_followers(sort_desc=False)
-        
 
-        # 进化/超进化条件判断：敌方有随从，或者我方绿色疾驰随从，或者有优先进化随从
-        should_evolve = False
-        
-        # 检查敌方现在是否有随从
-        screenshot = self.device_state.take_screenshot()
-        if screenshot:
-            enemy_followers = self._scan_enemy_ATK(screenshot)
-            if enemy_followers and (self.device_state.evolution_point > 0 or self.device_state.super_evolution_point > 0):
-                should_evolve = True
-                self.device_state.logger.info(f"检测到敌方随从，满足进化/超进化条件")
-        
-        # 检查我方是否有绿色疾驰随从
-        if not should_evolve:
-            our_followers = self.follower_manager.get_positions()
-            green_followers = [f for f in our_followers if f[2] == "green"]
-            if green_followers and (self.device_state.evolution_point > 0 or self.device_state.super_evolution_point > 0):
-                should_evolve = True
-                self.device_state.logger.info(f"检测到我方疾驰随从，满足进化/超进化条件")
-        
-        # 检查是否有优先进化随从
-        if not should_evolve:
-            our_followers = self.follower_manager.get_positions()
-            for follower in our_followers:
-                follower_name = follower[3] if len(follower) > 3 else None
-                if follower_name and is_evolve_priority_card(follower_name) and (self.device_state.evolution_point > 0 or self.device_state.super_evolution_point > 0):
-                    should_evolve = True
-                    self.device_state.logger.info(f"检测到优先进化随从[{follower_name}]，满足进化/超进化条件")
-                    break
-        
-        if (self.device_state.evolution_point > 0 or self.device_state.super_evolution_point > 0) and should_evolve:
-            self.perform_evolution_actions()
-            # 等待最终进化/超进化动画完成
-            time.sleep(3)
-            # 点击空白处关闭面板
-            from src.config.game_constants import BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
-            self.device_state.u2_device.click(
-                BLANK_CLICK_POSITION[0] + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM),
-                BLANK_CLICK_POSITION[1] + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM)
-            )
-            time.sleep(1)
+        policy = self.battle_policy or LegacyBattlePolicy()
+        EvolvePhase(self, policy).run()
 
-            # 获取进化/超进化后的随从位置和类型（统一入口）
-            self._refresh_our_followers(sort_desc=False)
-
-
-        # 攻击阶段在 perform_follower_attacks 内会快速重扫一次，避免此处偶发漏检导致直接跳过
-        self.perform_follower_attacks(enemy_check)
-
-        time.sleep(1)
+        AttackPhase(self).run(enemy_check)
+        self.device_state.sleep(1)
 
 
     def _play_cards(self, image):
         """改进的出牌策略：每出一张牌都重新检测手牌，最多重试展牌次数为当前回合数"""
+        self._banlist_blocked_this_round = False
         # 获取当前回合可用费用
         current_round = self.device_state.current_round_count
         available_cost = min(10, current_round)  # 基础费用 = 当前回合数（最大10）
-        
-        # 检测手牌中是否有shield随从，如果有则跳过出牌阶段
-        # if self.hand_manager.recognize_hand_shield_card():
-        #     self.device_state.logger.warning("检测到护盾卡牌，跳过出牌阶段")
-        #     return
         
         # 第一回合检查是否有额外费用点
         if current_round == 1 and self.device_state.extra_cost_available_this_match is None:
@@ -636,11 +600,18 @@ class GameActions:
         # 改进的出牌逻辑：每出一张牌都重新检测手牌
         self._play_cards_with_retry(available_cost, current_round)
 
+        # Banlist hit: skip later phases (evolve/attack) and only end turn.
+        if getattr(self, "_banlist_blocked_this_round", False):
+            return False
+        return True
+
     def _play_cards_with_retry(self, available_cost, current_round):
         """出牌顺序：优先卡（特殊牌+高优先级牌，组内按优先级和费用从高到低）先出，然后普通牌按费用从高到低出。每次出牌都重新识别手牌。"""
         max_retry_attempts = 2  # 最多重试次数
         total_cost_used = 0
         retry_count = 0
+        # Reset observation cache per round.
+        self._last_observed_hand_cards = []
         # 当前回合需要忽略的卡牌（如剑士的斩击在没有敌方随从时）
         self._current_round_ignored_cards = set()
         # 同名牌连续出牌计数器
@@ -654,21 +625,102 @@ class GameActions:
             self.device_state.logger.warning("未能识别到任何手牌")
             return
 
+        # Banlist guard (anti-abuse / emergency stop).
+        try:
+            from src.game.internal.banlist import should_block_play
+
+            blocked, hits = should_block_play(cards, getattr(self.device_state, "config", None))
+        except Exception:
+            blocked, hits = False, []
+        if blocked:
+            hits_str = " | ".join(hits) if hits else "<unknown>"
+            self.device_state.logger.warning(f"[Banlist] 命中禁卡表，跳过本回合出牌: {hits_str}")
+            self._banlist_blocked_this_round = True
+            return
+
+        # Cache last observed hand for later structured logging.
+        self._last_observed_hand_cards = list(cards)
+
         from src.config.card_priorities import (
             get_high_priority_cards,
             get_card_priority_pre_evolution,
             get_card_priority_post_evolution,
             is_evolution_unlocked
         )
-        high_priority_cards_cfg = get_high_priority_cards()
-        high_priority_names = set(high_priority_cards_cfg.keys())
+        runtime_cfg = getattr(self.device_state, "config", None)
+        high_priority_cards_cfg = get_high_priority_cards(runtime_cfg)
+
+        # Enhance variants: treat tiers as separate config keys.
+        # Only keys with actual play priority fields participate in the "priority" group.
+        def _has_play_priority_cfg(v):
+            if isinstance(v, dict):
+                return (
+                    "priority_pre_evolution" in v
+                    or "priority_post_evolution" in v
+                    or "priority" in v
+                )
+            return isinstance(v, (int, float, str))
+
+        play_priority_keys = {
+            str(k)
+            for k, v in (high_priority_cards_cfg or {}).items()
+            if _has_play_priority_cfg(v)
+        }
+
+        from src.utils.card_filename import make_enhance_key
+
+        def _decorate_cards_for_pp(cards_list, pp: int):
+            """Decorate card dicts with effective cost/key for current PP."""
+
+            for c in cards_list:
+                base_name = str(c.get("name", "") or "")
+                try:
+                    base_cost = int(c.get("cost", 0) or 0)
+                except Exception:
+                    base_cost = 0
+
+                eff_cost = base_cost
+                enhance_costs = c.get("enhance_costs")
+                if not isinstance(enhance_costs, (list, tuple)):
+                    enhance_costs = []
+                for ec in enhance_costs:
+                    try:
+                        ec_i = int(ec)
+                    except Exception:
+                        continue
+                    if ec_i <= int(pp or 0) and ec_i > eff_cost:
+                        eff_cost = ec_i
+
+                if base_name and eff_cost != base_cost:
+                    cfg_key = make_enhance_key(base_name, eff_cost)
+                else:
+                    cfg_key = base_name
+
+                c["_cfg_key"] = cfg_key
+                c["_eff_cost"] = int(eff_cost)
+
+                pr = 999
+                try:
+                    pr = int(get_priority_fn(cfg_key))
+                except Exception:
+                    pr = 999
+                if pr == 999 and cfg_key != base_name:
+                    try:
+                        pr = int(get_priority_fn(base_name))
+                    except Exception:
+                        pr = 999
+                c["_eff_priority"] = pr
+
+                c["_is_priority"] = bool(
+                    (cfg_key in play_priority_keys) or (base_name in play_priority_keys)
+                )
 
         # 根据进化是否解锁，动态选择优先级函数
         if is_evolution_unlocked(self.device_state):
-            get_priority_fn = get_card_priority_post_evolution
+            get_priority_fn = lambda name: get_card_priority_post_evolution(name, runtime_cfg)
             priority_phase = "进化后"
         else:
-            get_priority_fn = get_card_priority_pre_evolution
+            get_priority_fn = lambda name: get_card_priority_pre_evolution(name, runtime_cfg)
             priority_phase = "进化前"
 
         self.device_state.logger.info(f"使用{priority_phase}优先级策略")
@@ -676,31 +728,59 @@ class GameActions:
         # 过滤掉当前回合需要忽略的卡牌
         filtered_cards = [c for c in cards if c.get('name', '') not in self._current_round_ignored_cards]
 
+        # Initial decoration based on current PP.
+        _decorate_cards_for_pp(filtered_cards, int(available_cost or 0))
+
         # 高优先级卡牌
-        priority_cards = [c for c in filtered_cards if c.get('name', '') in high_priority_names]
+        priority_cards = [c for c in filtered_cards if c.get('_is_priority')]
         # 普通卡牌
-        normal_cards = [c for c in filtered_cards if c.get('name', '') not in high_priority_names]
-        # 高优先级卡牌排序：先按priority（数字小优先），再按费用从高到低
-        priority_cards.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
-        # 普通卡牌按费用从高到低排序
-        normal_cards.sort(key=lambda x: x.get('cost', 0), reverse=True)
+        normal_cards = [c for c in filtered_cards if not c.get('_is_priority')]
+        # 高优先级卡牌排序：先按priority（数字小优先），再按有效费用从高到低
+        priority_cards.sort(key=lambda x: (x.get('_eff_priority', 999), -x.get('_eff_cost', 0)))
+        # 普通卡牌按有效费用从高到低排序
+        normal_cards.sort(key=lambda x: x.get('_eff_cost', 0), reverse=True)
         planned_cards = priority_cards + normal_cards
 
-        remain_cost = available_cost
-        while planned_cards and (remain_cost > 0 or any(c.get('cost', 0) == 0 for c in planned_cards)):
+        remain_cost = int(available_cost or 0)
+        while planned_cards and (
+            remain_cost > 0
+            or any(int(c.get('_eff_cost', c.get('cost', 0) or 0) or 0) == 0 for c in planned_cards)
+        ):
+            # PP变化时，爆能档位与有效费用会变化：每轮重新装饰并排序。
+            _decorate_cards_for_pp(planned_cards, int(remain_cost or 0))
+            priority_cards = [c for c in planned_cards if c.get('_is_priority')]
+            normal_cards = [c for c in planned_cards if not c.get('_is_priority')]
+            priority_cards.sort(key=lambda x: (x.get('_eff_priority', 999), -x.get('_eff_cost', 0)))
+            normal_cards.sort(key=lambda x: x.get('_eff_cost', 0), reverse=True)
+            planned_cards = priority_cards + normal_cards
+
             # 先找能出的高优先级卡牌
-            affordable_priority = [c for c in planned_cards if c.get('name', '') in high_priority_names and c.get('cost', 0) <= remain_cost]
+            affordable_priority = [
+                c
+                for c in planned_cards
+                if c.get('_is_priority') and int(c.get('_eff_cost', 0) or 0) <= remain_cost
+            ]
             # 找普通0费卡牌
-            normal_zero_cost = [c for c in planned_cards if c.get('name', '') not in high_priority_names and c.get('cost', 0) == 0]
+            normal_zero_cost = [
+                c
+                for c in planned_cards
+                if (not c.get('_is_priority')) and int(c.get('_eff_cost', 0) or 0) == 0
+            ]
             # 找能出的普通付费卡牌
-            affordable_normal = [c for c in planned_cards if c.get('name', '') not in high_priority_names and c.get('cost', 0) > 0 and c.get('cost', 0) <= remain_cost]
+            affordable_normal = [
+                c
+                for c in planned_cards
+                if (not c.get('_is_priority'))
+                and int(c.get('_eff_cost', 0) or 0) > 0
+                and int(c.get('_eff_cost', 0) or 0) <= remain_cost
+            ]
             
             if not affordable_priority and not normal_zero_cost and not affordable_normal:
                 break
                 
             if affordable_priority:
                 # 高优先级卡牌按priority和费用排序（priority小优先，费用高优先）
-                affordable_priority.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
+                affordable_priority.sort(key=lambda x: (x.get('_eff_priority', 999), -x.get('_eff_cost', 0)))
                 card_to_play = affordable_priority[0]
                 self.device_state.logger.info(f"检测到高优先级卡牌[{card_to_play.get('name', '未知')}]，优先打出")
             elif normal_zero_cost:
@@ -709,11 +789,21 @@ class GameActions:
                 self.device_state.logger.info(f"检测到普通0费卡牌[{card_to_play.get('name', '未知')}]，优先打出")
             elif affordable_normal:
                 # 普通付费卡牌按费用从高到低排序（高费优先）
-                affordable_normal.sort(key=lambda x: x.get('cost', 0), reverse=True)
+                affordable_normal.sort(key=lambda x: x.get('_eff_cost', 0), reverse=True)
                 card_to_play = affordable_normal[0]
             name = card_to_play.get('name', '未知')
-            cost = card_to_play.get('cost', 0)
-            self.device_state.logger.info(f"打出卡牌: {name} (费用: {cost})")
+            base_cost = int(card_to_play.get('cost', 0) or 0)
+            cost = int(card_to_play.get('_eff_cost', base_cost) or 0)
+            cfg_key = str(card_to_play.get('_cfg_key') or name)
+            card_to_play['_config_key'] = cfg_key
+            card_to_play['_effective_cost'] = cost
+
+            if cost != base_cost:
+                self.device_state.logger.info(
+                    f"打出卡牌: {name} (爆能费用: {cost}, 基础费用: {base_cost})"
+                )
+            else:
+                self.device_state.logger.info(f"打出卡牌: {name} (费用: {cost})")
             result = self._play_single_card(card_to_play)
             
             # 处理额外的费用奖励
@@ -764,7 +854,13 @@ class GameActions:
                 continue
             
             planned_cards.remove(card_to_play)
-            if planned_cards and (remain_cost > 0 or any(c.get('cost', 0) == 0 for c in planned_cards)):
+            if planned_cards and (
+                remain_cost > 0
+                or any(
+                    int(c.get('_eff_cost', c.get('cost', 0) or 0) or 0) == 0
+                    for c in planned_cards
+                )
+            ):
                 time.sleep(0.2)
                 #点击展牌位置
                 self.device_state.u2_device.click(SHOW_CARDS_BUTTON[0] + random.randint(-2,2), SHOW_CARDS_BUTTON[1] + random.randint(-2,2))
@@ -773,6 +869,8 @@ class GameActions:
                 time.sleep(1)
                 new_cards = hand_manager.get_hand_cards_with_retry(max_retries=2, silent=True)
                 if new_cards:
+                    # Update cache when recognition succeeds.
+                    self._last_observed_hand_cards = list(new_cards)
                     card_info = []
                     for card in new_cards:
                         name = card.get('name', '未知')
@@ -788,11 +886,11 @@ class GameActions:
                     planned_cards = filtered_cards
                     
                     # 重新应用优先级排序
-                    high_priority_names = set(high_priority_cards_cfg.keys())
-                    priority_cards = [c for c in planned_cards if c.get('name', '') in high_priority_names]
-                    normal_cards = [c for c in planned_cards if c.get('name', '') not in high_priority_names]
-                    priority_cards.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
-                    normal_cards.sort(key=lambda x: x.get('cost', 0), reverse=True)
+                    _decorate_cards_for_pp(planned_cards, int(remain_cost or 0))
+                    priority_cards = [c for c in planned_cards if c.get('_is_priority')]
+                    normal_cards = [c for c in planned_cards if not c.get('_is_priority')]
+                    priority_cards.sort(key=lambda x: (x.get('_eff_priority', 999), -x.get('_eff_cost', 0)))
+                    normal_cards.sort(key=lambda x: x.get('_eff_cost', 0), reverse=True)
                     planned_cards = priority_cards + normal_cards
                 if not new_cards:
                     if retry_count < max_retry_attempts:
@@ -802,7 +900,16 @@ class GameActions:
                     else:
                         self.device_state.logger.info("达到最大重试次数，停止出牌")
                         break
-                if not planned_cards or (not any(c.get('cost', 0) <= remain_cost for c in planned_cards) and not any(c.get('cost', 0) == 0 for c in planned_cards)):
+                if not planned_cards or (
+                    not any(
+                        int(c.get('_eff_cost', c.get('cost', 0) or 0) or 0) <= remain_cost
+                        for c in planned_cards
+                    )
+                    and not any(
+                        int(c.get('_eff_cost', c.get('cost', 0) or 0) or 0) == 0
+                        for c in planned_cards
+                    )
+                ):
                     break
 
         # 特殊逻辑：如果最后打出的是"诅咒派对"且费用用完，再扫描一次手牌
@@ -837,6 +944,8 @@ class GameActions:
         
         new_cards = hand_manager.get_hand_cards_with_retry(max_retries=2, silent=True)
         if new_cards:
+            # Update cache when recognition succeeds.
+            self._last_observed_hand_cards = list(new_cards)
             card_info = []
             for card in new_cards:
                 name = card.get('name', '未知')
@@ -881,6 +990,8 @@ class GameActions:
                 
                 new_cards = hand_manager.get_hand_cards_with_retry(max_retries=3, silent=True)
                 if new_cards:
+                    # Update cache when recognition succeeds.
+                    self._last_observed_hand_cards = list(new_cards)
                     card_info = []
                     for card in new_cards:
                         name = card.get('name', '未知')
@@ -929,6 +1040,8 @@ class GameActions:
             
             new_cards = hand_manager.get_hand_cards_with_retry(max_retries=3, silent=True)
             if new_cards:
+                # Update cache when recognition succeeds.
+                self._last_observed_hand_cards = list(new_cards)
                 card_info = []
                 for card in new_cards:
                     name = card.get('name', '未知')
@@ -1041,11 +1154,7 @@ class GameActions:
         使用相同的SIFT识别，但应用旧版简单策略规则（无优先级、无曲线检查）。
         """
         try:
-            # 修复pyinstaller打包时的导入问题
-            try:
-                from utils.card_swap_strategy_enhanced import determine_card_swaps_unified
-            except ImportError:
-                from src.utils.card_swap_strategy_enhanced import determine_card_swaps_unified
+            from src.utils.card_swap_strategy_enhanced import determine_card_swaps_unified
 
             self.device_state.logger.info("[Fallback] 使用SIFT识别 + 旧策略规则")
 
@@ -1059,108 +1168,110 @@ class GameActions:
             mulligan_region = (182, 402, 971, 633)
             sift_recognizer = self.hand_manager.sift_recognition
 
-            # 临时设置换牌区域
-            original_hand_area = sift_recognizer.hand_area
-            sift_recognizer.hand_area = mulligan_region
+            # 3. 识别手牌（带重试机制）
+            max_retries = 3
+            cards = None
 
-            try:
-                # 3. 识别手牌（带重试机制）
-                max_retries = 3
-                cards = None
-
-                for attempt in range(max_retries):
-                    # 执行识别
-                    recognized_cards = sift_recognizer.recognize_hand_cards(screenshot)
-
-                    if not recognized_cards:
-                        self.device_state.logger.warning(
-                            f"[Fallback] 第{attempt+1}次识别: 未检测到卡牌"
-                        )
-                        if attempt < max_retries - 1:
-                            time.sleep(0.5)
-                            screenshot = self.device_state.take_screenshot()
-                            if screenshot is None:
-                                continue
-                        continue
-
-                    # 确保最多4张牌
-                    recognized_cards = recognized_cards[:4]
-
-                    # 验证识别结果
-                    is_valid, reason = self._validate_mulligan_cards(recognized_cards)
-
-                    if is_valid:
-                        self.device_state.logger.info(
-                            f"[Fallback] 第{attempt+1}次识别成功，验证通过"
-                        )
-                        cards = recognized_cards
-                        break
-                    else:
-                        self.device_state.logger.warning(
-                            f"[Fallback] 第{attempt+1}次识别失败: {reason}"
-                        )
-                        if attempt < max_retries - 1:
-                            time.sleep(0.5)
-                            screenshot = self.device_state.take_screenshot()
-                            if screenshot is None:
-                                continue
-
-                # 重试后仍失败
-                if cards is None:
-                    self.device_state.logger.error(
-                        f"[Fallback] {max_retries}次重试均失败，放弃识别"
-                    )
-                    return False
-
-                # 4. 获取配置的策略
-                config_manager = ConfigManager()
-                strategy = config_manager.get("game", {}).get("card_replacement_strategy", "4费档次")
-
-                # 5. 调用统一接口，使用旧策略规则（use_enhanced=False）
-                keep_indices, swap_indices, reasons = determine_card_swaps_unified(
-                    cards,
-                    strategy,
-                    priority_cards=None,  # 旧策略不使用优先级
-                    use_enhanced=False     # 使用旧规则
+            for attempt in range(max_retries):
+                # 执行识别（显式传入区域，避免跨线程污染）
+                recognized_cards = sift_recognizer.recognize_hand_cards(
+                    screenshot, hand_area=mulligan_region
                 )
 
-                self.device_state.logger.info(f"[Fallback] 策略: {strategy} (旧规则)")
-                self.device_state.logger.info(f"[Fallback] 保留: {keep_indices}, 换掉: {swap_indices}")
+                if not recognized_cards:
+                    self.device_state.logger.warning(
+                        f"[Fallback] 第{attempt+1}次识别: 未检测到卡牌"
+                    )
+                    if attempt < max_retries - 1:
+                        time.sleep(0.5)
+                        screenshot = self.device_state.take_screenshot()
+                        if screenshot is None:
+                            continue
+                    continue
 
-                # 6. 执行换牌拖拽操作
-                if swap_indices:
-                    for idx in swap_indices:
-                        card = cards[idx]
-                        center_x, center_y = card['center']
+                # 确保最多4张牌
+                recognized_cards = recognized_cards[:4]
 
-                        self.device_state.logger.info(
-                            f"[Fallback] 换掉 {card['name']} ({card['cost']}费)"
-                        )
+                # 验证识别结果
+                is_valid, reason = self._validate_mulligan_cards(recognized_cards)
 
-                        # 执行拖拽
-                        start_x = center_x + random.randint(-5, 5)
-                        start_y = 516
-                        end_x = center_x + random.randint(-5, 5)
-                        end_y = 208
+                if is_valid:
+                    self.device_state.logger.info(
+                        f"[Fallback] 第{attempt+1}次识别成功，验证通过"
+                    )
+                    cards = recognized_cards
+                    break
 
-                        human_like_drag(
-                            self.device_state.u2_device,
-                            start_x, start_y,
-                            end_x, end_y,
-                            duration=random.uniform(*settings.get_human_like_drag_duration_range())
-                        )
+                self.device_state.logger.warning(
+                    f"[Fallback] 第{attempt+1}次识别失败: {reason}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                    screenshot = self.device_state.take_screenshot()
+                    if screenshot is None:
+                        continue
 
-                        time.sleep(random.uniform(0.05, 0.1))
+            # 重试后仍失败
+            if cards is None:
+                self.device_state.logger.error(
+                    f"[Fallback] {max_retries}次重试均失败，放弃识别"
+                )
+                return False
 
-                    self.device_state.logger.info(f"[Fallback] 换牌完成，共换掉 {len(swap_indices)} 张")
-                else:
-                    self.device_state.logger.info("[Fallback] 无需换牌")
+            # 4. 获取配置的策略
+            strategy = self.device_state.config.get("game", {}).get(
+                "card_replacement_strategy", "4费档次"
+            )
 
-                return True
+            # 5. 调用统一接口，使用旧策略规则（use_enhanced=False）
+            keep_indices, swap_indices, reasons = determine_card_swaps_unified(
+                cards,
+                strategy,
+                priority_cards=None,  # 旧策略不使用优先级
+                use_enhanced=False,  # 使用旧规则
+            )
 
-            finally:
-                # 恢复原始hand_area
-                sift_recognizer.hand_area = original_hand_area
+            self.device_state.logger.info(f"[Fallback] 策略: {strategy} (旧规则)")
+            self.device_state.logger.info(
+                f"[Fallback] 保留: {keep_indices}, 换掉: {swap_indices}"
+            )
+
+            # 6. 执行换牌拖拽操作
+            if swap_indices:
+                for idx in swap_indices:
+                    card = cards[idx]
+                    center_x, center_y = card["center"]
+
+                    self.device_state.logger.info(
+                        f"[Fallback] 换掉 {card['name']} ({card['cost']}费)"
+                    )
+
+                    # 执行拖拽
+                    start_x = center_x + random.randint(-5, 5)
+                    start_y = 516
+                    end_x = center_x + random.randint(-5, 5)
+                    end_y = 208
+
+                    human_like_drag(
+                        self.device_state.u2_device,
+                        start_x,
+                        start_y,
+                        end_x,
+                        end_y,
+                        duration=random.uniform(
+                            *settings.get_human_like_drag_duration_range()
+                        ),
+                    )
+
+                    time.sleep(random.uniform(0.05, 0.1))
+
+                self.device_state.logger.info(
+                    f"[Fallback] 换牌完成，共换掉 {len(swap_indices)} 张"
+                )
+            else:
+                self.device_state.logger.info("[Fallback] 无需换牌")
+
+            return True
 
         except Exception as e:
             self.device_state.logger.error(f"[Fallback] 换牌失败: {str(e)}")
@@ -1208,13 +1319,8 @@ class GameActions:
         替代旧的_detect_change_card方法
         """
         try:
-            # 修复pyinstaller打包时的导入问题
-            try:
-                from utils.card_swap_strategy_enhanced import determine_card_swaps_enhanced
-                from config.card_priorities import get_high_priority_cards
-            except ImportError:
-                from src.utils.card_swap_strategy_enhanced import determine_card_swaps_enhanced
-                from src.config.card_priorities import get_high_priority_cards
+            from src.utils.card_swap_strategy_enhanced import determine_card_swaps_enhanced
+            from src.config.card_priorities import get_high_priority_cards
 
             # 1. 获取截图
             screenshot = self.device_state.take_screenshot()
@@ -1230,10 +1336,6 @@ class GameActions:
             mulligan_region = (170, 390, 980, 645)
             sift_recognizer = self.hand_manager.sift_recognition
 
-            # 临时设置换牌区域
-            original_hand_area = sift_recognizer.hand_area
-            sift_recognizer.hand_area = mulligan_region
-
             try:
                 # 3. 识别手牌（带重试机制）
                 max_retries = 3
@@ -1241,7 +1343,9 @@ class GameActions:
 
                 for attempt in range(max_retries):
                     # 执行识别
-                    recognized_cards = sift_recognizer.recognize_hand_cards(screenshot)
+                    recognized_cards = sift_recognizer.recognize_hand_cards(
+                        screenshot, hand_area=mulligan_region
+                    )
 
                     if not recognized_cards:
                         self.device_state.logger.warning(
@@ -1385,11 +1489,12 @@ class GameActions:
                     )
 
                 # 4. 获取配置的策略
-                config_manager = ConfigManager()
-                strategy_setting = config_manager.get("game", {}).get("card_replacement_strategy", "4费档次")
+                strategy_setting = self.device_state.config.get("game", {}).get(
+                    "card_replacement_strategy", "4费档次"
+                )
 
                 # 5. 调用增强策略决策
-                priority_cards = get_high_priority_cards()
+                priority_cards = get_high_priority_cards(getattr(self.device_state, "config", None))
                 keep_indices, swap_indices, reasons = determine_card_swaps_enhanced(
                     cards,
                     strategy_setting,
@@ -1457,8 +1562,8 @@ class GameActions:
                 return True
 
             finally:
-                # 恢复原始hand_area
-                sift_recognizer.hand_area = original_hand_area
+                # No per-instance mutation; nothing to restore.
+                pass
 
         except Exception as e:
             self.device_state.logger.error(f"[SIFT换牌] 执行失败: {str(e)}")

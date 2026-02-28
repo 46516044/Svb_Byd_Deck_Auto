@@ -66,8 +66,8 @@ hiddenimports = collect_submodules('PyQt5') + [
     'numpy', 'pandas', 'cv2', 'PIL', 'torch', 'torchvision',
     'requests', 'scipy', 'sklearn', 'shapely', 'easyocr',
     'adbutils', 'uiautomator2', 'flask', 'colorama', 'click',
-    'utils.card_swap_strategy_enhanced',
-    'config.card_priorities'
+    'src.utils.card_swap_strategy_enhanced',
+    'src.config.card_priorities'
 ]
 
 binaries = []

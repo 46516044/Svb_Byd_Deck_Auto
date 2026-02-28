@@ -1,217 +1,114 @@
-import json
-import os
+"""Card priority helpers.
 
+Configuration is the single source of truth.
+
+This module should not perform disk IO or maintain its own divergent cache.
+Callers should pass a config dict explicitly (preferred). For backward
+compatibility, `reload_config(config)` can be called at startup to inject a
+process-wide runtime config used when call sites don't pass one.
 """
-卡牌优先级配置
-定义各种卡牌的使用优先级
-"""
 
-# 默认高优先级卡牌（在可用费用内优先使用）
-DEFAULT_HIGH_PRIORITY_CARDS = {
-    "蛇神之怒": {"priority": 3},
-    "无极猎人阿拉加维": {"priority": 2},
-    "命运黄昏奥丁": {"priority": 1},
-    "怨灵": {"priority": 5}
-}
+from __future__ import annotations
 
-# 默认进化优先卡牌（进化/超进化时优先考虑）
-DEFAULT_EVOLVE_PRIORITY_CARDS = {
-    "无极猎人阿拉加维": {"priority": 3},
-    "婪魇维莉": {"priority": 2},
-    "蝙蝠": {"priority": 4},
-    "爽朗的天宫菲尔德亚": {"priority": 3}
-}
+import logging
+from typing import Any, Dict, Optional
 
-def load_user_config():
-    """加载用户配置文件，支持PyInstaller打包后的路径"""
-    import sys
-    
-    # 尝试多种路径来找到config.json
-    possible_paths = []
-    
-    # 1. 相对于当前文件的路径（开发环境）
-    current_dir = os.path.dirname(__file__)
-    possible_paths.append(os.path.join(current_dir, '../../config.json'))
-    
-    # 2. 相对于可执行文件的路径（PyInstaller打包后）
-    if getattr(sys, 'frozen', False):
-        # PyInstaller打包后的情况
-        exe_dir = os.path.dirname(sys.executable)
-        possible_paths.append(os.path.join(exe_dir, 'config.json'))
-    
-    # 3. 相对于工作目录的路径
-    possible_paths.append('config.json')
-    
-    # 4. 相对于脚本运行目录的路径
-    script_dir = os.getcwd()
-    possible_paths.append(os.path.join(script_dir, 'config.json'))
-    
-    for config_path in possible_paths:
-        config_path = os.path.abspath(config_path)
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    print(f"成功加载配置文件: {config_path}")
-                    return config
-            except Exception as e:
-                print(f"加载配置文件失败 {config_path}: {e}")
-                continue
-    
-    print("警告: 未找到config.json文件，使用默认配置")
+
+logger = logging.getLogger(__name__)
+
+
+_RUNTIME_CONFIG: Optional[Dict[str, Any]] = None
+
+
+def set_runtime_config(config: Optional[Dict[str, Any]]) -> None:
+    """Inject a runtime config dict (e.g. ConfigManager.config)."""
+
+    global _RUNTIME_CONFIG
+    _RUNTIME_CONFIG = config if isinstance(config, dict) else None
+
+
+def reload_config(config: Optional[Dict[str, Any]] = None) -> None:
+    """Backward-compatible entrypoint used by bootstrap.
+
+    Note: no disk read occurs here.
+    """
+
+    if config is not None:
+        set_runtime_config(config)
+        logger.info("卡牌优先级配置已注入(运行期配置)")
+    else:
+        # Keep behavior safe: do not silently read from disk.
+        logger.info("卡牌优先级配置 reload 被调用(未提供config)，将使用已注入的运行期配置")
+
+
+def _effective_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if isinstance(config, dict):
+        return config
+    if isinstance(_RUNTIME_CONFIG, dict):
+        return _RUNTIME_CONFIG
     return {}
 
-# 全局变量，用于缓存配置
-_user_config = None
-_HIGH_PRIORITY_CARDS = None
-_EVOLVE_PRIORITY_CARDS = None
 
-def reload_config():
-    """重新加载配置文件"""
-    global _user_config, _HIGH_PRIORITY_CARDS, _EVOLVE_PRIORITY_CARDS
-    _user_config = load_user_config()
-    _HIGH_PRIORITY_CARDS = _user_config.get('high_priority_cards', DEFAULT_HIGH_PRIORITY_CARDS)
-    _EVOLVE_PRIORITY_CARDS = _user_config.get('evolve_priority_cards', DEFAULT_EVOLVE_PRIORITY_CARDS)
-    print(f"重新加载配置完成，高优先级卡牌: {list(_HIGH_PRIORITY_CARDS.keys())}")
-    print(f"重新加载配置完成，进化优先级卡牌: {list(_EVOLVE_PRIORITY_CARDS.keys())}")
+def _get_mapping(config: Optional[Dict[str, Any]], key: str) -> Dict[str, Any]:
+    cfg = _effective_config(config)
+    val = cfg.get(key)
+    return val if isinstance(val, dict) else {}
 
-# 初始化配置
-reload_config()
 
-def get_high_priority_cards():
-    """获取高优先级卡牌列表"""
-    return _HIGH_PRIORITY_CARDS
+def get_high_priority_cards(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Return mapping: card_name -> config dict."""
 
-def get_special_cards():
-    """获取特殊处理卡牌列表"""
-    from src.game.card_play_special_actions import get_special_cards
-    return get_special_cards()
+    return _get_mapping(config, "high_priority_cards")
 
-def is_high_priority_card(card_name):
-    """检查是否为高优先级卡牌"""
-    return card_name in _HIGH_PRIORITY_CARDS
 
-def is_special_card(card_name):
-    """检查是否为特殊处理卡牌"""
-    from src.game.card_play_special_actions import get_special_cards
-    special_cards = get_special_cards()
-    return card_name in special_cards
+def is_high_priority_card(card_name: str, config: Optional[Dict[str, Any]] = None) -> bool:
+    return str(card_name) in get_high_priority_cards(config)
 
-def get_card_priority(card_name):
-    """获取卡牌优先级（数字越小优先级越高）"""
-    if card_name in _HIGH_PRIORITY_CARDS:
-        cfg = _HIGH_PRIORITY_CARDS[card_name]
-        # 旧格式：priority
-        if "priority" in cfg:
-            return cfg.get("priority", 999)
 
-        # 新格式：priority_pre_evolution / priority_post_evolution
-        has_pre = "priority_pre_evolution" in cfg
-        has_post = "priority_post_evolution" in cfg
-        if has_pre and has_post:
-            try:
-                return int((cfg["priority_pre_evolution"] + cfg["priority_post_evolution"]) / 2)
-            except Exception:
-                return 999
-        if has_pre:
-            return cfg.get("priority_pre_evolution", 999)
-        if has_post:
-            return cfg.get("priority_post_evolution", 999)
+def get_evolve_priority_cards(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Return mapping: card_name -> config dict."""
 
-        return 999
-    return 999  # 默认低优先级
+    return _get_mapping(config, "evolve_priority_cards")
 
-def get_card_info(card_name):
-    """获取卡牌信息"""
-    if card_name in _HIGH_PRIORITY_CARDS:
-        return _HIGH_PRIORITY_CARDS[card_name]
-    else:
-        from src.game.card_play_special_actions import get_special_cards
-        special_cards = get_special_cards()
-        if card_name in special_cards:
-            return special_cards[card_name]
-    return None 
 
-def get_evolve_priority_cards():
-    """获取进化优先卡牌列表"""
-    return _EVOLVE_PRIORITY_CARDS
+def is_evolve_priority_card(card_name: str, config: Optional[Dict[str, Any]] = None) -> bool:
+    return str(card_name) in get_evolve_priority_cards(config)
 
-def is_evolve_priority_card(card_name):
-    """检查是否为进化优先卡牌"""
-    return card_name in _EVOLVE_PRIORITY_CARDS 
 
-def get_evolve_special_actions():
-    """获取进化/超进化特殊操作卡牌列表"""
-    from src.game.evolution_special_actions import get_evolve_special_actions
-    return get_evolve_special_actions()
+def get_card_priority_pre_evolution(card_name: str, config: Optional[Dict[str, Any]] = None) -> int:
+    """Get play priority for pre-evolution stage (smaller is higher priority)."""
 
-def is_evolve_special_action_card(card_name):
-    """检查是否为进化/超进化特殊操作卡牌"""
-    from src.game.evolution_special_actions import is_evolve_special_action_card
-    return is_evolve_special_action_card(card_name)
+    cfg = get_high_priority_cards(config).get(str(card_name))
+    if isinstance(cfg, dict) and "priority_pre_evolution" in cfg:
+        try:
+            return int(cfg["priority_pre_evolution"])
+        except Exception:
+            return 999
+    return 999
 
-def get_card_priority_pre_evolution(card_name):
-    """
-    获取卡牌在进化解锁前的优先级（数字越小优先级越高）
-    用于：换牌阶段（回合0）和前期出牌（回合1-3/4）
 
-    Args:
-        card_name: 卡牌名称
+def get_card_priority_post_evolution(card_name: str, config: Optional[Dict[str, Any]] = None) -> int:
+    """Get play priority for post-evolution stage (smaller is higher priority)."""
 
-    Returns:
-        int: 优先级数字（越小优先级越高，默认999）
-    """
-    if card_name in _HIGH_PRIORITY_CARDS:
-        cfg = _HIGH_PRIORITY_CARDS[card_name]
-        # 优先读取新格式的 priority_pre_evolution
-        if "priority_pre_evolution" in cfg:
-            return cfg["priority_pre_evolution"]
-        # 向后兼容：如果没有新字段，使用旧的 priority
-        if "priority" in cfg:
-            return cfg["priority"]
-    return 999  # 默认低优先级
+    cfg = get_high_priority_cards(config).get(str(card_name))
+    if isinstance(cfg, dict) and "priority_post_evolution" in cfg:
+        try:
+            return int(cfg["priority_post_evolution"])
+        except Exception:
+            return 999
+    return 999
 
-def get_card_priority_post_evolution(card_name):
-    """
-    获取卡牌在进化解锁后的优先级（数字越小优先级越高）
-    用于：中后期出牌（回合4/5+，进化解锁后）
 
-    Args:
-        card_name: 卡牌名称
+def is_evolution_unlocked(device_state) -> bool:
+    """Determine if evolve is unlocked based on current round + first/second."""
 
-    Returns:
-        int: 优先级数字（越小优先级越高，默认999）
-    """
-    if card_name in _HIGH_PRIORITY_CARDS:
-        cfg = _HIGH_PRIORITY_CARDS[card_name]
-        # 优先读取新格式的 priority_post_evolution
-        if "priority_post_evolution" in cfg:
-            return cfg["priority_post_evolution"]
-        # 向后兼容：如果没有新字段，使用旧的 priority
-        if "priority" in cfg:
-            return cfg["priority"]
-    return 999  # 默认低优先级
-
-def is_evolution_unlocked(device_state):
-    """
-    判断当前回合进化是否已解锁
-
-    Args:
-        device_state: DeviceState 对象，包含回合数和先后手信息
-
-    Returns:
-        bool: True=进化已解锁，False=进化未解锁
-    """
-    # 如果还没检测到先后手，假定未解锁
-    if device_state.extra_cost_available_this_match is None:
+    if getattr(device_state, "extra_cost_available_this_match", None) is None:
         return False
 
-    # 后手（有额外费用点）：回合4开始进化解锁
-    if device_state.extra_cost_available_this_match is True:
-        return device_state.current_round_count >= 4
+    if getattr(device_state, "extra_cost_available_this_match", None) is True:
+        return int(getattr(device_state, "current_round_count", 0) or 0) >= 4
 
-    # 先手（无额外费用点）：回合5开始进化解锁
-    if device_state.extra_cost_available_this_match is False:
-        return device_state.current_round_count >= 5
+    if getattr(device_state, "extra_cost_available_this_match", None) is False:
+        return int(getattr(device_state, "current_round_count", 0) or 0) >= 5
 
     return False

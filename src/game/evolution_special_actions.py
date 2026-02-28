@@ -8,34 +8,10 @@ import random
 import logging
 from src.config.card_priorities import get_evolve_priority_cards
 from src.config import settings
+from src.game.policy.targets import TargetSelector
+from src.game.policy.effects import get_card_effect_steps, parse_action
 
 logger = logging.getLogger(__name__)
-
-# 进化/超进化后需要特殊操作的卡牌
-EVOLVE_SPECIAL_ACTIONS = {
-    "铁拳神父": {
-        "action": "attack_enemy_follower_hp_less_than_4"  # 进化后点击一个血量小于4的敌方随从
-    },
-    "沙神的巫女·莎拉": {
-        "action": "attack_enemy_follower_hp_less_than_4"  # 进化后点击一个血量小于4的敌方随从
-    },
-    "爽朗的天宫·菲尔德亚": {
-        "action": "attack_two_enemy_followers_hp_highest",  # 进化后点击一个血量最高的敌方随从
-        "super_evolution_action": "attack_two_enemy_followers_hp_highest"  # 超进化后点击一个血量最高的敌方随从
-    },
-    "勇武的堕天使·奥莉薇": {
-        "super_evolution_action": "our_followers_with_evolution"  # 超进化的同时选择点击一个未进化的随从
-    }
-}
-
-def get_evolve_special_actions():
-    """获取进化/超进化特殊操作卡牌列表"""
-    return EVOLVE_SPECIAL_ACTIONS
-
-def is_evolve_special_action_card(card_name):
-    """检查是否为进化/超进化特殊操作卡牌"""
-    return card_name in EVOLVE_SPECIAL_ACTIONS
-
 
 class EvolutionSpecialActions:
     """进化/超进化特殊操作处理类"""
@@ -51,11 +27,23 @@ class EvolutionSpecialActions:
         is_super_evolution: 是否为超进化
         existing_followers: 已扫描的随从结果，避免重复扫描
         """
-        special_actions = get_evolve_special_actions()
+        # Prefer config-driven effects.
+        trigger = "on_super_evolve" if is_super_evolution else "on_evolve"
+        steps = get_card_effect_steps(
+            getattr(self.device_state, "config", None), card_name=follower_name, trigger=trigger
+        )
+        if is_super_evolution and not steps:
+            # Legacy behavior often uses one config for both; allow fallback.
+            steps = get_card_effect_steps(
+                getattr(self.device_state, "config", None),
+                card_name=follower_name,
+                trigger="on_evolve",
+            )
+        cfg_action = parse_action(steps)
         
         if is_super_evolution:
             # 超进化逻辑
-            action = special_actions.get(follower_name, {}).get('super_evolution_action', None)
+            action = cfg_action
             if action == 'attack_two_enemy_followers_hp_less_than_4':
                 self._handle_attack_two_enemy_followers_hp_less_than_4(follower_name, is_super_evolution=True)
             elif action == 'attack_two_enemy_followers_hp_highest':
@@ -64,7 +52,7 @@ class EvolutionSpecialActions:
                 self._handle_our_followers_with_evolution(follower_name, is_super_evolution=True, existing_followers=existing_followers)
         else:
             # 普通进化逻辑
-            action = special_actions.get(follower_name, {}).get('action', None)
+            action = cfg_action
             if action == 'attack_enemy_follower_hp_less_than_4':
                 self._handle_attack_enemy_follower_hp_less_than_4(follower_name)
             elif action == 'attack_two_enemy_followers_hp_highest':
@@ -74,7 +62,9 @@ class EvolutionSpecialActions:
         from .card_play_special_actions import CardPlaySpecialActions
         card_play_actions = CardPlaySpecialActions(self.device_state)
         # 执行点击操作
-        card_play_actions.handle_evolve_mode_option(follower_name)
+        card_play_actions.handle_evolve_mode_option(
+            follower_name, is_super_evolution=is_super_evolution
+        )
         
         # 以后可扩展更多action
     
@@ -84,15 +74,14 @@ class EvolutionSpecialActions:
         screenshot = self.device_state.take_screenshot()
         if screenshot:
             enemy_followers = self._scan_enemy_followers(screenshot)
-            # 只保留HP为数字且<=3的随从
-            valid_targets = [f for f in enemy_followers if f[3].isdigit() and int(f[3]) <= 3]
-            if valid_targets:
-                # 按血量从大到小排序，选择前两个
-                sorted_targets = sorted(valid_targets, key=lambda f: int(f[3]), reverse=True)
-                targets_to_click = sorted_targets[:2]
-                
+            targets_to_click = TargetSelector.enemy_followers_hp_leq(
+                enemy_followers, max_hp=3, n=2
+            )
+            if targets_to_click:
                 for i, target in enumerate(targets_to_click):
-                    self.device_state.logger.info(f"[{follower_name}]{evolution_type}后点击第{i+1}个敌方HP<=3随从: ({target[0]}, {target[1]}) HP={target[3]}")
+                    self.device_state.logger.info(
+                        f"[{follower_name}]{evolution_type}后点击第{i+1}个敌方HP<=3随从: ({target[0]}, {target[1]}) HP={target[3]}"
+                    )
                     self.device_state.u2_device.click(int(target[0]), int(target[1]))
                     time.sleep(0.5)
             else:
@@ -107,8 +96,10 @@ class EvolutionSpecialActions:
             # 只保留HP为数字的随从
             valid_targets = [f for f in enemy_followers if f[3].isdigit()]
             if valid_targets:
-                # 选择血量最大的
-                target = max(valid_targets, key=lambda f: int(f[3]))
+                target = TargetSelector.enemy_follower_highest_hp(valid_targets)
+                if target is None:
+                    self.device_state.logger.info(f"[{follower_name}]{evolution_type}后未找到有效敌方随从")
+                    return
                 self.device_state.logger.info(f"[{follower_name}]{evolution_type}后点击血量最大敌方随从: ({target[0]}, {target[1]}) HP={target[3]}")
                 self.device_state.u2_device.click(int(target[0]), int(target[1]))
                 time.sleep(0.5)
@@ -133,55 +124,44 @@ class EvolutionSpecialActions:
                 return
         
         if our_followers:
-            # 找到有名字的随从（name不为None的随从），但排除自己
-            named_followers = [f for f in our_followers if f[3] is not None and f[3] != follower_name]
-            
-            if named_followers:
-                # 优先选择config.json中进化优先度高的随从
-                evolve_priority_cards = get_evolve_priority_cards()
-                
-                # 按优先级排序：优先度高的在前，相同优先度按x坐标排序
-                def get_priority(follower):
-                    follower_name = follower[3]
-                    if follower_name in evolve_priority_cards:
-                        return evolve_priority_cards[follower_name].get('priority', 999)
-                    return 999  # 没有配置的随从优先级最低
-                
-                # 按优先级排序，优先级数字越小越优先
-                sorted_followers = sorted(named_followers, key=lambda f: (get_priority(f), f[0]))
-                
-                # 选择优先级最高的随从
-                target = sorted_followers[0]
-                target_x, target_y, target_type, target_name = target
-                target_priority = get_priority(target)
-                
-                if target_priority < 999:
-                    self.device_state.logger.info(f"[{follower_name}]{evolution_type}后选择高优先级随从: {target_name} (优先级:{target_priority})")
-                else:
-                    self.device_state.logger.info(f"[{follower_name}]{evolution_type}后选择我方未进化随从: {target_name}")
-                
-                self.device_state.u2_device.click(int(target_x), int(target_y))
-                time.sleep(0.5)
-                
-                # # 检查选择的随从是否也有进化/超进化特殊操作
-                # if target_name and is_evolve_special_action_card(target_name):
-                #     self.device_state.logger.info(f"[{follower_name}]选择的随从[{target_name}]也有特殊操作，执行其超进化操作")
-                #     # 执行该随从的超进化特殊操作
-                #     self.handle_evolve_special_action(target_name, (target_x, target_y), is_super_evolution=True)
+            evolve_priority_cards = get_evolve_priority_cards(
+                getattr(self.device_state, "config", None)
+            )
+            target = TargetSelector.friendly_follower_by_evolve_priority(
+                our_followers,
+                exclude_names=(follower_name,),
+                evolve_priority_cards=evolve_priority_cards,
+            )
+
+            if target is None:
+                self.device_state.logger.info(
+                    f"[{follower_name}]{evolution_type}后未检测到可选择进化的我方随从"
+                )
+                return
+
+            target_x, target_y, target_type, target_name = target
+            target_priority = 999
+            if target_name and target_name in evolve_priority_cards:
+                try:
+                    target_priority = int(
+                        evolve_priority_cards[target_name].get("priority", 999)
+                    )
+                except Exception:
+                    target_priority = 999
+
+            if target_name and target_priority < 999:
+                self.device_state.logger.info(
+                    f"[{follower_name}]{evolution_type}后选择高优先级随从: {target_name} (优先级:{target_priority})"
+                )
+            elif target_name:
+                self.device_state.logger.info(
+                    f"[{follower_name}]{evolution_type}后选择我方未进化随从: {target_name}"
+                )
             else:
-                # 如果没有其他有名字的随从，选择第一个没有名字的随从
-                unnamed_followers = [f for f in our_followers if f[3] is None]
-                if unnamed_followers:
-                    target = unnamed_followers[0]
-                    target_x, target_y, target_type, target_name = target
-                    
-                    self.device_state.logger.info(f"[{follower_name}]{evolution_type}后选择我方随从")
-                    self.device_state.u2_device.click(int(target_x), int(target_y))
-                    time.sleep(0.5)
-                    
-                    # 注意：无名字随从无法检查是否有特殊操作，因为不知道其名称
-                else:
-                    self.device_state.logger.info(f"[{follower_name}]{evolution_type}后未检测到可选择进化的我方随从")
+                self.device_state.logger.info(f"[{follower_name}]{evolution_type}后选择我方随从")
+
+            self.device_state.u2_device.click(int(target_x), int(target_y))
+            time.sleep(0.5)
         else:
             self.device_state.logger.info(f"[{follower_name}]{evolution_type}后未检测到我方随从")
         time.sleep(1)
@@ -191,11 +171,8 @@ class EvolutionSpecialActions:
         screenshot = self.device_state.take_screenshot()
         if screenshot:
             enemy_followers = self._scan_enemy_followers(screenshot)
-            # 只保留HP为数字且<=3的随从
-            valid_targets = [f for f in enemy_followers if f[3].isdigit() and int(f[3]) <= 3]
-            if valid_targets:
-                # 选择血量最大的
-                target = max(valid_targets, key=lambda f: int(f[3]))
+            target = TargetSelector.enemy_follower_hp_leq(enemy_followers, max_hp=3)
+            if target is not None:
                 self.device_state.logger.info(f"[{follower_name}]进化后点击敌方HP<=3且最大随从: ({target[0]}, {target[1]}) HP={target[3]}")
                 self.device_state.u2_device.click(int(target[0]), int(target[1]))
                 time.sleep(0.5)

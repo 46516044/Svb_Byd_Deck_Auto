@@ -8,7 +8,7 @@ import os
 import logging
 import numpy as np
 from typing import Dict, Any, Optional, Tuple, Union
-from src.utils.resource_utils import get_resource_path
+from src.utils.resource_utils import resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,23 @@ class TemplateManager:
         
         # 记录模板目录选择
         logger.info(f"模板管理器初始化: 使用目录 '{self.templates_dir}'")
+
+    def get_templates_dir(self) -> str:
+        """返回当前选择的模板目录名称。"""
+
+        return self.templates_dir
+
+    def get_template_path(self, filename: str) -> str:
+        """获取模板文件路径（尽量与旧逻辑兼容）。
+
+        - 若相对路径在当前工作目录下存在，优先使用（兼容旧运行方式）
+        - 否则按 app root（源码/打包）解析
+        """
+
+        rel_path = os.path.join(self.templates_dir, filename)
+        if os.path.exists(rel_path):
+            return rel_path
+        return resource_path(rel_path)
     
     def load_templates(self, config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         """加载所有模板"""
@@ -56,10 +73,14 @@ class TemplateManager:
 
         # 加载额外模板
         extra_dir = config.get("extra_templates_dir", "")
-        if extra_dir and os.path.isdir(extra_dir):
-            logger.info(f"开始加载额外模板目录: {extra_dir}")
+        extra_dir_resolved = extra_dir
+        if extra_dir and not os.path.isabs(extra_dir) and not os.path.isdir(extra_dir):
+            extra_dir_resolved = resource_path(extra_dir)
+
+        if extra_dir_resolved and os.path.isdir(extra_dir_resolved):
+            logger.info(f"开始加载额外模板目录: {extra_dir_resolved}")
             # 只合并非None的模板，避免类型不兼容
-            extra_templates = self._load_extra_templates(extra_dir)
+            extra_templates = self._load_extra_templates(extra_dir_resolved)
             for k, v in extra_templates.items():
                 if v is not None:
                     templates[k] = v
@@ -104,6 +125,8 @@ class TemplateManager:
     def _load_template(self, templates_dir: str, filename: str) -> Optional[np.ndarray]:
         """加载模板图像，进化/超进化为彩色，其余为灰度"""
         path = os.path.join(templates_dir, filename)
+        if not os.path.exists(path) and not os.path.isabs(path):
+            path = resource_path(path)
         if not os.path.exists(path):
             logger.error(f"模板文件不存在: {path}")
             return None
@@ -116,7 +139,13 @@ class TemplateManager:
             logger.error(f"无法加载模板: {path}")
         return template
 
-    def _create_template_info(self, filename: str, name: str, threshold: float = 0.85, hsv_range: dict = None) -> Optional[Dict[str, Any]]:
+    def _create_template_info(
+        self,
+        filename: str,
+        name: str,
+        threshold: float = 0.85,
+        hsv_range: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """创建模板信息字典"""
         template_img = self._load_template(self.templates_dir, filename)
         if template_img is None:
@@ -124,7 +153,13 @@ class TemplateManager:
 
         return self._create_template_info_from_image(template_img, name, threshold, hsv_range)
 
-    def _create_template_info_from_image(self, template: np.ndarray, name: str, threshold: float = 0.85, hsv_range: dict = None) -> Dict[str, Any]:
+    def _create_template_info_from_image(
+        self,
+        template: np.ndarray,
+        name: str,
+        threshold: float = 0.85,
+        hsv_range: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """从图像创建模板信息字典，支持灰度和三通道"""
         if len(template.shape) == 2:
             h, w = template.shape

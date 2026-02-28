@@ -6,13 +6,128 @@ SIFT卡牌识别模块
 import cv2
 import numpy as np
 import os
-import glob
 import logging
-from typing import List, Tuple, Dict, Optional
-import re
+import threading
+from typing import Any, List, Tuple, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from src.utils.resource_utils import resource_path
+from src.utils.card_filename import parse_card_stem
+
 logger = logging.getLogger(__name__)
+
+# Shared template cache (read-only) across instances/devices.
+_TEMPLATE_CACHE: Dict[Tuple[str, float], Dict[str, Dict[str, Any]]] = {}
+_TEMPLATE_CACHE_LOCK = threading.Lock()
+
+
+def _build_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[str, Dict[str, Any]]:
+    """Load card templates from disk and compute SIFT features.
+
+    Returned mapping is intended to be treated as read-only.
+    """
+
+    templates: Dict[str, Dict[str, Any]] = {}
+
+    if not os.path.exists(card_images_dir):
+        logger.error(f"卡牌图片目录不存在: {card_images_dir}")
+        return templates
+
+    sift = cv2.SIFT_create()
+
+    card_files: List[str] = []
+    for filename in os.listdir(card_images_dir):
+        if filename.endswith(".png"):
+            card_files.append(os.path.join(card_images_dir, filename))
+
+    logger.info(f"找到 {len(card_files)} 个PNG文件")
+
+    for card_file in card_files:
+        try:
+            filename = os.path.basename(card_file)
+            name_without_ext = os.path.splitext(filename)[0]
+
+            if "_" not in name_without_ext:
+                logger.warning(f"文件名格式不正确: {filename}")
+                continue
+
+            cost, enhance_costs, card_name = parse_card_stem(name_without_ext)
+            if not card_name:
+                logger.warning(f"文件名解析失败(缺少卡名): {filename}")
+                continue
+
+            from PIL import Image
+
+            with Image.open(card_file) as pil_image:
+                if pil_image.mode not in ("RGB", "RGBA"):
+                    pil_image = pil_image.convert("RGBA")
+                template = np.array(pil_image)
+
+            if template is None:
+                logger.warning(f"无法读取图片: {card_file}")
+                continue
+            if template.dtype != np.uint8:
+                template = template.astype(np.uint8, copy=False)
+
+            if template.ndim == 2:
+                template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
+            elif template.ndim == 3:
+                ch = template.shape[2]
+                if ch == 4:
+                    template = cv2.cvtColor(template, cv2.COLOR_RGBA2BGR)
+                elif ch == 3:
+                    template = cv2.cvtColor(template, cv2.COLOR_RGB2BGR)
+                elif ch == 1:
+                    template = cv2.cvtColor(template[:, :, 0], cv2.COLOR_GRAY2BGR)
+                else:
+                    logger.warning(f"图片通道数异常({ch})，跳过: {card_file}")
+                    continue
+            else:
+                logger.warning(f"图片维度异常({template.ndim})，跳过: {card_file}")
+                continue
+
+            height, width = template.shape[:2]
+            new_height = int(height * float(scale_factor))
+            new_width = int(width * float(scale_factor))
+            if new_height <= 0 or new_width <= 0:
+                logger.warning(f"图片尺寸过小，缩放后为0，跳过: {card_file}")
+                continue
+
+            scaled_template = cv2.resize(template, (new_width, new_height))
+            scaled_template_gray = cv2.cvtColor(scaled_template, cv2.COLOR_BGR2GRAY)
+
+            keypoints, descriptors = sift.detectAndCompute(scaled_template_gray, None)
+            if descriptors is None:
+                continue
+
+            templates[name_without_ext] = {
+                "cost": cost,
+                "name": card_name,
+                "enhance_costs": list(enhance_costs or []),
+                "template": scaled_template,
+                "keypoints": keypoints,
+                "descriptors": descriptors,
+            }
+            logger.debug(f"加载卡牌模板: {name_without_ext} (费用: {cost})")
+
+        except Exception as e:
+            logger.error(f"处理文件 {card_file} 时出错: {str(e)}")
+            continue
+
+    logger.info(f"成功加载 {len(templates)} 张卡牌模板")
+    return templates
+
+
+def _get_shared_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[str, Dict[str, Any]]:
+    key = (os.path.abspath(card_images_dir), float(scale_factor))
+    with _TEMPLATE_CACHE_LOCK:
+        cached = _TEMPLATE_CACHE.get(key)
+        if cached is not None:
+            return cached
+
+        templates = _build_card_templates(card_images_dir=card_images_dir, scale_factor=scale_factor)
+        _TEMPLATE_CACHE[key] = templates
+        return templates
 
 
 class SiftCardRecognition:
@@ -26,6 +141,14 @@ class SiftCardRecognition:
             card_images_dir: 卡牌图片目录路径
         """
         self.card_images_dir = card_images_dir
+        # Backward compatible: prefer CWD-relative path if it exists, otherwise
+        # resolve relative to app root (source/PyInstaller).
+        if (
+            self.card_images_dir
+            and not os.path.isabs(self.card_images_dir)
+            and not os.path.exists(self.card_images_dir)
+        ):
+            self.card_images_dir = resource_path(self.card_images_dir)
         self.card_templates = {}  # 缓存卡牌模板
         self.sift = cv2.SIFT_create()
         # 恢复到 d5d10c5 的识别参数（更稳，减少误识别/漏识别）
@@ -33,111 +156,19 @@ class SiftCardRecognition:
         self.hand_area = (229, 539, 1130, 710)  # 手牌区域 (x1, y1, x2, y2) - 更新为新坐标
         self.min_matches = 4  # 最小匹配点数
         self.match_threshold = 0.01  # 匹配阈值
-        
-        # 加载卡牌模板
-        self._load_card_templates()
-    
-    def _load_card_templates(self):
-        """加载所有卡牌模板"""
-        try:
-            # 使用os.listdir来获取文件名列表，确保UTF-8编码
-            if not os.path.exists(self.card_images_dir):
-                logger.error(f"卡牌图片目录不存在: {self.card_images_dir}")
-                return
-                
-            card_files = []
-            for filename in os.listdir(self.card_images_dir):
-                if filename.endswith('.png'):
-                    card_files.append(os.path.join(self.card_images_dir, filename))
-            
-            logger.info(f"找到 {len(card_files)} 个PNG文件")
-            
-            for card_file in card_files:
-                try:
-                    # 提取文件名（不包含路径和扩展名）
-                    filename = os.path.basename(card_file)
-                    name_without_ext = os.path.splitext(filename)[0]
-                    
-                    # 解析费用和名称 - 格式为"(费用)_(名称)"
-                    match = re.match(r'^(\d+)_(.+)$', name_without_ext)
-                    if match:
-                        cost = int(match.group(1))
-                        card_name = match.group(2)
-                        
-                        # 使用PIL读取图片，确保UTF-8编码支持
-                        from PIL import Image
-                         
-                        # 使用PIL读取图片（处理P/LA/L等模式，避免OpenCV通道数异常）
-                        with Image.open(card_file) as pil_image:
-                            if pil_image.mode not in ("RGB", "RGBA"):
-                                # 例如：pal8(P)调色板PNG、灰度图(L)等
-                                pil_image = pil_image.convert("RGBA")
-                            template = np.array(pil_image)
 
-                        # 转换为BGR格式（OpenCV格式），兼容灰度/单通道
-                        if template is None:
-                            logger.warning(f"无法读取图片: {card_file}")
-                            continue
-                        if template.dtype != np.uint8:
-                            template = template.astype(np.uint8, copy=False)
-
-                        if template.ndim == 2:  # Gray
-                            template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
-                        elif template.ndim == 3:
-                            ch = template.shape[2]
-                            if ch == 4:  # RGBA
-                                template = cv2.cvtColor(template, cv2.COLOR_RGBA2BGR)
-                            elif ch == 3:  # RGB
-                                template = cv2.cvtColor(template, cv2.COLOR_RGB2BGR)
-                            elif ch == 1:  # 单通道
-                                template = cv2.cvtColor(template[:, :, 0], cv2.COLOR_GRAY2BGR)
-                            else:
-                                logger.warning(f"图片通道数异常({ch})，跳过: {card_file}")
-                                continue
-                        else:
-                            logger.warning(f"图片维度异常({template.ndim})，跳过: {card_file}")
-                            continue
-                         
-                        if template is not None:
-                            # 缩放到0.3倍以匹配游戏中卡牌的实际大小
-                            height, width = template.shape[:2]
-                            new_height = int(height * self.scale_factor)
-                            new_width = int(width * self.scale_factor)
-                            if new_height <= 0 or new_width <= 0:
-                                logger.warning(f"图片尺寸过小，缩放后为0，跳过: {card_file}")
-                                continue
-                            scaled_template = cv2.resize(template, (new_width, new_height))
-                            
-                            # 转换为灰度图像进行SIFT特征提取
-                            scaled_template_gray = cv2.cvtColor(scaled_template, cv2.COLOR_BGR2GRAY)
-                            
-                            # 计算SIFT特征
-                            keypoints, descriptors = self.sift.detectAndCompute(scaled_template_gray, None)
-                            
-                            if descriptors is not None:
-                                self.card_templates[name_without_ext] = {
-                                    'cost': cost,
-                                    'name': card_name,
-                                    'template': scaled_template,
-                                    'keypoints': keypoints,
-                                    'descriptors': descriptors
-                                }
-                                logger.debug(f"加载卡牌模板: {name_without_ext} (费用: {cost})")
-                        else:
-                            logger.warning(f"无法读取图片: {card_file}")
-                    else:
-                        logger.warning(f"文件名格式不正确: {filename}")
-                        
-                except Exception as e:
-                    logger.error(f"处理文件 {card_file} 时出错: {str(e)}")
-                    continue
-            
-            logger.info(f"成功加载 {len(self.card_templates)} 张卡牌模板")
-            
-        except Exception as e:
-            logger.error(f"加载卡牌模板时出错: {str(e)}")
+        # Use a shared, read-only template cache.
+        self.card_templates = _get_shared_card_templates(
+            card_images_dir=self.card_images_dir,
+            scale_factor=self.scale_factor,
+        )
     
-    def recognize_hand_cards(self, screenshot) -> List[Dict]:
+    def recognize_hand_cards(
+        self,
+        screenshot,
+        *,
+        hand_area: Optional[Tuple[int, int, int, int]] = None,
+    ) -> List[Dict]:
         """
         识别手牌区域中的卡牌（支持同名卡牌多张识别，支持多模板并发SIFT加速）
         """
@@ -148,7 +179,20 @@ class SiftCardRecognition:
             else:
                 image = np.array(screenshot)
                 image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            x1, y1, x2, y2 = self.hand_area
+            # Accept explicit hand_area; never mutate instance state.
+            area = self.hand_area
+            if isinstance(hand_area, (list, tuple)) and len(hand_area) == 4:
+                try:
+                    area = (
+                        int(hand_area[0]),
+                        int(hand_area[1]),
+                        int(hand_area[2]),
+                        int(hand_area[3]),
+                    )
+                except Exception:
+                    area = self.hand_area
+
+            x1, y1, x2, y2 = area
             hand_region = image[y1:y2, x1:x2]
             
             # 转换为灰度图像进行SIFT特征提取
@@ -182,7 +226,7 @@ class SiftCardRecognition:
                     clusters = []
                     cluster_indices = []
                     # 根据区域动态调整聚类阈值
-                    region_width = self.hand_area[2] - self.hand_area[0]
+                    region_width = x2 - x1
                     if region_width > 700:  # 换牌区域（789px）
                         distance_thresh = 100  # d5d10c5: 更紧的聚类阈值
                     else:  # 战斗手牌区域（901px）
@@ -236,6 +280,7 @@ class SiftCardRecognition:
                                     'center': (global_x, global_y),
                                     'cost': template_info['cost'],
                                     'name': template_info['name'],
+                                    'enhance_costs': list(template_info.get('enhance_costs') or []),
                                     'confidence': confidence,
                                     'template_name': template_name
                                 })

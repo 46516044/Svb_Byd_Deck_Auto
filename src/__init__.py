@@ -2,19 +2,51 @@
 影之诗自动对战脚本 - 核心模块包
 """
 
+from __future__ import annotations
+
 __version__ = "1.0.0"
 __author__ = "Auto SZB Team"
 
-# 导出主要模块
-from .config import ConfigManager
-from .utils import setup_gpu, display_disclaimer_and_get_consent
-from .device import DeviceManager
-from .ui import NotificationManager
-
 __all__ = [
-    'ConfigManager',
-    'setup_gpu',
-    'display_disclaimer_and_get_consent', 
-    'DeviceManager',
-    'NotificationManager'
-] 
+    "ConfigManager",
+    "setup_gpu",
+    "display_disclaimer_and_get_consent",
+    "DeviceManager",
+    "NotificationManager",
+]
+
+
+def __getattr__(name: str):
+    """Lazy re-exports.
+
+    Avoid importing heavy modules (cv2/torch/u2/etc.) at package import time.
+    """
+
+    if name == "ConfigManager":
+        from src.config import ConfigManager as _ConfigManager
+
+        return _ConfigManager
+
+    if name == "setup_gpu":
+        from src.utils.gpu_utils import setup_gpu as _setup_gpu
+
+        return _setup_gpu
+
+    if name == "display_disclaimer_and_get_consent":
+        from src.utils.consent_utils import (
+            display_disclaimer_and_get_consent as _display_disclaimer_and_get_consent,
+        )
+
+        return _display_disclaimer_and_get_consent
+
+    if name == "DeviceManager":
+        from src.device import DeviceManager as _DeviceManager
+
+        return _DeviceManager
+
+    if name == "NotificationManager":
+        from src.ui import NotificationManager as _NotificationManager
+
+        return _NotificationManager
+
+    raise AttributeError(f"module 'src' has no attribute {name!r}")

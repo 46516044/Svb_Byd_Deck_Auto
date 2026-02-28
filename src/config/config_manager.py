@@ -3,12 +3,21 @@
 负责配置的加载、验证和管理
 """
 
+import copy
 import json
 import os
 import logging
 from typing import Dict, Any, Optional
+
+from src.config.paths import get_config_path
 from src.config.settings import DEFAULT_CONFIG
 from src.config.constants_manager import ConstantsManager
+from src.config.io_guard import is_in_battle
+from src.core.json_io import write_json_atomic
+from src.config.migrations import (
+    migrate_high_priority_cards_priority_fields,
+    migrate_strategy_effects_schema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,46 +25,78 @@ logger = logging.getLogger(__name__)
 class ConfigManager:
     """配置管理器类"""
     
-    def __init__(self, config_file: str = "config.json"):
-        self.config_file = config_file
+    def __init__(self, config_file: Optional[str] = None):
+        # Default to a canonical config path (independent of CWD).
+        self.config_file = os.path.abspath(config_file or get_config_path())
         self.config = self._load_config()
         self.constants_manager = ConstantsManager(self.config)
     
     def _load_config(self) -> Dict[str, Any]:
         """加载配置文件"""
+        if is_in_battle():
+            logger.warning("[IO] battle context: loading config from disk: %s", self.config_file)
+
         # 如果配置文件不存在，创建默认配置
         if not os.path.exists(self.config_file):
             logger.info(f"创建默认配置文件: {self.config_file}")
-            self._save_config(DEFAULT_CONFIG)
-            return DEFAULT_CONFIG.copy()
+            config = copy.deepcopy(DEFAULT_CONFIG)
+            # Seed/upgrade schemas so first-run config is fully explicit.
+            try:
+                migrate_high_priority_cards_priority_fields(config)
+            except Exception:
+                pass
+            try:
+                migrate_strategy_effects_schema(config)
+            except Exception:
+                pass
+            self._save_config(config)
+            return config
         
         try:
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
                 # 合并默认配置和用户配置
                 merged_config = self._merge_configs(DEFAULT_CONFIG, config)
+
+                # 自动迁移旧字段（一次性写回磁盘）
+                migrated = False
+                if migrate_high_priority_cards_priority_fields(merged_config):
+                    migrated = True
+                if migrate_strategy_effects_schema(merged_config):
+                    migrated = True
+                if migrated:
+                    self._save_config(merged_config)
                 return merged_config
         except Exception as e:
             logger.error(f"加载配置文件失败: {str(e)}，使用默认配置")
-            return DEFAULT_CONFIG.copy()
+            return copy.deepcopy(DEFAULT_CONFIG)
     
     def _merge_configs(self, default_config: Dict[str, Any], user_config: Dict[str, Any]) -> Dict[str, Any]:
         """递归合并配置"""
-        merged = default_config.copy()
-        
+        # Treat defaults as immutable; avoid leaking nested references.
+        merged: Dict[str, Any] = copy.deepcopy(default_config) if isinstance(default_config, dict) else {}
+
+        if not isinstance(user_config, dict):
+            return merged
+
         for key, value in user_config.items():
-            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            if key in merged and isinstance(merged.get(key), dict) and isinstance(value, dict):
                 merged[key] = self._merge_configs(merged[key], value)
             else:
-                merged[key] = value
-        
+                # Copy nested containers to avoid sharing references with caller data.
+                if isinstance(value, (dict, list)):
+                    merged[key] = copy.deepcopy(value)
+                else:
+                    merged[key] = value
+
         return merged
     
     def _save_config(self, config: Dict[str, Any]) -> bool:
         """保存配置到文件"""
+        if is_in_battle():
+            logger.warning("[IO] battle context: saving config to disk: %s", self.config_file)
         try:
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+            write_json_atomic(self.config_file, config, indent=2, ensure_ascii=False)
             return True
         except Exception as e:
             logger.error(f"保存配置文件失败: {str(e)}")
@@ -160,8 +201,9 @@ class ConfigManager:
     def export_config(self, export_path: str) -> bool:
         """导出配置到指定路径"""
         try:
-            with open(export_path, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
+            if is_in_battle():
+                logger.warning("[IO] battle context: exporting config to disk: %s", export_path)
+            write_json_atomic(export_path, self.config, indent=2, ensure_ascii=False)
             logger.info(f"配置已导出到: {export_path}")
             return True
         except Exception as e:
@@ -171,6 +213,8 @@ class ConfigManager:
     def import_config(self, import_path: str) -> bool:
         """从指定路径导入配置"""
         try:
+            if is_in_battle():
+                logger.warning("[IO] battle context: importing config from disk: %s", import_path)
             with open(import_path, 'r', encoding='utf-8') as f:
                 imported_config = json.load(f)
             

@@ -6,6 +6,13 @@
 import datetime
 import json
 import os
+import logging
+
+from src.config.paths import get_config_path
+from src.config.io_guard import is_in_battle
+
+
+logger = logging.getLogger(__name__)
 
 # ============================= 免责声明内容 =============================
 DISCLAIMER = """
@@ -74,25 +81,77 @@ DEFAULT_CONFIG = {
         "threshold": 0.85,
         "pyramid_levels": 2,
         "edge_thresholds": [50, 200]
-    }
+    },
+    # Strategy schema (effects are intentionally empty by default).
+    # Profile schema (deck/strategy can be composed in UI later).
+    "profiles": {
+        "deck": {"name": "inline", "source": "config.json"},
+        "strategy": {"name": "inline", "source": "config.json"},
+    },
+    "strategy": {
+        "effects": {}
+    },
 }
 
 # ============================= 拖动相关配置 =============================
 # 拖动总时间区间（秒），全局统一，(最小值, 最大值)
 HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT = (0.12, 0.16)
 
-def get_human_like_drag_duration_range():
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'config.json')
+# Optional runtime config injection (avoids repeated disk reads).
+_RUNTIME_CONFIG = None
+_CACHED_DRAG_RANGE = None
+_WARNED_BATTLE_FALLBACK = False
+
+
+def set_runtime_config(config):
+    """Inject a runtime config dict (e.g. ConfigManager.config)."""
+    global _RUNTIME_CONFIG
+    _RUNTIME_CONFIG = config
+
+
+def _extract_drag_range(config):
+    val = None
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-            val = config.get('game', {}).get('human_like_drag_duration_range', None)
-            if (
-                isinstance(val, list) and len(val) == 2 and
-                isinstance(val[0], (int, float)) and isinstance(val[1], (int, float)) and
-                0 < val[0] < val[1] < 10
-            ):
-                return tuple(val)
+        val = config.get("game", {}).get("human_like_drag_duration_range", None)
     except Exception:
-        pass
-    return HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT 
+        val = None
+
+    if (
+        isinstance(val, list)
+        and len(val) == 2
+        and isinstance(val[0], (int, float))
+        and isinstance(val[1], (int, float))
+        and 0 < val[0] < val[1] < 10
+    ):
+        return (float(val[0]), float(val[1]))
+    return None
+
+def get_human_like_drag_duration_range():
+    # Prefer in-memory config if provided.
+    if isinstance(_RUNTIME_CONFIG, dict):
+        return _extract_drag_range(_RUNTIME_CONFIG) or HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
+
+    # In battle hot paths, do not read from disk.
+    global _WARNED_BATTLE_FALLBACK
+    if is_in_battle():
+        if not _WARNED_BATTLE_FALLBACK:
+            _WARNED_BATTLE_FALLBACK = True
+            logger.warning(
+                "[IO] battle context: runtime config not injected; "
+                "using default drag range without disk read"
+            )
+        return HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
+
+    global _CACHED_DRAG_RANGE
+    if _CACHED_DRAG_RANGE is not None:
+        return _CACHED_DRAG_RANGE
+
+    config_path = get_config_path()
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            _CACHED_DRAG_RANGE = _extract_drag_range(config) or HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
+            return _CACHED_DRAG_RANGE
+    except Exception:
+        _CACHED_DRAG_RANGE = HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
+        return _CACHED_DRAG_RANGE

@@ -8,15 +8,67 @@ import os
 import time
 import datetime
 import logging
+import threading
 import queue
 import numpy as np
 import cv2
 from typing import Any, Optional, List, Dict, TYPE_CHECKING
 from PIL import Image
 from src.utils.resource_utils import ensure_directory
+from src.core.logging_utils import QueueHandler
+from src.core.json_io import write_json_atomic
+from src.core.run_control import PauseRequested, StopRequested
 
 if TYPE_CHECKING:
     from src.game.game_manager import GameManager
+
+
+class _U2DeviceProxy:
+    """Proxy for uiautomator2 Device with pause gating."""
+
+    def __init__(self, device_state: "DeviceState", raw_device: Any):
+        self._device_state = device_state
+        self._raw = raw_device
+
+        # Only gate operations that can affect user manual control.
+        # Read-only queries (e.g. screenshot, dump_hierarchy) are allowed.
+        self._gated_methods = {
+            "click",
+            "swipe",
+            "drag",
+            "long_click",
+            "double_click",
+            "press",
+            "keyevent",
+            "send_keys",
+            "set_text",
+            "clear_text",
+            # App lifecycle operations definitely affect user control.
+            "app_start",
+            "app_stop",
+            "app_stop_all",
+            "app_clear",
+            # Shell can change app/UI state (force-stop, input, etc.).
+            "shell",
+        }
+
+    def click(self, *args, **kwargs):
+        self._device_state.check_interrupt()
+        return self._raw.click(*args, **kwargs)
+
+    def swipe(self, *args, **kwargs):
+        self._device_state.check_interrupt()
+        return self._raw.swipe(*args, **kwargs)
+
+    def __getattr__(self, item: str):
+        attr = getattr(self._raw, item)
+        if item in self._gated_methods and callable(attr):
+            def _wrapped(*args, **kwargs):
+                self._device_state.check_interrupt()
+                return attr(*args, **kwargs)
+
+            return _wrapped
+        return attr
 
 
 class DeviceState:
@@ -27,14 +79,20 @@ class DeviceState:
         serial: str,
         config: Dict[str, Any],
         device_config: Optional[Dict[str, Any]] = None,
+        log_queue: Optional[queue.Queue] = None,
     ):
         self.serial = serial
         self.config = config
         self.device_config = device_config or {}
+        self.log_queue = log_queue
 
         # 脚本运行状态
         self.script_running = True
         self.script_paused = False
+
+        # Immediate pause control (settable from other threads)
+        self.pause_event = threading.Event()
+        self._resume_advance_round_pending = False
 
         # 设置日志器（必须在其他初始化之前）
         self.logger = self._setup_logger()
@@ -82,8 +140,10 @@ class DeviceState:
         self.match_timeout = auto_restart_config.get("match_timeout", 900)
 
         # 设备对象
-        self.u2_device: Optional[Any] = None
-        self.adb_device: Optional[Any] = None
+        # Kept as `Any` (not Optional) to avoid pervasive None-check noise.
+        self.u2_device: Any = None
+        self.u2_device_raw: Any = None
+        self.adb_device: Any = None
 
         # 游戏管理器
         self.game_manager: Optional["GameManager"] = None
@@ -140,15 +200,10 @@ class DeviceState:
         logger.addHandler(console_handler)
 
         # 添加队列处理器，让设备日志也能显示在UI界面
-        try:
-            from main import log_queue
-            from main import QueueHandler
-            queue_handler = QueueHandler(log_queue)
+        if self.log_queue is not None:
+            queue_handler = QueueHandler(self.log_queue)
             queue_handler.setFormatter(console_formatter)
             logger.addHandler(queue_handler)
-        except Exception as e:
-            # 如果导入失败，可能是在其他模块中运行，不影响功能
-            pass
 
         # 设置不向上传递，避免重复输出
         logger.propagate = False
@@ -160,6 +215,150 @@ class DeviceState:
         执行截图，使用初始化时选择的截图方法
         """
         return self._screenshot_method()
+
+    # ===== Run control: cooperative pause/stop =====
+
+    def is_paused(self) -> bool:
+        return bool(self.script_paused or self.pause_event.is_set())
+
+    def request_pause(self, *, reason: str = "") -> None:
+        """Request an immediate pause (thread-safe)."""
+
+        already = self.is_paused()
+        self.script_paused = True
+        self.pause_event.set()
+
+        # Resume policy: treat the current turn as ended.
+        if getattr(self, "in_match", False):
+            self._resume_advance_round_pending = True
+
+        if not already:
+            try:
+                self.logger.warning(
+                    f"[控制] 收到暂停请求{(' - ' + reason) if reason else ''}"
+                )
+            except Exception:
+                pass
+
+    def request_resume(self, *, reason: str = "") -> None:
+        """Resume from pause (thread-safe)."""
+
+        was_paused = self.is_paused()
+        self.script_paused = False
+        self.pause_event.clear()
+        if was_paused:
+            try:
+                self.logger.info(
+                    f"[控制] 收到恢复请求{(' - ' + reason) if reason else ''}"
+                )
+            except Exception:
+                pass
+
+    def check_interrupt(self) -> None:
+        """Raise if paused/stopped so callers can unwind quickly."""
+
+        if not getattr(self, "script_running", True):
+            raise StopRequested("script stopped")
+
+        if self.script_paused and not self.pause_event.is_set():
+            # Keep legacy flag in sync.
+            self.pause_event.set()
+
+        if self.pause_event.is_set() or self.script_paused:
+            raise PauseRequested("paused")
+
+    def sleep(self, seconds: float, *, step: float = 0.05) -> None:
+        """Interruptible sleep: raises PauseRequested/StopRequested when needed."""
+
+        try:
+            total = float(seconds)
+        except Exception:
+            total = 0.0
+        if total <= 0:
+            self.check_interrupt()
+            return
+
+        end = time.time() + total
+        while True:
+            self.check_interrupt()
+            remain = end - time.time()
+            if remain <= 0:
+                return
+            time.sleep(min(float(step), remain))
+
+    def wait_while_paused(self, *, poll: float = 0.2) -> None:
+        """Block until resumed; then apply resume policy."""
+
+        while self.is_paused() and getattr(self, "script_running", True):
+            time.sleep(float(poll))
+
+        # Apply "new turn" semantics after a pause cycle.
+        self.apply_resume_policy_if_needed()
+
+    def apply_resume_policy_if_needed(self) -> None:
+        """After resume, treat the paused turn as ended and reset minimal state."""
+
+        if self.is_paused() or not getattr(self, "script_running", True):
+            return
+        if not getattr(self, "_resume_advance_round_pending", False):
+            return
+
+        self._resume_advance_round_pending = False
+
+        # Only advance turn counter inside a match.
+        if getattr(self, "in_match", False):
+            try:
+                prev = int(getattr(self, "current_round_count", 1) or 1)
+            except Exception:
+                prev = 1
+            self.current_round_count = max(1, prev + 1)
+
+        # Reset per-turn state that is known to be stale after manual intervention.
+        try:
+            self.has_clicked_plus_this_round = False
+        except Exception:
+            pass
+        try:
+            self.last_detected_button = None
+        except Exception:
+            pass
+        try:
+            self.extra_cost_active = False
+            self.extra_cost_remaining_uses = 0
+        except Exception:
+            pass
+
+        # Let GameActions drop per-round caches.
+        try:
+            gm = getattr(self, "game_manager", None)
+            if gm is not None and hasattr(gm, "game_actions"):
+                ga = getattr(gm, "game_actions", None)
+                if ga is not None and hasattr(ga, "reset_round_context_for_pause"):
+                    ga.reset_round_context_for_pause()
+        except Exception:
+            pass
+
+        try:
+            if getattr(self, "in_match", False):
+                self.logger.info(
+                    f"[控制] 恢复后默认本回合已结束：turn -> {self.current_round_count}"
+                )
+            else:
+                self.logger.info("[控制] 恢复运行")
+        except Exception:
+            pass
+
+    def wrap_u2_device(self, u2_device: Any) -> Any:
+        """Wrap uiautomator2 device to gate click/swipe on pause."""
+
+        if u2_device is None:
+            return u2_device
+        try:
+            # Keep a reference to the raw device for cleanup paths.
+            self.u2_device_raw = u2_device
+            return _U2DeviceProxy(self, u2_device)
+        except Exception:
+            return u2_device
 
     def take_screenshot_normal(self) -> Optional[Any]:
         """获取设备截图"""
@@ -264,8 +463,7 @@ class DeviceState:
         """保存回合统计数据到文件"""
         stats_file = f"round_stats_{self.serial.replace(':', '_')}.json"
         try:
-            with open(stats_file, "w", encoding="utf-8") as f:
-                json.dump(self.match_history, f, ensure_ascii=False, indent=2)
+            write_json_atomic(stats_file, self.match_history, ensure_ascii=False, indent=2)
         except Exception as e:
             self.logger.error(f"保存统计数据失败: {str(e)}")
 
@@ -380,6 +578,18 @@ class DeviceState:
 
     def restart_emulator(self) -> bool:
         """重启所有包名包含 'Shadowverse' 或 'com.netease.yzs' 的应用，不重启模拟器"""
+        # Do not issue disruptive device commands while paused/stopped.
+        try:
+            self.check_interrupt()
+        except PauseRequested:
+            try:
+                self.logger.info("[控制] 暂停中，跳过重启应用")
+            except Exception:
+                pass
+            return False
+        except StopRequested:
+            return False
+
         try:
             self.logger.info(
                 "开始重启所有包含 'Shadowverse' 或 'com.netease.yzs' 的应用..."
@@ -474,13 +684,8 @@ class DeviceState:
         self.update_match_time()
         self.logger.info(f"检测到新对战开始 - 第{self.current_run_matches}场对战")
         # 将对战次数信息发送到日志队列，供UI界面显示
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-        try:
-            from main import log_queue
-            log_queue.put(f"[对战开始] 第{self.current_run_matches}场对战")
-        except Exception:
-            pass
+        if self.log_queue is not None:
+            self.log_queue.put(f"[对战开始] 第{self.current_run_matches}场对战")
 
     def get_run_summary(self) -> Dict[str, Any]:
         """获取本次运行总结"""

@@ -3,25 +3,45 @@
 提供各种辅助功能，包括GPU检测、资源管理、换牌策略等
 """
 
-from .consent_utils import *
-from .gpu_utils import *
-from .hp_detection import *
-from .mnist_preprocessor import *
-from .resource_utils import *
-from .swap_strategy_main_ui_integration import execute_swap_strategy_in_game
+from __future__ import annotations
+
+# NOTE: Avoid `import *` here.
+# Many utilities depend on heavy optional deps (cv2/onnx/torch). Importing them
+# at package import time slows startup and can trigger side effects.
 
 __all__ = [
-    # consent_utils
-    'check_consent',
-    'get_consent_template_path',
-    # gpu_utils
-    'check_gpu',
-    # hp_detection
-    'detect_hp',
-    # mnist_preprocessor
-    'preprocess_mnist_image',
-    # resource_utils
-    'get_resource_path',
-    # swap_strategy_main_ui_integration
-    'execute_swap_strategy_in_game',
+    "display_disclaimer_and_get_consent",
+    "remove_consent",
+    "setup_gpu",
+    "get_easyocr_reader",
+    "resource_path",
+    "get_resource_path",
+    "ensure_directory",
+    "get_model_directory",
+    "get_templates_directory",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"display_disclaimer_and_get_consent", "remove_consent"}:
+        from . import consent_utils as _consent_utils
+
+        return getattr(_consent_utils, name)
+
+    if name in {"setup_gpu", "get_easyocr_reader"}:
+        from . import gpu_utils as _gpu_utils
+
+        return getattr(_gpu_utils, name)
+
+    if name in {
+        "resource_path",
+        "get_resource_path",
+        "ensure_directory",
+        "get_model_directory",
+        "get_templates_directory",
+    }:
+        from . import resource_utils as _resource_utils
+
+        return getattr(_resource_utils, name)
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

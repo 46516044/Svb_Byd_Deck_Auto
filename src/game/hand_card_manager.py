@@ -3,8 +3,6 @@
 专门使用SIFT特征匹配识别手牌区域中的卡牌及其费用
 """
 
-import cv2
-import numpy as np
 import logging
 import time
 from typing import List, Dict, Optional
@@ -16,9 +14,6 @@ logger = logging.getLogger(__name__)
 class HandCardManager:
     """手牌管理器类"""
     
-    # 全局SIFT识别器实例，确保模板只加载一次
-    _sift_recognition_instance = None
-    
     def __init__(self, device_state=None):
         """
         初始化手牌管理器
@@ -28,52 +23,9 @@ class HandCardManager:
         """
         self.device_state = device_state
         self.hand_area = (229, 539, 1130, 710)  # 手牌区域坐标
-        
-        # 使用全局单例SIFT识别器
-        if HandCardManager._sift_recognition_instance is None:
-            HandCardManager._sift_recognition_instance = SiftCardRecognition("shadowverse_cards_cost")
-            logger.info("首次创建SIFT识别器，加载卡牌模板")
-        # else:
-            # logger.info("复用已存在的SIFT识别器实例")
-        
-        self.sift_recognition = HandCardManager._sift_recognition_instance
 
-    def recognize_hand_shield_card(self) -> bool:
-        """
-        检测手牌中是否有守护卡牌名字
-        
-        Returns:
-            bool: 如果手牌中有shield随从则返回True，否则返回False
-        """
-        try:
-        #        
-            # 从game_constants导入shield随从列表
-            from src.config.game_constants import SHIELD_FOLLOWER_NAMES
-            shield_names = SHIELD_FOLLOWER_NAMES
-            # logger.info(f"成功加载 {len(shield_names)} 个shield随从名字")
-            
-            # 获取当前手牌
-            hand_cards = self.get_hand_cards_with_retry(silent=True)
-            if not hand_cards:
-                logger.info("未识别到手牌，无法检测shield随从")
-                return False
-            
-            # 检查手牌中是否有shield随从
-            # found_shield_cards = []
-            # for card in hand_cards:
-            #     card_name = card.get('name', '')
-            #     if card_name in shield_names:
-            #         found_shield_cards.append(card_name)
-            
-            # if found_shield_cards:
-            #     logger.warning(f"手牌中发现护盾手牌: {' | '.join(found_shield_cards)}")
-            #     return True
-            # else:
-            #     return False
-                
-        except Exception as e:
-            logger.error(f"检测shield随从时出错: {str(e)}")
-            return False
+        # Per-device/per-instance recognizer (templates are shared internally).
+        self.sift_recognition = SiftCardRecognition("shadowverse_cards_cost")
 
     def recognize_hand_cards(self, screenshot, silent=False) -> List[Dict]:
         """
@@ -92,7 +44,9 @@ class HandCardManager:
         """
         try:
             # 使用SIFT识别手牌
-            recognized_cards = self.sift_recognition.recognize_hand_cards(screenshot)
+            recognized_cards = self.sift_recognition.recognize_hand_cards(
+                screenshot, hand_area=self.hand_area
+            )
             
             if recognized_cards and not silent:
                 # 输出识别结果
