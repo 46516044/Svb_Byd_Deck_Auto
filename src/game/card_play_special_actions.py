@@ -509,7 +509,12 @@ class CardPlaySpecialActions:
         """扫描我方随从"""
         # 这里需要调用原有的扫描方法，通过device_state访问
         if hasattr(self.device_state, 'game_manager') and self.device_state.game_manager:
-            return self.device_state.game_manager.scan_our_followers(screenshot)
+            # This path only needs follower count; keep it fast.
+            return self.device_state.game_manager.scan_our_followers(
+                screenshot,
+                extra_shots=0,
+                with_names=False,
+            )
         return []
     
     def handle_evolve_mode_option(self, card_name, *, is_super_evolution: bool = False):

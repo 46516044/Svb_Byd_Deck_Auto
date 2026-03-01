@@ -9,7 +9,7 @@ import random
 import time
 import logging
 import os
-from typing import List, Dict, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from src.config import settings
 from src.config.game_constants import (
     DEFAULT_ATTACK_TARGET, DEFAULT_ATTACK_RANDOM,
@@ -46,13 +46,20 @@ class GameActions:
             self.battle_policy = LegacyBattlePolicy()
         except Exception:
             self.battle_policy = None
+
+        # Lightweight perf counters for follower scanning.
+        self._perf_scan_our_followers = {
+            "fast": {"calls": 0, "ok": 0, "total_ms": 0.0},
+            "full": {"calls": 0, "ok": 0, "total_ms": 0.0},
+        }
+        self._perf_scan_our_followers_last_log_ts = 0.0
     
     @property
     def follower_manager(self):
         """动态获取follower_manager，确保在GameManager初始化后才可用"""
         return self.device_state.follower_manager
 
-    def perform_follower_attacks(self,enemy_check):
+    def perform_follower_attacks(self, enemy_check, *, all_followers: Optional[List[Tuple[Any, Any, Any, Any]]] = None):
         """执行随从攻击"""
         type_name_map = {
             "yellow": "突进",
@@ -74,8 +81,24 @@ class GameActions:
 
 
         # 攻击阶段：从右往左优先处理（新召唤随从通常出现在右侧）
-        # 扫描/重扫由 _refresh_our_followers 统一处理，避免外层零散补扫。
-        all_followers = self._refresh_our_followers(sort_desc=True)
+        # `AttackPhase` 可能已经预刷新；否则这里做一次快速刷新。
+        if all_followers is None:
+            all_followers = self._refresh_our_followers(
+                sort_desc=True,
+                extra_shots=0,
+                retries=1,
+                with_names=False,
+            )
+        else:
+            # Ensure expected order (right -> left)
+            try:
+                all_followers = sorted(
+                    list(all_followers or []),
+                    key=lambda f: int(f[0]) if len(f) > 0 else 0,
+                    reverse=True,
+                )
+            except Exception:
+                all_followers = list(all_followers or [])
 
         # Structured observation log (no extra recognition).
         enemy_positions = enemy_check if isinstance(enemy_check, (list, tuple)) else []
@@ -125,8 +148,13 @@ class GameActions:
                     self.device_state.logger.info("没有可用的突进/疾驰随从攻击护盾")
                     return # 退出循环
 
-                # 攻击后更新随从信息
-                all_followers = self._refresh_our_followers(sort_desc=True)
+                # 攻击后更新随从信息（快速单帧刷新；不做SIFT命名）
+                all_followers = self._refresh_our_followers(
+                    sort_desc=True,
+                    extra_shots=0,
+                    retries=0,
+                    with_names=False,
+                )
 
                 # 检查更新后的随从是否还有突进/疾驰能力，没有则直接返回
                 has_attack_followers = False
@@ -182,7 +210,12 @@ class GameActions:
             green_attack_count += 1
             self.device_state.sleep(0.45)
 
-            all_followers = self._refresh_our_followers(sort_desc=True)
+            all_followers = self._refresh_our_followers(
+                sort_desc=True,
+                extra_shots=0,
+                retries=0,
+                with_names=False,
+            )
 
         # 使用黄色突进随从攻击敌方血量最小的随从（从右往左，每次攻击后快速重扫）
         if not shield_detected:
@@ -229,7 +262,12 @@ class GameActions:
                     self.device_state.logger.warning(f"突进敌方最小血量随从失败: {str(e)}")
 
                 # 攻击后快速重扫（从右往左），避免漏掉新突进/疾驰随从
-                all_followers = self._refresh_our_followers(sort_desc=True)
+                all_followers = self._refresh_our_followers(
+                    sort_desc=True,
+                    extra_shots=0,
+                    retries=0,
+                    with_names=False,
+                )
 
     def perform_evolution_actions(self):
         """执行进化/超进化操作"""
@@ -1585,12 +1623,29 @@ class GameActions:
         shot_delay_range=(0.08, 0.16),
         retries: int = 1,
         debug_flag: bool = False,
+        with_names: bool = True,
     ):
         """统一的“扫描并刷新我方随从”入口。
 
         通过短间隔多帧采样 + 必要时重试，减少外层零散补扫。
         """
+        # Keep old names when doing fast scans (no SIFT naming).
+        try:
+            cached_before = self.follower_manager.get_positions() or []
+        except Exception:
+            cached_before = []
+
+        mode = "full" if with_names else "fast"
+        try:
+            debug_mode = bool(
+                isinstance(getattr(self.device_state, "config", None), dict)
+                and self.device_state.config.get("ui", {}).get("debug_mode")
+            )
+        except Exception:
+            debug_mode = False
+
         for attempt in range(max(0, int(retries)) + 1):
+            t0 = time.perf_counter()
             screenshot = self.device_state.take_screenshot()
             if screenshot is None:
                 break
@@ -1600,14 +1655,76 @@ class GameActions:
                 sort_desc=sort_desc,
                 shot_delay_range=shot_delay_range,
                 debug_flag=debug_flag,
+                with_names=with_names,
             )
+
+            # Perf record (includes the scan_our_followers path and any extra shots inside it).
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            try:
+                perf = getattr(self, "_perf_scan_our_followers", None)
+                if isinstance(perf, dict) and mode in perf and isinstance(perf.get(mode), dict):
+                    perf[mode]["calls"] = int(perf[mode].get("calls", 0)) + 1
+                    perf[mode]["total_ms"] = float(perf[mode].get("total_ms", 0.0)) + float(dt_ms)
+                    if followers:
+                        perf[mode]["ok"] = int(perf[mode].get("ok", 0)) + 1
+
+                    now = time.time()
+                    if debug_mode and (now - float(self._perf_scan_our_followers_last_log_ts)) >= 10.0:
+                        self._perf_scan_our_followers_last_log_ts = now
+                        fast = perf.get("fast", {})
+                        full = perf.get("full", {})
+
+                        def _fmt(d: Dict[str, Any]) -> str:
+                            calls = int(d.get("calls", 0))
+                            ok = int(d.get("ok", 0))
+                            total_ms = float(d.get("total_ms", 0.0))
+                            avg = (total_ms / calls) if calls else 0.0
+                            return f"calls={calls} ok={ok} avg={avg:.1f}ms"
+
+                        self.device_state.logger.info(
+                            f"[Perf] scan_our_followers fast({_fmt(fast)}) full({_fmt(full)})"
+                        )
+            except Exception:
+                pass
+
             if followers:
+                # Optional: backfill names from cache when we skipped naming.
+                if not with_names and cached_before and len(cached_before) == len(followers):
+                    try:
+                        if any(len(f) > 3 and f[3] for f in cached_before):
+                            filled = []
+                            for x, y, t, name in followers:
+                                if name:
+                                    filled.append((x, y, t, name))
+                                    continue
+                                best = None
+                                best_dx = 10**9
+                                for cx, cy, ct, cname in cached_before:
+                                    if not cname:
+                                        continue
+                                    dx = abs(int(cx) - int(x))
+                                    if dx < 30 and dx < best_dx:
+                                        best_dx = dx
+                                        best = cname
+                                filled.append((x, y, t, best))
+                            followers = filled
+                    except Exception:
+                        pass
+
                 self.follower_manager.update_positions(followers)
                 return followers
             if attempt < retries:
                 time.sleep(random.uniform(0.12, 0.22))
 
-        return self.follower_manager.get_positions()
+        # Fallback: return cached positions, but ensure order matches caller expectations.
+        try:
+            cached = self.follower_manager.get_positions() or []
+        except Exception:
+            cached = []
+        try:
+            return sorted(list(cached), key=lambda f: int(f[0]) if len(f) > 0 else 0, reverse=bool(sort_desc))
+        except Exception:
+            return list(cached)
 
     def _scan_our_followers(
         self,
@@ -1616,6 +1733,7 @@ class GameActions:
         sort_desc: bool = False,
         shot_delay_range=(0.12, 0.22),
         debug_flag: bool = False,
+        with_names: bool = True,
     ):
         """检测场上的我方随从位置和状态"""
         if hasattr(self.device_state, 'game_manager') and self.device_state.game_manager:
@@ -1625,6 +1743,7 @@ class GameActions:
                 extra_shots=extra_shots,
                 sort_desc=sort_desc,
                 shot_delay_range=shot_delay_range,
+                with_names=with_names,
             )
         return []
 

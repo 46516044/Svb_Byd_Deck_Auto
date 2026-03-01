@@ -26,5 +26,10 @@ class EvolvePhase:
         # 点击空白处关闭面板
         self.actions._click_blank_panel(sleep_seconds=1)
         # 刷新随从信息
-        self.actions._refresh_our_followers(sort_desc=False)
+        self.actions._refresh_our_followers(
+            sort_desc=False,
+            extra_shots=0,
+            retries=0,
+            with_names=False,
+        )
         return True

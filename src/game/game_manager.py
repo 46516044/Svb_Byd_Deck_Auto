@@ -316,6 +316,7 @@ class GameManager:
         extra_shots: int = 2,
         sort_desc: bool = False,
         shot_delay_range=(0.12, 0.22),
+        with_names: bool = True,
     ):
         """检测场上的我方随从位置和状态。
 
@@ -401,7 +402,7 @@ class GameManager:
             return merged
 
         # 单帧识别：返回(positions, rectangles)
-        def recognize_followers(shot, debug_flag):
+        def recognize_followers(shot, debug_flag, *, collect_rectangles: bool):
             # 原有的单次随从识别逻辑
             if shot is None:
                 return [], []
@@ -474,20 +475,17 @@ class GameManager:
                 cv2.dilate(blue_mask, kernel, iterations=1), kernel, iterations=1
             )
 
-            from concurrent.futures import ThreadPoolExecutor
-
-            def find_contours(mask):
-                return cv2.findContours(
-                    mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                )[0]
-
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                future_green = executor.submit(find_contours, green_eroded)
-                future_yellow1 = executor.submit(find_contours, yellow1_eroded)
-                future_blue = executor.submit(find_contours, blue_eroded)
-                green_contours = future_green.result()
-                yellow1_contours = future_yellow1.result()
-                blue_contours = future_blue.result()
+            # NOTE: These are cheap and deterministic; threadpool overhead is larger
+            # than the benefit for such small workloads.
+            green_contours = cv2.findContours(
+                green_eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )[0]
+            yellow1_contours = cv2.findContours(
+                yellow1_eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )[0]
+            blue_contours = cv2.findContours(
+                blue_eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )[0]
             follower_positions = []
             shot_all_follower_positions = []
             green_rects = []
@@ -787,9 +785,10 @@ class GameManager:
                 min_dim = min(w, h)
                 max_dim = max(w, h)
                 if 15 < max_dim < 40 and 3 < min_dim < 15 and area < 200:
-                    shot_all_follower_positions.append(
-                        ((int(center_x + 263), 330), (int(center_x + 263 + 103), 463))
-                    )
+                    if collect_rectangles:
+                        shot_all_follower_positions.append(
+                            ((int(center_x + 263), 330), (int(center_x + 263 + 103), 463))
+                        )
                     # 区域截图中卡我方随从的中心位置
                     in_card_center_x_full = center_x + 50
                     in_card_center_y_full = center_y - 46
@@ -842,6 +841,7 @@ class GameManager:
                             (255, 0, 0),
                             1,
                         )
+
             if debug_flag:
                 import time
 
@@ -850,44 +850,67 @@ class GameManager:
                     f"debug/our_follower_region_{timestamp}.png", debug_img_color
                 )
                 cv2.imwrite(f"debug/our_hp_region_{timestamp}.png", debug_img_blue)
+
             follower_positions.sort(key=lambda pos: pos[0], reverse=sort_desc)
             return follower_positions, shot_all_follower_positions
 
-        # 并发执行多帧HSV识别（先得到每帧结果，再做汇总）
+        # 多帧HSV识别（先得到每帧结果，再做汇总）
         per_shot_followers = []
         all_rectangles = []
 
-        with ThreadPoolExecutor(max_workers=max(1, len(screenshots))) as executor:
-            futures = [
-                executor.submit(recognize_followers, shot, debug_flag)
-                for shot in screenshots
-                if shot is not None
-            ]
-            import logging
-            for future in as_completed(futures):
-                try:
-                    followers, rects = future.result()
-                    followers = _dedup_by_x([(x, y, t, None) for (x, y, t) in followers])
-                    per_shot_followers.append(followers)
-                    all_rectangles.extend(rects)
-                except Exception as e:
-                    logging.error(f"recognize_followers线程异常: {e}")
-            if not futures:
-                return []
+        collect_rectangles = bool(with_names)
 
-        # 矩形区域去重（左上角x轴在54像素内视为同一个随从区域）
+        valid_shots = [s for s in screenshots if s is not None]
+        if not valid_shots:
+            return []
+
+        if len(valid_shots) == 1:
+            followers, rects = recognize_followers(
+                valid_shots[0], debug_flag, collect_rectangles=collect_rectangles
+            )
+            followers = _dedup_by_x([(x, y, t, None) for (x, y, t) in followers])
+            per_shot_followers.append(followers)
+            if collect_rectangles:
+                all_rectangles.extend(rects)
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, len(valid_shots))) as executor:
+                futures = [
+                    executor.submit(
+                        recognize_followers,
+                        shot,
+                        debug_flag,
+                        collect_rectangles=collect_rectangles,
+                    )
+                    for shot in valid_shots
+                ]
+                import logging
+
+                for future in as_completed(futures):
+                    try:
+                        followers, rects = future.result()
+                        followers = _dedup_by_x(
+                            [(x, y, t, None) for (x, y, t) in followers]
+                        )
+                        per_shot_followers.append(followers)
+                        if collect_rectangles:
+                            all_rectangles.extend(rects)
+                    except Exception as e:
+                        logging.error(f"recognize_followers线程异常: {e}")
+
+        # 矩形区域去重（仅用于SIFT命名；左上角x轴在54像素内视为同一个随从区域）
         deduplicated_follower_positions = []
-        for rect_coords in all_rectangles:
-            (x1, y1), (x2, y2) = rect_coords
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            found = False
-            for existing_rect in deduplicated_follower_positions:
-                (ex1, ey1), (ex2, ey2) = existing_rect
-                if abs(x1 - ex1) < 54:
-                    found = True
-                    break
-            if not found:
-                deduplicated_follower_positions.append(((x1, y1), (x2, y2)))
+        if with_names and all_rectangles:
+            for rect_coords in all_rectangles:
+                (x1, y1), (x2, y2) = rect_coords
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                found = False
+                for existing_rect in deduplicated_follower_positions:
+                    (ex1, ey1), (ex2, ey2) = existing_rect
+                    if abs(x1 - ex1) < 54:
+                        found = True
+                        break
+                if not found:
+                    deduplicated_follower_positions.append(((x1, y1), (x2, y2)))
 
         # 新的SIFT识别逻辑：基于去重后的all_follower_positions矩形区域
         def perform_sift_recognition_on_rectangles(base_screenshot):
@@ -1091,16 +1114,18 @@ class GameManager:
 
             return results
 
-        # 执行SIFT识别：用最新一帧作为裁剪基准（避免跨帧矩形导致命名失败）
-        base_for_naming = None
-        for s in reversed(screenshots):
-            if s is not None:
-                base_for_naming = s
-                break
-        if base_for_naming is None:
-            base_for_naming = screenshot
+        sift_results = []
+        if with_names and deduplicated_follower_positions:
+            # 执行SIFT识别：用最新一帧作为裁剪基准（避免跨帧矩形导致命名失败）
+            base_for_naming = None
+            for s in reversed(screenshots):
+                if s is not None:
+                    base_for_naming = s
+                    break
+            if base_for_naming is None:
+                base_for_naming = screenshot
 
-        sift_results = perform_sift_recognition_on_rectangles(base_for_naming)
+            sift_results = perform_sift_recognition_on_rectangles(base_for_naming)
 
         def attach_names(followers):
             named = []
@@ -1116,7 +1141,8 @@ class GameManager:
                 named.append((x, y, t, name))
             return named
 
-        per_shot_followers = [attach_names(f) for f in per_shot_followers]
+        if with_names and sift_results:
+            per_shot_followers = [attach_names(f) for f in per_shot_followers]
 
         # 选一帧作为基准（结果最多；若相同则名字更多；再相同则可攻击随从更多）
         def score(followers):
@@ -1165,7 +1191,18 @@ class GameManager:
             for (x, y, t, name) in merged
         ]
         merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
-        self.device_state.logger.info(f"我方当前场上随从: {merged}")
+        try:
+            debug_mode = bool(
+                isinstance(getattr(self.device_state, "config", None), dict)
+                and self.device_state.config.get("ui", {}).get("debug_mode")
+            )
+        except Exception:
+            debug_mode = False
+
+        if debug_flag or debug_mode:
+            self.device_state.logger.info(f"我方当前场上随从: {merged}")
+        else:
+            self.device_state.logger.debug(f"我方当前场上随从: {merged}")
         return merged
 
     def scan_shield_targets(self, debug_flag=False):
