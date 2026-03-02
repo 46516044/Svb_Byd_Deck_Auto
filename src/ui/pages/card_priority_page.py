@@ -4,14 +4,15 @@
 
 from __future__ import annotations
 
-import json
 import os
 
-from PyQt5.QtCore import Qt
+from typing import Any
+
+from PyQt5.QtCore import Qt as _Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QCheckBox,
-    QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,30 +25,19 @@ from PyQt5.QtWidgets import (
 
 from src.config.paths import get_config_path
 from src.config.config_repository import ConfigRepository
-from src.config.strategy_effects import (
-    get_card_effect_steps,
-    parse_select_option,
-    parse_target_type,
-)
+from src.config.effects_registry import get_triggers
 from src.ui.common import get_exe_dir
 from src.utils.card_filename import parse_card_filename, make_enhance_key
 
 
-SPECIAL_TARGET_OPTIONS = [
-    ("空选项", ""),
-    ("打脸", "enemy_player"),
-    ("双破坏", "double_enemy"),
-    ("护盾/最高血", "shield_or_highest_hp"),
-    ("敌随从HP<=5", "enemy_followers_hp_less_than_6"),
-    ("护盾/最高血(不消耗)", "shield_or_highest_hp_no_enemy_retrun_point"),
-    ("扫我方随从选项", "scan_our_follower_to_choose"),
-]
+# PyQt5 stubs vary across environments; keep Qt attribute access flexible.
+Qt: Any = _Qt
 
 
 class CardPriorityPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.parent = parent
+        self.parent_widget: Any = parent
         self.config_data = self.load_config()
         self.card_widgets = []
         # Enhance rows share evolve priority with the base card row.
@@ -76,7 +66,7 @@ class CardPriorityPage(QWidget):
         # 说明文字和帮助按钮
         desc_layout = QHBoxLayout()
         desc_label = QLabel(
-            "为卡组中的卡片设置优先级和模式选项。数字越小优先级越高，优先级上限是999（默认所有卡牌999）。出牌优先级支持进化前/进化后两个阶段。模式选项默认是空选项（不执行任何特殊操作）。"
+            "为卡组中的卡片设置优先级、进化优先级与留牌。特殊效果/特殊交互请点击右侧“特殊效果...”进入二级编辑器。"
         )
         desc_label.setStyleSheet("font-size: 12px; color: #AACCFF;")
         desc_layout.addWidget(desc_label)
@@ -112,7 +102,7 @@ class CardPriorityPage(QWidget):
         self.save_btn = QPushButton("保存设置")
         self.save_btn.clicked.connect(self.save_config)
         self.back_btn = QPushButton("返回主界面")
-        self.back_btn.clicked.connect(lambda: self.parent.stacked_widget.setCurrentIndex(0))
+        self.back_btn.clicked.connect(self._go_back)
         btn_layout.addStretch()
         btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.back_btn)
@@ -120,6 +110,64 @@ class CardPriorityPage(QWidget):
         main_layout.addLayout(btn_layout)
 
         self.load_card_priority_settings()
+
+    def _go_back(self) -> None:
+        try:
+            sw = getattr(self.parent_widget, "stacked_widget", None)
+            if sw is not None and hasattr(sw, "setCurrentIndex"):
+                sw.setCurrentIndex(0)
+        except Exception:
+            pass
+
+    def _build_effects_tag(self, base_name: str, config_key: str, is_enhance: bool) -> str:
+        effects = self.config_data.get("strategy", {}).get("effects", {})
+        if not isinstance(effects, dict):
+            return ""
+
+        tags = []
+        for t in get_triggers():
+            tid = str(t.get("id") or "")
+            short = str(t.get("short") or tid)
+            if not tid:
+                continue
+
+            # on_play is keyed by hand-card config key (enhance-aware);
+            # follower triggers are keyed by base follower name.
+            if tid == "on_play":
+                key = str(config_key or base_name)
+            else:
+                if is_enhance:
+                    continue
+                key = str(base_name)
+
+            card_eff = effects.get(key)
+            if not isinstance(card_eff, dict):
+                continue
+            steps = card_eff.get(tid)
+            if isinstance(steps, list) and any(isinstance(s, dict) for s in steps):
+                tags.append(short)
+
+        return "/".join(tags)
+
+    def open_effects_editor(
+        self, base_name: str, config_key: str, display_name: str, is_enhance: bool
+    ) -> None:
+        try:
+            from src.ui.pages.card_effects_editor import CardEffectsDialog
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开特殊效果编辑器: {str(e)}")
+            return
+
+        dlg = CardEffectsDialog(
+            self,
+            base_name=str(base_name or ""),
+            config_key=str(config_key or base_name or ""),
+            display_name=str(display_name or base_name or ""),
+            is_enhance=bool(is_enhance),
+        )
+        res = dlg.exec_()
+        if res == QDialog.Accepted:
+            self.refresh_card_priority()
 
     def show_card_settings_help(self):
         """显示卡牌设置帮助"""
@@ -142,19 +190,14 @@ class CardPriorityPage(QWidget):
 
 二、模式选项设置
 
-1. 模式选项
-   作用：为双选择的模式卡牌选择对应的选项
-   空选项：不会把这张卡认作模式卡，将以普通卡牌处理
+二、留牌与特殊效果
 
-2. 进化选项
-   作用：为双选择的模式卡牌选择进化时对于的选项
-   空选项：不会把这张卡认作进化时模式卡，将以普通卡牌处理
-   
+1. 必留(force_keep)
+   作用：换牌阶段强制保留该基础卡（爆能档位共用）。
 
-建议及后续更新：
-   1. 模式选项和进化选项的设置是独立的，互不影响
-   2. 为了避免错误操作，建议先设置好优先级，再设置模式选项和进化选项
-   3. 后续如果会有空，会添加三模式或四模式卡牌的选项设置（不保证一定有）
+2. 特殊效果...
+   作用：进入二级编辑器，按触发时机配置操作（出牌/攻击/进化/超进化）。
+   说明：爆能档位行仅对“出牌时(on_play)”生效，其余触发按随从名（基础卡）配置。
 """
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("卡牌设置帮助")
@@ -193,7 +236,10 @@ class CardPriorityPage(QWidget):
     def load_card_priority_settings(self):
         # 清空现有内容
         for i in reversed(range(self.scroll_layout.count())):
-            widget = self.scroll_layout.itemAt(i).widget()
+            item = self.scroll_layout.itemAt(i)
+            if item is None:
+                continue
+            widget = item.widget()
             if widget:
                 widget.deleteLater()
         self.card_widgets = []
@@ -332,7 +378,7 @@ class CardPriorityPage(QWidget):
 
             force_keep_checkbox = None
             evolve_priority_input = None
-            evolve_mode_combo = None
+            evolve_priority_view = None
 
             if not is_enhance:
                 # 强制留牌（仅基础卡）
@@ -393,82 +439,26 @@ class CardPriorityPage(QWidget):
                 except Exception:
                     pass
 
-            # 模式选项（on_play）
-            row_layout.addWidget(QLabel("模式选项:"))
-            mode_combo = QComboBox()
-            mode_combo.addItems(["空选项", "选项1", "选项2"])
-            mode_combo.setStyleSheet(
+            # Step3A: special effects go to a 2nd-level editor.
+            effects_tag = self._build_effects_tag(base_name, config_key, is_enhance)
+            tag_label = QLabel(effects_tag if effects_tag else "")
+            tag_label.setStyleSheet("color: #AACCFF; font-size: 11px; min-width: 80px;")
+            tag_label.setAlignment(Qt.AlignCenter)
+            row_layout.addWidget(tag_label)
+
+            effects_btn = QPushButton("特殊效果...")
+            effects_btn.setStyleSheet(
                 "background-color: rgba(80, 80, 120, 180); color: white;"
             )
-            mode_combo.setMaximumWidth(80)
-
-            steps_play = get_card_effect_steps(
-                self.config_data, card_name=config_key, trigger="on_play"
+            effects_btn.setMaximumWidth(90)
+            effects_btn.clicked.connect(
+                lambda _=False,
+                b=base_name,
+                k=config_key,
+                d=display_name,
+                enh=is_enhance: self.open_effects_editor(b, k, d, enh)
             )
-            eff_opt = parse_select_option(steps_play)
-            if eff_opt == 1:
-                mode_option = "选项1"
-            elif eff_opt == 2:
-                mode_option = "选项2"
-            else:
-                mode_option = self.config_data.get("card_mode_options", {}).get(
-                    config_key, "空选项"
-                )
-            index = mode_combo.findText(mode_option)
-            if index >= 0:
-                mode_combo.setCurrentIndex(index)
-            row_layout.addWidget(mode_combo)
-
-            # 进化模式选项（仅基础卡）
-            if not is_enhance:
-                row_layout.addWidget(QLabel("进化选项:"))
-                evolve_mode_combo = QComboBox()
-                evolve_mode_combo.addItems(["空选项", "选项1 (进化)", "选项2 (进化)"])
-                evolve_mode_combo.setStyleSheet(
-                    "background-color: rgba(80, 80, 120, 180); color: white;"
-                )
-                evolve_mode_combo.setMaximumWidth(100)
-
-                steps_evo = get_card_effect_steps(
-                    self.config_data, card_name=base_name, trigger="on_evolve"
-                )
-                eff_evo_opt = parse_select_option(steps_evo)
-                if eff_evo_opt == 1:
-                    evolve_mode_option = "选项1"
-                elif eff_evo_opt == 2:
-                    evolve_mode_option = "选项2"
-                else:
-                    evolve_mode_option = self.config_data.get(
-                        "card_evolve_mode_options", {}
-                    ).get(base_name, "空选项")
-
-                if evolve_mode_option == "选项1":
-                    display_option = "选项1 (进化)"
-                elif evolve_mode_option == "选项2":
-                    display_option = "选项2 (进化)"
-                else:
-                    display_option = "空选项"
-                index = evolve_mode_combo.findText(display_option)
-                if index >= 0:
-                    evolve_mode_combo.setCurrentIndex(index)
-                row_layout.addWidget(evolve_mode_combo)
-
-            # 特殊目标（on_play.target_type）
-            row_layout.addWidget(QLabel("特殊目标:"))
-            special_combo = QComboBox()
-            for text, value in SPECIAL_TARGET_OPTIONS:
-                special_combo.addItem(text, value)
-            special_combo.setStyleSheet(
-                "background-color: rgba(80, 80, 120, 180); color: white;"
-            )
-            special_combo.setMaximumWidth(120)
-
-            eff_target = parse_target_type(steps_play)
-            eff_target = eff_target or ""
-            idx = special_combo.findData(eff_target)
-            if idx >= 0:
-                special_combo.setCurrentIndex(idx)
-            row_layout.addWidget(special_combo)
+            row_layout.addWidget(effects_btn)
 
             self.card_widgets.append(
                 {
@@ -480,9 +470,6 @@ class CardPriorityPage(QWidget):
                     "force_keep": force_keep_checkbox,
                     "evolve_priority": evolve_priority_input,
                     "evolve_priority_view": evolve_priority_view if is_enhance else None,
-                    "mode_option": mode_combo,
-                    "evolve_mode_option": evolve_mode_combo,
-                    "special_target": special_combo,
                 }
             )
 
@@ -520,7 +507,7 @@ class CardPriorityPage(QWidget):
 
     def save_config(self):
         try:
-            if getattr(self.parent, "is_script_running", lambda: False)():
+            if getattr(self.parent_widget, "is_script_running", lambda: False)():
                 QMessageBox.warning(
                     self,
                     "运行中",
@@ -533,10 +520,6 @@ class CardPriorityPage(QWidget):
         # 仅保存卡牌优先级部分，合并磁盘上的其余配置
         high_priority_cards = {}
         evolve_priority_cards = {}
-        card_mode_options = {}
-        card_evolve_mode_options = {}
-        # Unified effects schema
-        effects_updates = {}
         for card in self.card_widgets:
             base_name = card.get("card_name", "")
             config_key = card.get("config_key") or base_name
@@ -626,60 +609,6 @@ class CardPriorityPage(QWidget):
                         )
                         return
 
-            # 保存模式选项
-            mode_option = card["mode_option"].currentText()
-            if mode_option != "空选项":
-                card_mode_options[config_key] = mode_option
-
-            # effects.on_play.select_option
-            if mode_option == "选项1":
-                effects_updates.setdefault(config_key, {}).setdefault("on_play", []).insert(
-                    0, {"select_option": 1}
-                )
-            elif mode_option == "选项2":
-                effects_updates.setdefault(config_key, {}).setdefault("on_play", []).insert(
-                    0, {"select_option": 2}
-                )
-
-            # 保存进化模式选项（仅基础卡）
-            evolve_mode_widget = card.get("evolve_mode_option")
-            if evolve_mode_widget is not None:
-                evolve_mode_option = evolve_mode_widget.currentText()
-                if evolve_mode_option == "选项1 (进化)":
-                    save_option = "选项1"
-                elif evolve_mode_option == "选项2 (进化)":
-                    save_option = "选项2"
-                else:
-                    save_option = "空选项"
-                if save_option != "空选项":
-                    card_evolve_mode_options[base_name] = save_option
-
-                # effects.on_evolve/on_super_evolve.select_option
-                if save_option == "选项1":
-                    effects_updates.setdefault(base_name, {}).setdefault(
-                        "on_evolve", []
-                    ).insert(0, {"select_option": 1})
-                    effects_updates.setdefault(base_name, {}).setdefault(
-                        "on_super_evolve", []
-                    ).insert(0, {"select_option": 1})
-                elif save_option == "选项2":
-                    effects_updates.setdefault(base_name, {}).setdefault(
-                        "on_evolve", []
-                    ).insert(0, {"select_option": 2})
-                    effects_updates.setdefault(base_name, {}).setdefault(
-                        "on_super_evolve", []
-                    ).insert(0, {"select_option": 2})
-
-            # effects.on_play.target_type (only update when explicitly set)
-            try:
-                target_type = card["special_target"].currentData() or ""
-            except Exception:
-                target_type = ""
-            if isinstance(target_type, str) and target_type:
-                effects_updates.setdefault(config_key, {}).setdefault("on_play", []).append(
-                    {"target_type": target_type}
-                )
-
         config_path = get_config_path()
         repo = ConfigRepository(config_path)
         existing, parse_ok, parse_err = repo.load_existing(allow_default_on_error=False)
@@ -701,86 +630,16 @@ class CardPriorityPage(QWidget):
         elif "evolve_priority_cards" in existing:
             del existing["evolve_priority_cards"]
 
-        if card_mode_options:
-            existing["card_mode_options"] = card_mode_options
-        elif "card_mode_options" in existing:
-            del existing["card_mode_options"]
-
-        if card_evolve_mode_options:
-            existing["card_evolve_mode_options"] = card_evolve_mode_options
-        elif "card_evolve_mode_options" in existing:
-            del existing["card_evolve_mode_options"]
-
-        # Merge effects updates into strategy.effects without clobbering unknown future keys.
-        if effects_updates:
-            strategy = existing.get("strategy")
-            if not isinstance(strategy, dict):
-                strategy = {}
-                existing["strategy"] = strategy
-            effects = strategy.get("effects")
-            if not isinstance(effects, dict):
-                effects = {}
-                strategy["effects"] = effects
-
-            for card_name, upd in effects_updates.items():
-                if not isinstance(upd, dict):
-                    continue
-                card_eff = effects.get(card_name)
-                if not isinstance(card_eff, dict):
-                    card_eff = {}
-                    effects[card_name] = card_eff
-
-                for trigger, upd_steps in upd.items():
-                    if not isinstance(upd_steps, list):
-                        continue
-                    steps = card_eff.get(trigger)
-                    if not isinstance(steps, list):
-                        steps = []
-
-                    # Replace select_option steps for this trigger (UI owns them)
-                    steps = [
-                        s
-                        for s in steps
-                        if not (isinstance(s, dict) and "select_option" in s)
-                    ]
-                    for s in upd_steps:
-                        if isinstance(s, dict) and "select_option" in s:
-                            steps.insert(0, s)
-
-                    # Only update target_type when explicitly provided
-                    if any(isinstance(s, dict) and "target_type" in s for s in upd_steps):
-                        steps = [
-                            s
-                            for s in steps
-                            if not (isinstance(s, dict) and "target_type" in s)
-                        ]
-                        for s in upd_steps:
-                            if isinstance(s, dict) and "target_type" in s:
-                                steps.append(s)
-
-                    # Dedup exact dict steps while preserving order
-                    deduped = []
-                    seen = set()
-                    for s in steps:
-                        if not isinstance(s, dict):
-                            continue
-                        key = json.dumps(s, ensure_ascii=False, sort_keys=True)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        deduped.append(s)
-
-                    if deduped:
-                        card_eff[trigger] = deduped
-                    elif trigger in card_eff:
-                        del card_eff[trigger]
-
         try:
             res = repo.replace_with_snapshot(existing, indent=4, ensure_ascii=False)
             if not res.ok:
                 raise RuntimeError(res.error or "config write failed")
             QMessageBox.information(self, "成功", "卡牌设置已保存！")
-            if hasattr(self.parent, "log_output"):
-                self.parent.log_output.append("[配置] 卡牌设置已更新")
+            try:
+                log_output = getattr(self.parent_widget, "log_output", None)
+                if log_output is not None and hasattr(log_output, "append"):
+                    log_output.append("[配置] 卡牌设置已更新")
+            except Exception:
+                pass
         except Exception as e:
             QMessageBox.warning(self, "保存失败", f"保存卡牌设置失败: {str(e)}")

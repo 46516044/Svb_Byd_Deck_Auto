@@ -9,7 +9,10 @@ import logging
 from src.config.card_priorities import get_evolve_priority_cards
 from src.config import settings
 from src.game.policy.targets import TargetSelector
-from src.game.policy.effects import get_card_effect_steps, parse_action
+from src.game.policy.effects import get_card_effect_steps
+
+from src.config.strategy_effects import normalize_effect_steps_to_ops
+from src.game.effects import EffectEngine, FollowerContext
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +30,6 @@ class EvolutionSpecialActions:
         is_super_evolution: 是否为超进化
         existing_followers: 已扫描的随从结果，避免重复扫描
         """
-        # Prefer config-driven effects.
         trigger = "on_super_evolve" if is_super_evolution else "on_evolve"
         steps = get_card_effect_steps(
             getattr(self.device_state, "config", None), card_name=follower_name, trigger=trigger
@@ -39,34 +41,58 @@ class EvolutionSpecialActions:
                 card_name=follower_name,
                 trigger="on_evolve",
             )
-        cfg_action = parse_action(steps)
-        
-        if is_super_evolution:
-            # 超进化逻辑
-            action = cfg_action
-            if action == 'attack_two_enemy_followers_hp_less_than_4':
-                self._handle_attack_two_enemy_followers_hp_less_than_4(follower_name, is_super_evolution=True)
-            elif action == 'attack_two_enemy_followers_hp_highest':
-                self._handle_attack_two_enemy_followers_hp_highest(follower_name, is_super_evolution=True)
-            elif action == 'our_followers_with_evolution':
-                self._handle_our_followers_with_evolution(follower_name, is_super_evolution=True, existing_followers=existing_followers)
-        else:
-            # 普通进化逻辑
-            action = cfg_action
-            if action == 'attack_enemy_follower_hp_less_than_4':
-                self._handle_attack_enemy_follower_hp_less_than_4(follower_name)
-            elif action == 'attack_two_enemy_followers_hp_highest':
-                self._handle_attack_two_enemy_followers_hp_highest(follower_name)
-        
-        # 处理进化后模式选项的点击操作
-        from .card_play_special_actions import CardPlaySpecialActions
-        card_play_actions = CardPlaySpecialActions(self.device_state)
-        # 执行点击操作
-        card_play_actions.handle_evolve_mode_option(
-            follower_name, is_super_evolution=is_super_evolution
+
+        ops = normalize_effect_steps_to_ops(steps)
+
+        # If user provided structured ops (e.g. select_targets), treat legacy_action
+        # as a fallback and ignore it to avoid double-clicks.
+        has_override_ops = any(
+            isinstance(o, dict)
+            and str(o.get("op") or "")
+            in (
+                "select_targets",
+                "cancel_action",
+            )
+            for o in ops
         )
-        
-        # 以后可扩展更多action
+        if has_override_ops:
+            ops = [
+                o
+                for o in ops
+                if not (isinstance(o, dict) and str(o.get("op") or "") == "legacy_action")
+            ]
+
+        # Preserve legacy runtime semantics: evolve special clicks before select_option.
+        ops = [
+            o for o in ops if isinstance(o, dict) and str(o.get("op") or "") != "select_option"
+        ] + [
+            o for o in ops if isinstance(o, dict) and str(o.get("op") or "") == "select_option"
+        ]
+
+        ctx = FollowerContext(
+            device_state=self.device_state,
+            follower_name=str(follower_name or ""),
+            follower_pos=(int(pos[0]), int(pos[1])) if isinstance(pos, (list, tuple)) and len(pos) >= 2 else None,
+            is_super_evolution=bool(is_super_evolution),
+            existing_followers=existing_followers,
+        )
+        ops_to_run = [
+            o
+            for o in ops
+            if isinstance(o, dict) and str(o.get("op") or "") != "legacy_target_type"
+        ]
+        EffectEngine.run_ops(ops_to_run, ctx=ctx, trigger_id=trigger)
+
+        # Legacy fallback: if there is no select_option op in effects, keep the
+        # previous behavior (card_evolve_mode_options -> card_mode_options).
+        if not any(
+            isinstance(o, dict) and str(o.get("op") or "") == "select_option" for o in ops
+        ):
+            from .card_play_special_actions import CardPlaySpecialActions
+
+            CardPlaySpecialActions(self.device_state).handle_evolve_mode_option(
+                follower_name, is_super_evolution=is_super_evolution
+            )
     
     def _handle_attack_two_enemy_followers_hp_less_than_4(self, follower_name, is_super_evolution=False):
         """处理攻击两个HP<=3的敌方随从"""

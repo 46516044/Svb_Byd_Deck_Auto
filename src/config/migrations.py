@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 
@@ -45,7 +46,10 @@ def migrate_high_priority_cards_priority_fields(config: Dict[str, Any]) -> bool:
 
         if ("priority" in card_cfg) and (not has_pre) and (not has_post):
             try:
-                priority_value = int(card_cfg.get("priority"))
+                raw_priority = card_cfg.get("priority")
+                if not isinstance(raw_priority, (int, float, str)):
+                    continue
+                priority_value = int(raw_priority)
             except Exception:
                 # Keep legacy data if it's not parseable.
                 continue
@@ -98,12 +102,24 @@ def migrate_strategy_effects_schema(config: Dict[str, Any]) -> bool:
         strategy["effects"] = effects
         changed = True
 
+    # Whether this config already had any effects before this migration runs.
+    # If yes, we must NOT keep re-seeding defaults, otherwise users can never
+    # delete default entries (they would come back on every startup).
+    had_any_effects = bool(effects)
+
     def _norm_select_option(v: Any) -> int | None:
         if v in (1, "1", "选项1", "Option1", "option1"):
             return 1
         if v in (2, "2", "选项2", "Option2", "option2"):
             return 2
         return None
+
+    def _is_select_option_step(step: Any) -> bool:
+        if not isinstance(step, dict):
+            return False
+        if "select_option" in step:
+            return True
+        return str(step.get("op") or "") == "select_option"
 
     def _ensure_steps(card_name: str, trigger: str) -> list:
         nonlocal changed
@@ -123,14 +139,13 @@ def migrate_strategy_effects_schema(config: Dict[str, Any]) -> bool:
             changed = True
         return steps
 
-    def _replace_select_option(card_name: str, trigger: str, opt: int) -> None:
+    def _seed_select_option_if_missing(card_name: str, trigger: str, opt: int) -> None:
         nonlocal changed
         steps = _ensure_steps(card_name, trigger)
-        new_steps = [s for s in steps if not (isinstance(s, dict) and "select_option" in s)]
-        new_steps.insert(0, {"select_option": int(opt)})
-        if new_steps != steps:
-            effects[card_name][trigger] = new_steps
-            changed = True
+        if any(_is_select_option_step(s) for s in steps):
+            return
+        steps.insert(0, {"op": "select_option", "index": int(opt)})
+        changed = True
 
     # Legacy: card_mode_options -> on_play select_option
     legacy_mode = config.get("card_mode_options")
@@ -139,7 +154,7 @@ def migrate_strategy_effects_schema(config: Dict[str, Any]) -> bool:
             opt = _norm_select_option(opt_raw)
             if opt is None:
                 continue
-            _replace_select_option(str(card_name), "on_play", opt)
+            _seed_select_option_if_missing(str(card_name), "on_play", opt)
 
     # Legacy: card_evolve_mode_options -> on_evolve/on_super_evolve select_option
     legacy_evo_mode = config.get("card_evolve_mode_options")
@@ -149,33 +164,165 @@ def migrate_strategy_effects_schema(config: Dict[str, Any]) -> bool:
             if opt is None:
                 continue
             card_name = str(card_name)
-            _replace_select_option(card_name, "on_evolve", opt)
-            _replace_select_option(card_name, "on_super_evolve", opt)
+            _seed_select_option_if_missing(card_name, "on_evolve", opt)
+            _seed_select_option_if_missing(card_name, "on_super_evolve", opt)
 
     # Defaults: seed special target/actions so they become config-editable.
-    try:
-        from src.config.strategy_defaults import build_default_effects
+    # IMPORTANT: only seed once for "fresh" configs; do not re-seed on every
+    # load, otherwise users cannot delete old/default rules.
+    defaults_seeded_key = "_effects_defaults_seeded"
+    if not bool(strategy.get(defaults_seeded_key)):
+        if had_any_effects:
+            # Existing config: mark as seeded without mutating effects.
+            strategy[defaults_seeded_key] = True
+            changed = True
+        else:
+            try:
+                from src.config.strategy_defaults import build_default_effects
 
-        defaults = build_default_effects()
-    except Exception:
-        defaults = {}
+                defaults = build_default_effects()
+            except Exception:
+                defaults = {}
 
-    if isinstance(defaults, dict):
-        for card_name, card_eff in defaults.items():
-            if not isinstance(card_eff, dict):
+            if isinstance(defaults, dict):
+                for card_name, card_eff in defaults.items():
+                    if not isinstance(card_eff, dict):
+                        continue
+                    for trigger, default_steps in card_eff.items():
+                        if not isinstance(default_steps, list):
+                            continue
+
+                        steps = _ensure_steps(str(card_name), str(trigger))
+                        # Append missing step dicts (idempotent)
+                        for step in default_steps:
+                            if not isinstance(step, dict):
+                                continue
+                            if any(isinstance(s, dict) and s == step for s in steps):
+                                continue
+                            steps.append(step)
+                            changed = True
+
+            strategy[defaults_seeded_key] = True
+            changed = True
+
+    return changed
+
+
+def migrate_strategy_effects_to_ops(config: Dict[str, Any]) -> bool:
+    """Upgrade `strategy.effects[*][trigger]` steps to the Step3A op schema.
+
+    - Idempotent
+    - Keeps unknown dict steps as-is
+    - Best-effort upgrade for legacy keys: select_option/target_type/action
+    """
+
+    strategy = config.get("strategy")
+    if not isinstance(strategy, dict):
+        return False
+    effects = strategy.get("effects")
+    if not isinstance(effects, dict):
+        return False
+
+    def _norm_select_option(v: Any) -> int | None:
+        if v in (1, "1", "选项1", "Option1", "option1"):
+            return 1
+        if v in (2, "2", "选项2", "Option2", "option2"):
+            return 2
+        return None
+
+    def _is_op(step: Any, op_id: str) -> bool:
+        return isinstance(step, dict) and str(step.get("op") or "") == str(op_id)
+
+    changed = False
+
+    for card_name, card_eff in list(effects.items()):
+        if not isinstance(card_eff, dict):
+            continue
+
+        for trigger, steps in list(card_eff.items()):
+            if not isinstance(steps, list):
                 continue
-            for trigger, default_steps in card_eff.items():
-                if not isinstance(default_steps, list):
+
+            new_steps = []
+            for step in steps:
+                if isinstance(step, dict) and isinstance(step.get("op"), str) and step.get("op"):
+                    # Deprecation: select_targets(target.kind=option) -> select_option
+                    try:
+                        if str(step.get("op")) == "select_targets":
+                            tgt = step.get("target")
+                            if isinstance(tgt, dict) and str(tgt.get("kind") or "") == "option":
+                                params = tgt.get("params")
+                                if not isinstance(params, dict):
+                                    params = {}
+                                idx = _norm_select_option(params.get("index"))
+                                if idx is not None:
+                                    converted = {"op": "select_option", "index": int(idx)}
+                                    if step.get("on_error"):
+                                        converted["on_error"] = step.get("on_error")
+                                    new_steps.append(converted)
+                                    changed = True
+                                    continue
+                    except Exception:
+                        pass
+
+                    new_steps.append(step)
                     continue
 
-                steps = _ensure_steps(str(card_name), str(trigger))
-                # Append missing step dicts (idempotent)
-                for step in default_steps:
-                    if not isinstance(step, dict):
-                        continue
-                    if any(isinstance(s, dict) and s == step for s in steps):
-                        continue
-                    steps.append(step)
+                if not isinstance(step, dict):
+                    continue
+
+                expanded = []
+                if "select_option" in step:
+                    opt = _norm_select_option(step.get("select_option"))
+                    if opt is not None:
+                        expanded.append({"op": "select_option", "index": int(opt)})
+                if "target_type" in step:
+                    tt = step.get("target_type")
+                    if isinstance(tt, str) and tt:
+                        expanded.append({"op": "legacy_target_type", "target_type": str(tt)})
+                if "action" in step:
+                    act = step.get("action")
+                    if isinstance(act, str) and act:
+                        expanded.append({"op": "legacy_action", "action": str(act)})
+
+                if expanded:
+                    new_steps.extend(expanded)
                     changed = True
+                else:
+                    # Unknown legacy dict step: preserve as-is.
+                    new_steps.append(step)
+
+            # Preserve legacy runtime semantics for evolve: do action/targets before select_option.
+            if str(trigger) in ("on_evolve", "on_super_evolve"):
+                reordered = [s for s in new_steps if not _is_op(s, "select_option")] + [
+                    s for s in new_steps if _is_op(s, "select_option")
+                ]
+                if reordered != new_steps:
+                    new_steps = reordered
+                    changed = True
+
+            # Dedup exact dict steps while preserving order.
+            deduped = []
+            seen = set()
+            for s in new_steps:
+                if not isinstance(s, dict):
+                    continue
+                key = json.dumps(s, ensure_ascii=False, sort_keys=True)
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(s)
+
+            if deduped != steps:
+                if deduped:
+                    card_eff[trigger] = deduped
+                else:
+                    del card_eff[trigger]
+                changed = True
+
+        # Cleanup empty card entries.
+        if not card_eff:
+            del effects[card_name]
+            changed = True
 
     return changed

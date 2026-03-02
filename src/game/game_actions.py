@@ -72,6 +72,61 @@ class GameActions:
             DEFAULT_ATTACK_TARGET[1] + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
         )
 
+        # Step3A: optional on_attack effects hook.
+        try:
+            from src.config.strategy_effects import (
+                get_card_effect_steps as _get_eff_steps,
+                has_any_effects_for_trigger as _has_any_eff,
+                normalize_effect_steps_to_ops as _norm_ops,
+            )
+            from src.game.effects import EffectEngine as _EffectEngine
+            from src.game.effects import FollowerContext as _FollowerContext
+
+            attack_effects_enabled = _has_any_eff(
+                getattr(self.device_state, "config", None), trigger="on_attack"
+            )
+        except Exception:
+            attack_effects_enabled = False
+            _get_eff_steps = None
+            _norm_ops = None
+            _EffectEngine = None
+            _FollowerContext = None
+
+        def _run_on_attack_effects(follower_name: Any, source_pos: Optional[Tuple[Any, Any]] = None) -> None:
+            if not attack_effects_enabled:
+                return
+            if not isinstance(follower_name, str) or not follower_name:
+                return
+            if _get_eff_steps is None or _norm_ops is None or _EffectEngine is None or _FollowerContext is None:
+                return
+
+            steps = _get_eff_steps(
+                getattr(self.device_state, "config", None), card_name=follower_name, trigger="on_attack"
+            )
+            ops = _norm_ops(steps)
+            if not ops:
+                return
+
+            pos_xy = None
+            try:
+                if source_pos is not None and len(source_pos) >= 2:
+                    pos_xy = (int(source_pos[0]), int(source_pos[1]))
+            except Exception:
+                pos_xy = None
+
+            ctx = _FollowerContext(
+                device_state=self.device_state,
+                follower_name=follower_name,
+                follower_pos=pos_xy,
+                attack_source_pos=pos_xy,
+            )
+            ops_to_run = [
+                o
+                for o in ops
+                if isinstance(o, dict) and str(o.get("op") or "") != "legacy_target_type"
+            ]
+            _EffectEngine.run_ops(ops_to_run, ctx=ctx, trigger_id="on_attack")
+
         should_check_shield = enemy_check
         shield_targets = []
         shield_detected = False
@@ -142,6 +197,7 @@ class GameActions:
                             self.device_state.logger.info(f"使用{type_name}随从攻击护盾")
                         human_like_drag(self.device_state.u2_device, closest_follower[0], closest_follower[1], shield_x, shield_y, duration=random.uniform(*settings.get_human_like_drag_duration_range()))
                         self.device_state.sleep(1)
+                        _run_on_attack_effects(closest_follower_name, closest_follower)
                         break  # 已攻击则跳出类型循环
 
                 if not closest_follower:
@@ -210,6 +266,8 @@ class GameActions:
             green_attack_count += 1
             self.device_state.sleep(0.45)
 
+            _run_on_attack_effects(name, (x, y))
+
             all_followers = self._refresh_our_followers(
                 sort_desc=True,
                 extra_shots=0,
@@ -258,6 +316,7 @@ class GameActions:
                     )
                     yellow_attack_count += 1
                     self.device_state.sleep(1.5)
+                    _run_on_attack_effects(name, (x, y))
                 except Exception as e:
                     self.device_state.logger.warning(f"突进敌方最小血量随从失败: {str(e)}")
 
@@ -812,10 +871,12 @@ class GameActions:
                 and int(c.get('_eff_cost', 0) or 0) > 0
                 and int(c.get('_eff_cost', 0) or 0) <= remain_cost
             ]
-            
+
+            card_to_play = None
+             
             if not affordable_priority and not normal_zero_cost and not affordable_normal:
                 break
-                
+                  
             if affordable_priority:
                 # 高优先级卡牌按priority和费用排序（priority小优先，费用高优先）
                 affordable_priority.sort(key=lambda x: (x.get('_eff_priority', 999), -x.get('_eff_cost', 0)))
@@ -829,6 +890,9 @@ class GameActions:
                 # 普通付费卡牌按费用从高到低排序（高费优先）
                 affordable_normal.sort(key=lambda x: x.get('_eff_cost', 0), reverse=True)
                 card_to_play = affordable_normal[0]
+
+            if card_to_play is None:
+                break
             name = card_to_play.get('name', '未知')
             base_cost = int(card_to_play.get('cost', 0) or 0)
             cost = int(card_to_play.get('_eff_cost', base_cost) or 0)

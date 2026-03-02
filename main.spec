@@ -35,6 +35,11 @@ for d in core_dirs:
     if os.path.exists(src):
         datas.append((src, d))
 
+# 包含内部遮罩资源（不属于用户可自定义模板）
+hp_mask_file = os.path.join(project_root, 'src', 'masks', 'hp_mask.png')
+if os.path.exists(hp_mask_file):
+    datas.append((hp_mask_file, 'src/masks'))
+
 # 包含uiautomator2的assets资源文件
 uiautomator2_assets = os.path.join(venv_path, 'Lib', 'site-packages', 'uiautomator2', 'assets')
 if os.path.exists(uiautomator2_assets):

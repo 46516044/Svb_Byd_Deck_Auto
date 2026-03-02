@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
 from src.config.paths import get_config_path
 from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
-from src.ui.deck_io import save_deck_snapshot
+from src.ui.deck_io import apply_strategy_config, extract_strategy_config, save_deck_snapshot
 from src.utils.card_filename import parse_card_filename
 
 
@@ -319,18 +319,27 @@ class MyDeckPage(QWidget):
                 # 重新加载卡组显示
                 self.load_deck()
 
-                # 如果卡组数据中包含配置信息，替换当前配置文件
-                if "config" in deck_data:
-                    if isinstance(deck_data.get("config"), dict):
-                        config_path = get_config_path()
-                        res = ConfigRepository(config_path).replace_with_snapshot(
-                            deck_data["config"], ensure_ascii=False, indent=2
-                        )
-                        if not res.ok:
-                            raise RuntimeError(res.error or "config write failed")
-                        self.parent.log_output.append(
-                            f"[卡组] 已恢复卡组 '{deck_data.get('name')}' 的配置文件"
-                        )
+                # 如果卡组数据中包含策略配置，只应用“卡组相关策略”（不覆盖设备/ADB等机器相关配置）
+                sc = deck_data.get("strategy_config")
+                if not isinstance(sc, dict) and isinstance(deck_data.get("config"), dict):
+                    # Backward compatibility: legacy decks stored full config snapshot.
+                    sc = extract_strategy_config(
+                        deck_data["config"],
+                        cards=list(deck_data.get("cards") or []),
+                    )
+
+                if isinstance(sc, dict) and sc:
+                    config_path = get_config_path()
+                    repo = ConfigRepository(config_path)
+                    existing, _, _ = repo.load_existing(allow_default_on_error=True)
+                    existing_cfg = existing if isinstance(existing, dict) else {}
+                    merged = apply_strategy_config(existing_cfg, strategy_config=sc)
+                    res = repo.replace_with_snapshot(merged, ensure_ascii=False, indent=2)
+                    if not res.ok:
+                        raise RuntimeError(res.error or "config write failed")
+                    self.parent.log_output.append(
+                        f"[卡组] 已应用卡组 '{deck_data.get('name')}' 的策略配置"
+                    )
 
                 QMessageBox.information(
                     self,

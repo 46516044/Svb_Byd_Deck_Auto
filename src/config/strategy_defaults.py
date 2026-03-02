@@ -48,17 +48,17 @@ def build_default_effects() -> Dict[str, Any]:
 
     for card_name, target_type in DEFAULT_SPECIAL_CARD_TARGET_TYPES.items():
         effects.setdefault(card_name, {}).setdefault("on_play", []).append(
-            {"target_type": target_type}
+            {"op": "legacy_target_type", "target_type": target_type}
         )
 
     for card_name, actions in DEFAULT_EVOLVE_SPECIAL_ACTIONS.items():
         if "on_evolve" in actions:
             effects.setdefault(card_name, {}).setdefault("on_evolve", []).append(
-                {"action": actions["on_evolve"]}
+                {"op": "legacy_action", "action": actions["on_evolve"]}
             )
         if "on_super_evolve" in actions:
             effects.setdefault(card_name, {}).setdefault("on_super_evolve", []).append(
-                {"action": actions["on_super_evolve"]}
+                {"op": "legacy_action", "action": actions["on_super_evolve"]}
             )
 
     return effects

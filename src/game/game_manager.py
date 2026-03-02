@@ -82,14 +82,28 @@ class GameManager:
         else:
             logger.warning(f"未找到MNIST模型: {mnist_path}，将仅使用EasyOCR")
 
-        # 加载HP检测遮罩
+        # 加载HP检测遮罩（内部资源，不作为用户可编辑模板的一部分）
         self.hp_mask = None
-        mask_path = self.template_manager.get_template_path("hp_mask.png")
-        if os.path.exists(mask_path):
+        mask_candidates = [
+            resource_path(os.path.join("src", "masks", "hp_mask.png")),
+            # Backward compatibility (older layouts might ship it under templates).
+            self.template_manager.get_template_path("hp_mask.png"),
+        ]
+
+        mask_path = ""
+        for p in mask_candidates:
+            if p and os.path.exists(p):
+                mask_path = p
+                break
+
+        if mask_path:
             self.hp_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-            logger.info(f"HP遮罩已加载: {mask_path}, 尺寸: {self.hp_mask.shape}")
+            if self.hp_mask is not None:
+                logger.info(f"HP遮罩已加载: {mask_path}, 尺寸: {self.hp_mask.shape}")
+            else:
+                logger.warning(f"HP遮罩文件读取失败: {mask_path}，将不使用遮罩")
         else:
-            logger.warning(f"未找到HP遮罩文件: {mask_path}，将不使用遮罩")
+            logger.warning("未找到HP遮罩文件，将不使用遮罩")
 
         # 创建MNIST预处理器用于HP识别
         self.hp_preprocessor = MNISTPreprocessor(

@@ -13,10 +13,12 @@ from src.config.paths import get_config_path
 from src.config.settings import DEFAULT_CONFIG
 from src.config.constants_manager import ConstantsManager
 from src.config.io_guard import is_in_battle
+from src.config.persisted_config import prune_config_for_save
 from src.core.json_io import write_json_atomic
 from src.config.migrations import (
     migrate_high_priority_cards_priority_fields,
     migrate_strategy_effects_schema,
+    migrate_strategy_effects_to_ops,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,10 @@ class ConfigManager:
                 migrate_strategy_effects_schema(config)
             except Exception:
                 pass
+            try:
+                migrate_strategy_effects_to_ops(config)
+            except Exception:
+                pass
             self._save_config(config)
             return config
         
@@ -63,6 +69,8 @@ class ConfigManager:
                 if migrate_high_priority_cards_priority_fields(merged_config):
                     migrated = True
                 if migrate_strategy_effects_schema(merged_config):
+                    migrated = True
+                if migrate_strategy_effects_to_ops(merged_config):
                     migrated = True
                 if migrated:
                     self._save_config(merged_config)
@@ -96,7 +104,12 @@ class ConfigManager:
         if is_in_battle():
             logger.warning("[IO] battle context: saving config to disk: %s", self.config_file)
         try:
-            write_json_atomic(self.config_file, config, indent=2, ensure_ascii=False)
+            write_json_atomic(
+                self.config_file,
+                prune_config_for_save(config),
+                indent=2,
+                ensure_ascii=False,
+            )
             return True
         except Exception as e:
             logger.error(f"保存配置文件失败: {str(e)}")

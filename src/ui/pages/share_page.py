@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 from src.config.paths import get_config_path
 from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
+from src.ui.deck_io import apply_strategy_config, extract_strategy_config
 from src.utils.card_filename import parse_card_filename
 
 
@@ -162,10 +163,16 @@ class SharePage(QWidget):
                 except Exception:
                     config_data = {}
 
+            strategy_config = (
+                extract_strategy_config(config_data, cards=list(card_files or []))
+                if isinstance(config_data, dict)
+                else {}
+            )
+
             share_data = {
-                "version": 2,
+                "version": 3,
                 "cards": card_files,
-                "config": config_data,
+                "strategy_config": strategy_config,
                 "timestamp": int(time.time()),
             }
 
@@ -213,7 +220,7 @@ class SharePage(QWidget):
             share_data = json.loads(json_data)
 
             version = share_data.get("version", 1)
-            if version not in [1, 2]:
+            if version not in [1, 2, 3]:
                 raise ValueError("不支持的分享码版本")
 
             card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
@@ -242,14 +249,21 @@ class SharePage(QWidget):
                     self.parent.log_output.append(f"[分享] 未找到卡片: {card_file}")
 
             config_path = get_config_path()
-            if not isinstance(share_data.get("config"), dict):
-                raise ValueError("分享码缺少有效的config配置")
+            sc = share_data.get("strategy_config")
+            if not isinstance(sc, dict) and isinstance(share_data.get("config"), dict):
+                # Backward compatibility: version 2 share codes stored full config.
+                sc = extract_strategy_config(
+                    share_data["config"], cards=list(share_data.get("cards") or [])
+                )
 
-            res = ConfigRepository(config_path).replace_with_snapshot(
-                share_data["config"], indent=4, ensure_ascii=False
-            )
-            if not res.ok:
-                raise RuntimeError(res.error or "config write failed")
+            if isinstance(sc, dict) and sc:
+                repo = ConfigRepository(config_path)
+                existing, _, _ = repo.load_existing(allow_default_on_error=True)
+                existing_cfg = existing if isinstance(existing, dict) else {}
+                merged = apply_strategy_config(existing_cfg, strategy_config=sc)
+                res = repo.replace_with_snapshot(merged, indent=4, ensure_ascii=False)
+                if not res.ok:
+                    raise RuntimeError(res.error or "config write failed")
 
             if hasattr(self.parent, "config_page"):
                 self.parent.config_page.refresh_config_display()

@@ -1,0 +1,258 @@
+"""Effects registries (Trigger/Operation metadata) for Step3A.
+
+This module must stay lightweight because UI imports it.
+Do NOT import cv/u2/game modules here.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+
+CONTEXT_HAND_CARD = "hand_card"
+CONTEXT_FOLLOWER = "follower"
+
+
+TRIGGERS: List[Dict[str, Any]] = [
+    {
+        "id": "on_play",
+        "label": "出牌时",
+        "short": "play",
+        "context_kind": CONTEXT_HAND_CARD,
+    },
+    {
+        "id": "on_attack",
+        "label": "攻击时",
+        "short": "atk",
+        "context_kind": CONTEXT_FOLLOWER,
+    },
+    {
+        "id": "on_evolve",
+        "label": "进化时",
+        "short": "evo",
+        "context_kind": CONTEXT_FOLLOWER,
+    },
+    {
+        "id": "on_super_evolve",
+        "label": "超进化时",
+        "short": "sevo",
+        "context_kind": CONTEXT_FOLLOWER,
+    },
+]
+
+
+LEGACY_TARGET_TYPE_OPTIONS: List[Dict[str, Any]] = [
+    {"label": "打脸", "value": "enemy_player"},
+    {"label": "双破坏", "value": "double_enemy"},
+    {"label": "护盾/最高血", "value": "shield_or_highest_hp"},
+    {"label": "敌随从HP<=5", "value": "enemy_followers_hp_less_than_6"},
+    {
+        "label": "护盾/最高血(不消耗)",
+        "value": "shield_or_highest_hp_no_enemy_retrun_point",
+    },
+    {"label": "扫我方随从选项", "value": "scan_our_follower_to_choose"},
+]
+
+
+LEGACY_ACTION_OPTIONS: List[Dict[str, Any]] = [
+    {"label": "点敌随从HP<=3", "value": "attack_enemy_follower_hp_less_than_4"},
+    {
+        "label": "点2个敌随从HP<=3",
+        "value": "attack_two_enemy_followers_hp_less_than_4",
+    },
+    {
+        "label": "点2个敌随从HP最高",
+        "value": "attack_two_enemy_followers_hp_highest",
+    },
+    {
+        "label": "选我方随从(按进化优先)",
+        "value": "our_followers_with_evolution",
+    },
+]
+
+
+TARGET_KINDS: List[Dict[str, Any]] = [
+    {
+        "kind": "enemy_leader",
+        "label": "敌方玩家",
+        "selectors": [
+            {"id": "", "label": "敌方玩家", "params_schema": []},
+        ],
+    },
+    {
+        "kind": "enemy_follower",
+        "label": "敌方随从",
+        "selectors": [
+            {"id": "highest_hp", "label": "血量最高", "params_schema": []},
+            {
+                "id": "hp_leq",
+                "label": "HP<=X(取最大)",
+                "params_schema": [
+                    {
+                        "name": "max_hp",
+                        "label": "最大HP",
+                        "type": "int",
+                        "default": 3,
+                        "min": 0,
+                        "max": 99,
+                    }
+                ],
+            },
+            {
+                "id": "ward_or_highest_hp",
+                "label": "护盾优先/血量最高",
+                "params_schema": [],
+            },
+        ],
+    },
+    {
+        "kind": "friendly_follower",
+        "label": "我方随从",
+        "selectors": [
+            {
+                "id": "by_evolve_priority",
+                "label": "按进化优先级",
+                "params_schema": [
+                    {
+                        "name": "exclude_self",
+                        "label": "排除自身",
+                        "type": "bool",
+                        "default": True,
+                    }
+                ],
+            }
+        ],
+    },
+]
+
+
+OPERATIONS: List[Dict[str, Any]] = [
+    {
+        "op_id": "select_option",
+        "label": "选择选项",
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
+        "params_schema": [
+            {
+                "name": "index",
+                "label": "选项",
+                "type": "enum",
+                "default": 1,
+                "options": [
+                    {"label": "选项1", "value": 1},
+                    {"label": "选项2", "value": 2},
+                ],
+            }
+        ],
+    },
+    {
+        "op_id": "select_targets",
+        "label": "选择目标",
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
+        "params_schema": [
+            {
+                "name": "target",
+                "label": "目标",
+                "type": "target_spec",
+                "default": {"kind": "enemy_follower", "selector": "highest_hp", "params": {}},
+            },
+            {
+                "name": "count",
+                "label": "数量",
+                "type": "int",
+                "default": 1,
+                "min": 1,
+                "max": 5,
+            },
+            {
+                "name": "distinct_xy",
+                "label": "避免重复",
+                "type": "bool",
+                "default": True,
+            },
+            {
+                "name": "is_select_ui",
+                "label": "选择界面扫描",
+                "type": "bool",
+                "default": True,
+            },
+        ],
+    },
+    {
+        "op_id": "cancel_action",
+        "label": "取消/点空白",
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
+        "params_schema": [],
+    },
+    {
+        "op_id": "legacy_target_type",
+        "label": "旧: 特殊目标(target_type)",
+        "supported_context_kinds": [CONTEXT_HAND_CARD],
+        "params_schema": [
+            {
+                "name": "target_type",
+                "label": "类型",
+                "type": "enum",
+                "default": "enemy_player",
+                "options": list(LEGACY_TARGET_TYPE_OPTIONS),
+            }
+        ],
+    },
+    {
+        "op_id": "legacy_action",
+        "label": "旧: 进化特殊动作(action)",
+        "supported_context_kinds": [CONTEXT_FOLLOWER],
+        "params_schema": [
+            {
+                "name": "action",
+                "label": "动作",
+                "type": "enum",
+                "default": "attack_enemy_follower_hp_less_than_4",
+                "options": list(LEGACY_ACTION_OPTIONS),
+            }
+        ],
+    },
+]
+
+
+def get_triggers() -> List[Dict[str, Any]]:
+    return list(TRIGGERS)
+
+
+def get_trigger(trigger_id: str) -> Optional[Dict[str, Any]]:
+    tid = str(trigger_id or "")
+    for t in TRIGGERS:
+        if str(t.get("id")) == tid:
+            return dict(t)
+    return None
+
+
+def get_operations(*, context_kind: Optional[str] = None) -> List[Dict[str, Any]]:
+    if not context_kind:
+        return list(OPERATIONS)
+    ck = str(context_kind)
+    out: List[Dict[str, Any]] = []
+    for op in OPERATIONS:
+        kinds = op.get("supported_context_kinds")
+        if isinstance(kinds, list) and ck in [str(x) for x in kinds]:
+            out.append(op)
+    return out
+
+
+def get_operation(op_id: str) -> Optional[Dict[str, Any]]:
+    oid = str(op_id or "")
+    for op in OPERATIONS:
+        if str(op.get("op_id")) == oid:
+            return dict(op)
+    return None
+
+
+def get_target_kinds() -> List[Dict[str, Any]]:
+    return list(TARGET_KINDS)
+
+
+def get_target_kind(kind: str) -> Optional[Dict[str, Any]]:
+    k = str(kind or "")
+    for d in TARGET_KINDS:
+        if str(d.get("kind")) == k:
+            return dict(d)
+    return None

@@ -11,11 +11,10 @@ from src.config.card_priorities import get_high_priority_cards
 from src.config.game_constants import DEFAULT_ATTACK_TARGET, DEFAULT_ATTACK_RANDOM
 from src.game.game_actions import human_like_drag
 from src.game.policy.targets import TargetSelector
-from src.game.policy.effects import (
-    get_card_effect_steps,
-    parse_select_option,
-    parse_target_type,
-)
+from src.game.policy.effects import get_card_effect_steps
+
+from src.config.strategy_effects import normalize_effect_steps_to_ops, parse_select_option
+from src.game.effects import EffectEngine, HandCardContext
 
 if TYPE_CHECKING:
     from src.device.device_state import DeviceState
@@ -64,7 +63,7 @@ class CardPlaySpecialActions:
         high_priority_names = set(get_high_priority_cards(self.device_state.config).keys())
         card_mode_options = get_card_mode_options(self.device_state.config)
 
-        # Prefer config-driven effects.
+        # Prefer config-driven effects (Step3A op schema; legacy steps will be normalized).
         steps = get_card_effect_steps(
             self.device_state.config, card_name=str(cfg_key), trigger="on_play"
         )
@@ -72,54 +71,71 @@ class CardPlaySpecialActions:
             steps = get_card_effect_steps(
                 self.device_state.config, card_name=str(card_name), trigger="on_play"
             )
-        eff_select_option = parse_select_option(steps)
-        eff_target_type = parse_target_type(steps)
+        ops = normalize_effect_steps_to_ops(steps)
+
+        has_select_option = any(
+            isinstance(o, dict) and str(o.get("op") or "") == "select_option" for o in ops
+        )
+        legacy_target_type_step = None
+        for o in ops:
+            if not isinstance(o, dict) or str(o.get("op") or "") != "legacy_target_type":
+                continue
+            tt = o.get("target_type")
+            if isinstance(tt, str) and tt:
+                legacy_target_type_step = o
+                break
         
         # Priority (prefer config-driven effects):
-        # 1) effects.select_option (mode)
-        # 2) effects.target_type (special)
+        # 1) effects ops (select_option/select_targets/...)  [Step3A]
+        # 2) legacy_target_type (handled by legacy dispatcher)
         # 3) legacy card_mode_options (mode)
-        if eff_select_option in (1, 2):
-            mode_option = f"选项{eff_select_option}"
-            self.device_state.logger.info(f"检测到模式卡牌{card_name}，选项: {mode_option}")
-            
-            # 划出卡牌
-            human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-            time.sleep(0.2)  # 等待
-            
-            # 根据选择的选项执行相应的坐标点击操作
-            if eff_select_option == 1:
-                # 执行坐标点击操作：click_x, click_y = 748, 328
-                click_x, click_y = 748, 328
-                self.device_state.logger.info(f"执行选项1操作，点击坐标: ({click_x}, {click_y})")
-                # 等待卡牌动画完成
-                time.sleep(0.3)
-                # 执行点击
-                self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
-                # 等待点击响应
-                time.sleep(0.5)
-            elif eff_select_option == 2:
-                # 执行坐标点击操作：click_x, click_y = 724, 429
-                click_x, click_y = 724, 429
-                self.device_state.logger.info(f"执行选项2操作，点击坐标: ({click_x}, {click_y})")
-                # 等待卡牌动画完成
-                time.sleep(0.3)
-                # 执行点击
-                self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
-                # 等待点击响应
-                time.sleep(0.5)
-            # 空选项不需要处理，按正常流程执行
-
-        elif isinstance(eff_target_type, str) and eff_target_type:
-            # effects-driven special target type
-            target_type = eff_target_type
-            result = self._dispatch_play_target_type(
-                target_type, card_name, center_x, center_y, target_x
+        if ops:
+            # Legacy target_type is handled by the existing dispatcher.
+            # Preserve old precedence: if any supported new-engine ops exist,
+            # prefer the op engine and ignore legacy_target_type.
+            has_engine_ops = any(
+                isinstance(o, dict)
+                and str(o.get("op") or "")
+                in (
+                    "select_option",
+                    "select_targets",
+                    "cancel_action",
+                )
+                for o in ops
             )
-            if result is False:
-                self._should_not_consume_cost = True
-                self._should_remove_from_hand = True
-                return False
+
+            if (
+                legacy_target_type_step is not None
+                and (not has_select_option)
+                and (not has_engine_ops)
+            ):
+                target_type = str(legacy_target_type_step.get("target_type") or "")
+                result = self._dispatch_play_target_type(
+                    target_type, card_name, center_x, center_y, target_x
+                )
+                if result is False:
+                    self._should_not_consume_cost = True
+                    self._should_remove_from_hand = True
+                    return False
+            else:
+                # Normal play drag, then run post-play ops.
+                self._default_card_play(center_x, center_y, target_x)
+                time.sleep(0.2)
+
+                ctx = HandCardContext(
+                    device_state=self.device_state,
+                    card_name=str(card_name),
+                    cfg_key=str(cfg_key),
+                    card_center=(int(center_x), int(center_y)),
+                    play_target=(int(target_x), 400),
+                    card=dict(card or {}),
+                )
+                ops_to_run = [
+                    o
+                    for o in ops
+                    if isinstance(o, dict) and str(o.get("op") or "") != "legacy_target_type"
+                ]
+                EffectEngine.run_ops(ops_to_run, ctx=ctx, trigger_id="on_play")
 
         elif str(cfg_key) in card_mode_options or str(card_name) in card_mode_options:
             mode_option = card_mode_options.get(str(cfg_key)) or card_mode_options.get(
@@ -319,7 +335,8 @@ class CardPlaySpecialActions:
                     player_y = DEFAULT_ATTACK_TARGET[1] + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
                     self.device_state.logger.info("未检测到敌方随从，尝试检测敌方护符或者其他可选择目标")
                     time.sleep(0.5)  # 等待0.几秒
-                    can_choosetargets = self.device_state.game_manager.card_can_choose_target_like_amulet()
+                    gm = self.device_state.game_manager
+                    can_choosetargets = gm.card_can_choose_target_like_amulet() if gm is not None else None
                     if can_choosetargets:
                         for pos in can_choosetargets:
                             self.device_state.u2_device.click(pos[0], pos[1])

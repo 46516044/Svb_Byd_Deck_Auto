@@ -23,8 +23,10 @@ from src.config.io_guard import is_in_battle
 from src.config.migrations import (
     migrate_high_priority_cards_priority_fields,
     migrate_strategy_effects_schema,
+    migrate_strategy_effects_to_ops,
 )
 from src.config.paths import get_config_path
+from src.config.persisted_config import prune_config_for_save
 from src.config.settings import DEFAULT_CONFIG
 from src.core.json_io import write_json_atomic
 
@@ -64,6 +66,10 @@ def _normalize_and_migrate(user_config: Dict[str, Any]) -> Dict[str, Any]:
         pass
     try:
         migrate_strategy_effects_schema(cfg)
+    except Exception:
+        pass
+    try:
+        migrate_strategy_effects_to_ops(cfg)
     except Exception:
         pass
     return cfg
@@ -117,7 +123,12 @@ class ConfigRepository:
         if is_in_battle():
             logger.warning("[IO] battle context: saving config to disk: %s", self.config_path)
         try:
-            write_json_atomic(self.config_path, config, indent=indent, ensure_ascii=ensure_ascii)
+            write_json_atomic(
+                self.config_path,
+                prune_config_for_save(config),
+                indent=indent,
+                ensure_ascii=ensure_ascii,
+            )
             return ConfigWriteResult(ok=True, parse_ok=True, error=None)
         except Exception as e:
             return ConfigWriteResult(ok=False, parse_ok=True, error=str(e))
