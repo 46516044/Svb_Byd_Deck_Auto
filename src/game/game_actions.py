@@ -219,11 +219,16 @@ class GameActions:
                         if selected_follower:
                             break
                 else:
-                    # 从右往左：直接选当前可攻击随从中的最右者
-                    for fx, fy, ft, fname in all_followers:
-                        if ft in ("yellow", "green"):
+                    # 从右往左，但类型优先级固定为：突进(yellow) > 疾驰(green)
+                    # 这样在有护盾时会优先消耗突进攻击。
+                    for type_priority in ("yellow", "green"):
+                        for fx, fy, ft, fname in all_followers:
+                            if ft != type_priority:
+                                continue
                             selected_follower = (fx, fy)
                             selected_follower_name = fname
+                            break
+                        if selected_follower:
                             break
 
                 if selected_follower:

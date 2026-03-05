@@ -1158,53 +1158,121 @@ class GameManager:
         if with_names and sift_results:
             per_shot_followers = [attach_names(f) for f in per_shot_followers]
 
-        # 选一帧作为基准（结果最多；若相同则名字更多；再相同则可攻击随从更多）
-        def score(followers):
-            total = len(followers)
-            named_cnt = sum(1 for it in followers if it[3])
-            atk_cnt = sum(1 for it in followers if it[2] in ("green", "yellow"))
-            return (total, named_cnt, atk_cnt)
-
-        anchor = max(per_shot_followers, key=score) if per_shot_followers else []
-
-        # 汇总：以anchor为骨架，补全名字/升级类型/补齐漏检随从
-        merged = list(anchor)
         x_match_thresh = 54
+        scan_support_required = None
 
-        def merge_one(candidate):
-            nonlocal merged
-            for x, y, t, name in candidate:
-                matched_idx = None
-                for i, (mx, my, mt, mname) in enumerate(merged):
-                    if abs(x - mx) < x_match_thresh:
-                        matched_idx = i
-                        break
+        if not with_names:
+            # 攻击阶段(无命名)使用保守汇总：
+            # - 多帧按槽位聚类
+            # - 要求跨帧支持(>=2/3帧)
+            # - 限制最多5个随从，避免把动画残影并进结果
+            support_required = 2 if len(valid_shots) >= 3 else 1
+            scan_support_required = support_required
+            clusters = []
 
-                if matched_idx is None:
-                    merged.append((x, y, t, name))
+            for shot_idx, shot_followers in enumerate(per_shot_followers):
+                for x, y, t, _ in shot_followers:
+                    x_i = int(x)
+                    y_i = int(y)
+                    t_s = str(t or "normal")
+
+                    matched = None
+                    for c in clusters:
+                        if abs(x_i - int(c["x"])) < x_match_thresh:
+                            matched = c
+                            break
+
+                    if matched is None:
+                        clusters.append(
+                            {
+                                "x": float(x_i),
+                                "items": [(x_i, y_i, t_s)],
+                                "shots": {int(shot_idx)},
+                            }
+                        )
+                        continue
+
+                    items = matched["items"]
+                    n = len(items)
+                    matched["x"] = (float(matched["x"]) * n + float(x_i)) / (n + 1)
+                    items.append((x_i, y_i, t_s))
+                    matched["shots"].add(int(shot_idx))
+
+            merged_meta = []
+            for c in clusters:
+                support = len(c.get("shots") or ())
+                if support < support_required:
                     continue
 
-                mx, my, mt, mname = merged[matched_idx]
-                # 类型升级：green > yellow > normal
-                if _type_priority(t) > _type_priority(mt):
-                    mt = t
-                # 名字补全
-                if (not mname) and name:
-                    mname = name
-                merged[matched_idx] = (mx, my, mt, mname)
+                items = list(c.get("items") or [])
+                if not items:
+                    continue
 
-        for shot_followers in per_shot_followers:
-            if shot_followers is anchor:
-                continue
-            merge_one(shot_followers)
+                avg_x = int(round(sum(it[0] for it in items) / len(items)))
+                avg_y = int(round(sum(it[1] for it in items) / len(items)))
+                best_type = max((it[2] for it in items), key=_type_priority)
+                merged_meta.append((avg_x, avg_y, best_type, None, support))
 
-        # 最终按x聚类去重一次，并强制校准y坐标
-        merged = _dedup_by_x(merged, x_thresh=x_match_thresh)
-        merged = [
-            (int(x), 399 + random.randint(-7, 7), t, name)
-            for (x, y, t, name) in merged
-        ]
-        merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
+            # Shadowverse场上随从上限为5，超出时保留“跨帧支持更强”的候选。
+            if len(merged_meta) > 5:
+                merged_meta = sorted(
+                    merged_meta,
+                    key=lambda it: (int(it[4]), _type_priority(it[2]), int(it[0])),
+                    reverse=True,
+                )[:5]
+
+            merged = [
+                (int(x), 399 + random.randint(-7, 7), t, name)
+                for (x, y, t, name, support) in merged_meta
+            ]
+            merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
+        else:
+            # 选一帧作为基准（结果最多；若相同则名字更多；再相同则可攻击随从更多）
+            def score(followers):
+                total = len(followers)
+                named_cnt = sum(1 for it in followers if it[3])
+                atk_cnt = sum(1 for it in followers if it[2] in ("green", "yellow"))
+                return (total, named_cnt, atk_cnt)
+
+            anchor = max(per_shot_followers, key=score) if per_shot_followers else []
+
+            # 汇总：以anchor为骨架，补全名字/升级类型/补齐漏检随从
+            merged = list(anchor)
+
+            def merge_one(candidate):
+                nonlocal merged
+                for x, y, t, name in candidate:
+                    matched_idx = None
+                    for i, (mx, my, mt, mname) in enumerate(merged):
+                        if abs(x - mx) < x_match_thresh:
+                            matched_idx = i
+                            break
+
+                    if matched_idx is None:
+                        merged.append((x, y, t, name))
+                        continue
+
+                    mx, my, mt, mname = merged[matched_idx]
+                    # 类型升级：green > yellow > normal
+                    if _type_priority(t) > _type_priority(mt):
+                        mt = t
+                    # 名字补全
+                    if (not mname) and name:
+                        mname = name
+                    merged[matched_idx] = (mx, my, mt, mname)
+
+            for shot_followers in per_shot_followers:
+                if shot_followers is anchor:
+                    continue
+                merge_one(shot_followers)
+
+            # 最终按x聚类去重一次，并强制校准y坐标
+            merged = _dedup_by_x(merged, x_thresh=x_match_thresh)
+            merged = [
+                (int(x), 399 + random.randint(-7, 7), t, name)
+                for (x, y, t, name) in merged
+            ]
+            merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
         try:
             debug_mode = bool(
                 isinstance(getattr(self.device_state, "config", None), dict)
@@ -1212,6 +1280,16 @@ class GameManager:
             )
         except Exception:
             debug_mode = False
+
+        if (debug_flag or debug_mode) and (not with_names):
+            try:
+                shot_counts = [len(s) for s in (per_shot_followers or [])]
+                self.device_state.logger.info(
+                    "我方随从多帧汇总(攻击阶段): "
+                    f"shots={shot_counts}, support_required={scan_support_required}, merged={len(merged)}"
+                )
+            except Exception:
+                pass
 
         if debug_flag or debug_mode:
             self.device_state.logger.info(f"我方当前场上随从: {merged}")
