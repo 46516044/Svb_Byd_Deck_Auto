@@ -10,6 +10,7 @@ import datetime
 import logging
 import threading
 import queue
+import random
 import numpy as np
 import cv2
 from typing import Any, Optional, List, Dict, TYPE_CHECKING
@@ -21,6 +22,13 @@ from src.core.run_control import PauseRequested, StopRequested
 
 if TYPE_CHECKING:
     from src.game.game_manager import GameManager
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
 
 
 class _U2DeviceProxy:
@@ -113,7 +121,10 @@ class DeviceState:
         # 命令和通知
         self.command_queue = queue.Queue()
         self.last_detected_button: Optional[str] = None
+        self.current_stage_key: Optional[str] = None
+        self.last_stage_change_time = time.time()
         self.has_clicked_plus_this_round = False
+        self.stop_after_current_match = False
 
         # 额外费用点状态管理
         self.extra_cost_used_early = False  # 1-5回合是否已使用额外费用点
@@ -131,13 +142,18 @@ class DeviceState:
 
         # 超时检测相关属性
         self.last_activity_time = time.time()  # 最后一次活动时间
-        self.last_match_time = time.time()  # 最后一次战斗时间
 
         # 从配置中读取超时设置
         auto_restart_config = config.get("auto_restart", {})
         self.auto_restart_enabled = auto_restart_config.get("enabled", True)
-        self.output_timeout = auto_restart_config.get("output_timeout", 300)
-        self.match_timeout = auto_restart_config.get("match_timeout", 900)
+        stage_timeout_raw = auto_restart_config.get("stage_timeout", 300)
+        self.stage_timeout = max(30, _safe_int(stage_timeout_raw, 300))
+        self.auto_restart_max_restarts = max(
+            1,
+            _safe_int(auto_restart_config.get("max_restarts", 3), 3),
+        )
+        self.auto_restart_trigger_count = 0
+        self.stop_reason = ""
 
         # 设备对象
         # Kept as `Any` (not Optional) to avoid pervasive None-check noise.
@@ -247,12 +263,75 @@ class DeviceState:
         self.script_paused = False
         self.pause_event.clear()
         if was_paused:
+            now = time.time()
+            self.last_stage_change_time = now
+            self.update_activity_time()
             try:
                 self.logger.info(
                     f"[控制] 收到恢复请求{(' - ' + reason) if reason else ''}"
                 )
             except Exception:
                 pass
+
+    def record_stage_detection(self, stage_key: Any) -> None:
+        """Record detected UI stage; timeout only advances on stage changes."""
+
+        key = str(stage_key or "")
+        if not key:
+            return
+
+        now = time.time()
+        self.update_activity_time()
+
+        if key != self.current_stage_key:
+            self.current_stage_key = key
+            self.last_stage_change_time = now
+
+    def click_blank_before_restart(self) -> bool:
+        """Try a single blank click before auto-restart."""
+
+        try:
+            from src.config.game_constants import BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
+        except Exception:
+            return False
+
+        if self.u2_device is None:
+            return False
+
+        try:
+            self.logger.info("[自动重启] 重启前尝试点击空白区域")
+            self.u2_device.click(
+                int(BLANK_CLICK_POSITION[0])
+                + random.randint(-int(BLANK_CLICK_RANDOM), int(BLANK_CLICK_RANDOM)),
+                int(BLANK_CLICK_POSITION[1])
+                + random.randint(-int(BLANK_CLICK_RANDOM), int(BLANK_CLICK_RANDOM)),
+            )
+            self.sleep(0.6)
+            return True
+        except PauseRequested:
+            return False
+        except StopRequested:
+            return False
+        except Exception as e:
+            self.logger.debug(f"[自动重启] 空白点击尝试失败: {e}")
+            return False
+
+    def request_stop(self, *, reason: str = "manual") -> None:
+        """Request script stop without forcing app shutdown by default."""
+
+        self.stop_reason = str(reason or "manual")
+        self.script_running = False
+
+        # Ensure paused loops can unwind quickly.
+        self.script_paused = False
+        self.pause_event.clear()
+
+        try:
+            self.logger.info(
+                f"[控制] 收到停止请求{(' - ' + self.stop_reason) if self.stop_reason else ''}"
+            )
+        except Exception:
+            pass
 
     def check_interrupt(self) -> None:
         """Raise if paused/stopped so callers can unwind quickly."""
@@ -546,35 +625,48 @@ class DeviceState:
         """更新最后活动时间"""
         self.last_activity_time = time.time()
 
-    def update_match_time(self):
-        """更新最后战斗时间"""
-        self.last_match_time = time.time()
-
     def check_timeout_and_restart(self) -> bool:
-        """检查超时并重启模拟器"""
+        """检查超时并重启游戏应用"""
         # 如果自动重启功能未启用，直接返回
         if not self.auto_restart_enabled:
             return False
 
+        # 暂停/停止状态下，不触发自动重启。
+        if not getattr(self, "script_running", True) or self.is_paused():
+            return False
+
         current_time = time.time()
 
-        # 检查5分钟无输出超时
-        output_timeout_elapsed = current_time - self.last_activity_time
-        if output_timeout_elapsed >= self.output_timeout:
-            self.logger.warning(
-                f"检测到{self.output_timeout//60}分钟无输出，准备重启模拟器"
-            )
-            return self.restart_emulator()
+        trigger_reason = ""
 
-        # 检查10分钟无新战斗超时
-        match_timeout_elapsed = current_time - self.last_match_time
-        if match_timeout_elapsed >= self.match_timeout:
-            self.logger.warning(
-                f"检测到{self.match_timeout//60}分钟无新战斗，准备重启模拟器"
-            )
-            return self.restart_emulator()
+        # 检查无新阶段超时
+        stage_timeout_elapsed = current_time - self.last_stage_change_time
+        if stage_timeout_elapsed >= self.stage_timeout:
+            trigger_reason = f"{self.stage_timeout//60}分钟无新阶段"
 
-        return False
+        if not trigger_reason:
+            return False
+
+        # 达到自动重启次数上限后，再次触发则停止脚本。
+        if self.auto_restart_trigger_count >= self.auto_restart_max_restarts:
+            self.logger.error(
+                f"自动重启已达上限({self.auto_restart_max_restarts}次)，再次触发[{trigger_reason}]，停止脚本"
+            )
+            self.request_stop(reason="auto_restart_limit")
+            return True
+
+        self.auto_restart_trigger_count += 1
+        self.logger.warning(
+            f"检测到{trigger_reason}，准备自动重启({self.auto_restart_trigger_count}/{self.auto_restart_max_restarts})"
+        )
+
+        # 先尝试一次空白点击，给结算/弹窗一个恢复机会。
+        self.click_blank_before_restart()
+
+        restarted = self.restart_emulator()
+        if not restarted:
+            self.logger.warning("自动重启执行失败，将在后续循环继续检查")
+        return True
 
     def restart_emulator(self) -> bool:
         """重启所有包名包含 'Shadowverse' 或 'com.netease.yzs' 的应用，不重启模拟器"""
@@ -636,8 +728,9 @@ class DeviceState:
                 f"已重启所有包含 'Shadowverse' 或 'com.netease.yzs' 的应用: {target_pkgs}"
             )
             # 重置超时计时器
+            self.current_stage_key = None
+            self.last_stage_change_time = time.time()
             self.update_activity_time()
-            self.update_match_time()
             return True
         except Exception as e:
             self.logger.error(f"重启应用过程中出错: {e}")
@@ -681,7 +774,6 @@ class DeviceState:
         self.last_round_available_cost = 0
         self.cost_history.clear()
 
-        self.update_match_time()
         self.logger.info(f"检测到新对战开始 - 第{self.current_run_matches}场对战")
         # 将对战次数信息发送到日志队列，供UI界面显示
         if self.log_queue is not None:

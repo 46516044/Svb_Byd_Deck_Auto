@@ -29,6 +29,16 @@ _DROP_GAME_KEYS = {
     "cost_recognition",  # currently unused (cost comes from SIFT templates)
 }
 
+_DROP_AUTO_RESTART_KEYS = {
+    "output_timeout",  # legacy key; replaced by stage_timeout
+    "match_timeout",  # legacy key; removed
+}
+
+_DROP_RUN_SETTINGS_KEYS = {
+    "max_battle_count",  # removed
+    "force_close",  # removed
+}
+
 
 def prune_config_for_save(config: Dict[str, Any]) -> Dict[str, Any]:
     """Return a pruned copy of config for persistence to disk."""
@@ -49,5 +59,22 @@ def prune_config_for_save(config: Dict[str, Any]) -> Dict[str, Any]:
         # If game becomes empty (unlikely), drop it.
         if not game:
             cfg.pop("game", None)
+
+    auto_restart = cfg.get("auto_restart")
+    if isinstance(auto_restart, dict):
+        for k in _DROP_AUTO_RESTART_KEYS:
+            auto_restart.pop(k, None)
+
+    run_settings = cfg.get("run_settings")
+    if isinstance(run_settings, dict):
+        for k in _DROP_RUN_SETTINGS_KEYS:
+            run_settings.pop(k, None)
+
+        try:
+            run_settings["max_run_duration"] = max(
+                0, int(run_settings.get("max_run_duration", 0) or 0)
+            )
+        except Exception:
+            run_settings["max_run_duration"] = 0
 
     return cfg

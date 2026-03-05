@@ -22,6 +22,23 @@ class GameStateMachine:
     def process(self, device_state: "DeviceState", game_manager: "GameManager", skip_buttons: List[str]):
         """Process one frame of the game loop."""
 
+        out_of_match_keys = {
+            "war",
+            "mainPage",
+            "MuMuPage",
+            "LoginPage",
+            "enterGame",
+            "dailyCard",
+            "rank",
+            "missionCompleted",
+            "rankUp",
+            "groupUp",
+            "backTitle",
+            "gala_war",
+            "gala_Ok",
+            "gala_index",
+        }
+
         # Allow immediate pause/stop to unwind.
         device_state.check_interrupt()
 
@@ -37,7 +54,6 @@ class GameStateMachine:
         gray_screenshot = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
 
         # 检查其他按钮
-        button_detected = False
         templates = game_manager.template_manager.templates
 
         for key, template_info in templates.items():
@@ -48,8 +64,22 @@ class GameStateMachine:
                 gray_screenshot, template_info
             )
             if max_val >= template_info["threshold"] and max_loc is not None:
-                # 更新活动时间（检测到任何按钮都算作活动）
-                device_state.update_activity_time()
+                # 记录阶段（仅在阶段变化时刷新“无新阶段”计时）。
+                device_state.record_stage_detection(key)
+
+                # 命中明显局外页面时，结束当前对战统计。
+                if key in out_of_match_keys and getattr(device_state, "in_match", False):
+                    device_state.end_current_match()
+
+                # 达到总时长后：仅允许当前对战结束，不再开启下一场。
+                if (
+                    getattr(device_state, "stop_after_current_match", False)
+                    and key in out_of_match_keys
+                    and not getattr(device_state, "in_match", False)
+                ):
+                    device_state.logger.info("达到脚本总时长上限，当前对战结束后停止脚本")
+                    device_state.request_stop(reason="runtime_limit")
+                    break
 
                 if key in skip_buttons:
                     continue
@@ -183,8 +213,6 @@ class GameStateMachine:
                             game_manager.game_actions.perform_fullPlus_actions()
                         else:
                             game_manager.game_actions.perform_full_actions()
-                        if device_state.current_round_count == 15:
-                            device_state.restart_emulator()
 
                     # 记录当前回合的费用使用情况（在回合结束时）
                     device_state.last_round_available_cost = (
@@ -218,7 +246,6 @@ class GameStateMachine:
                         center_y + random.randint(-2, 2),
                     )
                     device_state.logger.info("结束回合")
-                    button_detected = True
                     if key != device_state.last_detected_button:
                         device_state.logger.debug(
                             f"检测到按钮并处理: {template_info['name']} "
@@ -234,7 +261,6 @@ class GameStateMachine:
                     center_x + random.randint(-2, 2),
                     center_y + random.randint(-2, 2),
                 )
-                button_detected = True
 
                 if key != device_state.last_detected_button:
                     device_state.logger.debug(

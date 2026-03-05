@@ -51,7 +51,7 @@ def _command_listener(
             if cmd == "e":
                 logger.info("收到退出命令，正在停止所有设备...")
                 for device_state in device_manager.device_states.values():
-                    device_state.script_running = False
+                    device_state.request_stop(reason="user_exit")
                 break
             if cmd == "s":
                 logger.info("显示所有设备统计信息:")

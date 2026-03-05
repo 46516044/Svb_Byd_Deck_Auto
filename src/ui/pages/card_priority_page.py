@@ -483,28 +483,6 @@ class CardPriorityPage(QWidget):
         # 重新加载卡牌优先级设置
         self.load_card_priority_settings()
 
-    def get_current_config(self):
-        # 仅返回通用参数（卡牌优先级已拆分至 CardPriorityPage，完整配置可从磁盘读取）
-        config = {
-            "game": {
-                "human_like_drag_duration_range": [
-                    float(self.min_drag_input.text()),
-                    float(self.max_drag_input.text()),
-                ]
-            },
-            "auto_restart": {
-                "enabled": self.restart_enabled_checkbox.isChecked(),
-                "output_timeout": int(self.restart_time_input.text()) * 60,
-                "match_timeout": 900,
-            },
-            "run_settings": {
-                "max_run_duration": int(self.run_duration_input.text()) * 60,
-                "max_battle_count": int(self.battle_count_input.text()),
-                "force_close": True,
-            },
-        }
-        return config
-
     def save_config(self):
         try:
             if getattr(self.parent_widget, "is_script_running", lambda: False)():

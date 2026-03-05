@@ -49,8 +49,11 @@ DEFAULT_CONFIG = {
     "extra_templates_dir": "extra_templates",
     "auto_restart": {
         "enabled": True,
-        "output_timeout": 300,  # 5分钟无输出超时（秒）
-        "match_timeout": 1200    # 20分钟无新战斗超时（秒）
+        "stage_timeout": 300,   # 5分钟无新阶段超时（秒）
+        "max_restarts": 3,       # 自动重启次数上限（再次触发则停脚本）
+    },
+    "run_settings": {
+        "max_run_duration": 0,  # 脚本最大运行时长（秒），0表示不限制
     },
     "devices": [
         {

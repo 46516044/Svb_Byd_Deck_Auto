@@ -134,16 +134,28 @@ class GameActions:
             shield_targets = self._scan_shield_targets()
             shield_detected = bool(shield_targets)
 
+        def _strict_refresh_attack_followers(*, with_names: bool = False, retries: int = 1):
+            """Attack-critical scan: 3-frame merge + retry, no stale-cache fallback."""
 
-        # 攻击阶段：从右往左优先处理（新召唤随从通常出现在右侧）
-        # `AttackPhase` 可能已经预刷新；否则这里做一次快速刷新。
-        if all_followers is None:
-            all_followers = self._refresh_our_followers(
+            return self._refresh_our_followers(
                 sort_desc=True,
-                extra_shots=0,
-                retries=1,
-                with_names=False,
+                extra_shots=2,
+                retries=max(1, int(retries)),
+                with_names=bool(with_names),
+                allow_cached_fallback=False,
             )
+
+        def _has_attack_followers(followers: Any) -> bool:
+            try:
+                return any(len(f) > 2 and f[2] in ("green", "yellow") for f in (followers or []))
+            except Exception:
+                return False
+
+
+        # 攻击阶段：从右往左优先处理（新召唤随从通常出现在右侧）。
+        # 默认使用严格扫描，避免单帧误判导致提前结束回合。
+        if all_followers is None:
+            all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
         else:
             # Ensure expected order (right -> left)
             try:
@@ -154,6 +166,7 @@ class GameActions:
                 )
             except Exception:
                 all_followers = list(all_followers or [])
+        all_followers = list(all_followers or [])
 
         # Structured observation log (no extra recognition).
         enemy_positions = enemy_check if isinstance(enemy_check, (list, tuple)) else []
@@ -161,56 +174,93 @@ class GameActions:
 
         attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
         if not attackable:
+            self.device_state.logger.info("首次未检测到可攻击随从，进行确认重扫")
+            all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
+            attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
+        if not attackable:
             self.device_state.logger.info("未检测到可进行攻击的随从，跳过攻击操作")
             return
 
         if shield_detected:
-            max_attempts = 5  # 最多循环5次
+            max_attempts = 6  # 最多循环6次
             attempt_count = 0
 
             while shield_targets and attempt_count < max_attempts:
                 attempt_count += 1
-                self.device_state.logger.info(f"破盾尝试第{attempt_count}/5次")
+                self.device_state.logger.info(f"破盾尝试第{attempt_count}/{max_attempts}次")
                 current_shield = shield_targets[-1]
                 shield_x, shield_y = current_shield
 
-                closest_follower = None
-                closest_follower_name = None
-                for type_priority in ["yellow", "green"]:
-                    type_followers = [(x, y, name) for x, y, t, name in all_followers if t == type_priority]
-                    if not type_followers:
-                        continue
+                selected_follower = None
+                selected_follower_name = None
 
-                    # 选择离护盾最近的该类型随从
-                    min_distance = float('inf')
-                    for fx, fy, fname in type_followers:
-                        dist = ((fx - shield_x) ** 2 + (fy - shield_y) ** 2) ** 0.5
-                        if dist < min_distance:
-                            min_distance = dist
-                            closest_follower = (fx, fy)
-                            closest_follower_name = fname
-                    if closest_follower:
-                        type_name = type_name_map.get(type_priority, type_priority)
-                        if closest_follower_name:
-                            self.device_state.logger.info(f"使用{type_name}随从[{closest_follower_name}]攻击护盾")
-                        else:
-                            self.device_state.logger.info(f"使用{type_name}随从攻击护盾")
-                        human_like_drag(self.device_state.u2_device, closest_follower[0], closest_follower[1], shield_x, shield_y, duration=random.uniform(*settings.get_human_like_drag_duration_range()))
-                        self.device_state.sleep(1)
-                        _run_on_attack_effects(closest_follower_name, closest_follower)
-                        break  # 已攻击则跳出类型循环
+                # 护盾阶段默认改为“从右往左”出手，避免最近者策略导致左侧先手。
+                # 保留最近者逻辑，必要时可切换。
+                use_nearest_shield_attacker = False
 
-                if not closest_follower:
+                if use_nearest_shield_attacker:
+                    for type_priority in ["yellow", "green"]:
+                        type_followers = [
+                            (x, y, name)
+                            for x, y, t, name in all_followers
+                            if t == type_priority
+                        ]
+                        if not type_followers:
+                            continue
+
+                        # 选择离护盾最近的该类型随从（保留旧逻辑）
+                        min_distance = float("inf")
+                        for fx, fy, fname in type_followers:
+                            dist = ((fx - shield_x) ** 2 + (fy - shield_y) ** 2) ** 0.5
+                            if dist < min_distance:
+                                min_distance = dist
+                                selected_follower = (fx, fy)
+                                selected_follower_name = fname
+                        if selected_follower:
+                            break
+                else:
+                    # 从右往左：直接选当前可攻击随从中的最右者
+                    for fx, fy, ft, fname in all_followers:
+                        if ft in ("yellow", "green"):
+                            selected_follower = (fx, fy)
+                            selected_follower_name = fname
+                            break
+
+                if selected_follower:
+                    selected_type = None
+                    try:
+                        for fx, fy, ft, _ in all_followers:
+                            if int(fx) == int(selected_follower[0]) and int(fy) == int(selected_follower[1]):
+                                selected_type = ft
+                                break
+                    except Exception:
+                        selected_type = None
+
+                    type_name = type_name_map.get(selected_type, selected_type or "可攻击")
+                    if selected_follower_name:
+                        self.device_state.logger.info(
+                            f"使用{type_name}随从[{selected_follower_name}]攻击护盾"
+                        )
+                    else:
+                        self.device_state.logger.info(f"使用{type_name}随从攻击护盾")
+
+                    human_like_drag(
+                        self.device_state.u2_device,
+                        selected_follower[0],
+                        selected_follower[1],
+                        shield_x,
+                        shield_y,
+                        duration=random.uniform(*settings.get_human_like_drag_duration_range()),
+                    )
+                    self.device_state.sleep(1)
+                    _run_on_attack_effects(selected_follower_name, selected_follower)
+
+                if not selected_follower:
                     self.device_state.logger.info("没有可用的突进/疾驰随从攻击护盾")
                     return # 退出循环
 
-                # 攻击后更新随从信息（快速单帧刷新；不做SIFT命名）
-                all_followers = self._refresh_our_followers(
-                    sort_desc=True,
-                    extra_shots=0,
-                    retries=0,
-                    with_names=False,
-                )
+                # 攻击后更新随从信息（严格重扫，减少漏检）
+                all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
 
                 # 检查更新后的随从是否还有突进/疾驰能力，没有则直接返回
                 has_attack_followers = False
@@ -221,8 +271,11 @@ class GameActions:
                         break
 
                 if not has_attack_followers:
-                    self.device_state.logger.info("攻击后没有可用的突进/疾驰随从，停止破盾")
-                    return
+                    self.device_state.logger.info("护盾阶段检测不到可攻击随从，进行确认重扫")
+                    all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
+                    if not _has_attack_followers(all_followers):
+                        self.device_state.logger.info("攻击后没有可用的突进/疾驰随从，停止破盾")
+                        return
 
                 # 重新扫描护盾，检查当前护盾是否还在
                 shield_targets = self._scan_shield_targets()
@@ -241,12 +294,15 @@ class GameActions:
                 return
 
         # 没有护盾，使用绿色随从攻击敌方主人（从右往左，每次攻击后快速重扫）
-        max_green_attacks = 12
+        max_green_attacks = 10
         green_attack_count = 0
         while green_attack_count < max_green_attacks:
             green_followers = [(x, y, name) for x, y, t, name in all_followers if t == "green"]
             if not green_followers:
-                break
+                all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
+                green_followers = [(x, y, name) for x, y, t, name in all_followers if t == "green"]
+                if not green_followers:
+                    break
 
             x, y, name = green_followers[0]  # 已按x从右到左排序
             if name:
@@ -268,21 +324,19 @@ class GameActions:
 
             _run_on_attack_effects(name, (x, y))
 
-            all_followers = self._refresh_our_followers(
-                sort_desc=True,
-                extra_shots=0,
-                retries=0,
-                with_names=False,
-            )
+            all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
 
         # 使用黄色突进随从攻击敌方血量最小的随从（从右往左，每次攻击后快速重扫）
         if not shield_detected:
-            max_yellow_attacks = 12
+            max_yellow_attacks = 10
             yellow_attack_count = 0
             while yellow_attack_count < max_yellow_attacks:
                 yellow_followers = [(x, y, name) for x, y, t, name in all_followers if t == "yellow"]
                 if not yellow_followers:
-                    break
+                    all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
+                    yellow_followers = [(x, y, name) for x, y, t, name in all_followers if t == "yellow"]
+                    if not yellow_followers:
+                        break
 
                 x, y, name = yellow_followers[0]  # 已按x从右到左排序
 
@@ -320,13 +374,8 @@ class GameActions:
                 except Exception as e:
                     self.device_state.logger.warning(f"突进敌方最小血量随从失败: {str(e)}")
 
-                # 攻击后快速重扫（从右往左），避免漏掉新突进/疾驰随从
-                all_followers = self._refresh_our_followers(
-                    sort_desc=True,
-                    extra_shots=0,
-                    retries=0,
-                    with_names=False,
-                )
+                # 攻击后严格重扫（从右往左），避免漏掉新突进/疾驰随从
+                all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
 
     def perform_evolution_actions(self):
         """执行进化/超进化操作"""
@@ -1688,6 +1737,7 @@ class GameActions:
         retries: int = 1,
         debug_flag: bool = False,
         with_names: bool = True,
+        allow_cached_fallback: bool = True,
     ):
         """统一的“扫描并刷新我方随从”入口。
 
@@ -1780,7 +1830,11 @@ class GameActions:
             if attempt < retries:
                 time.sleep(random.uniform(0.12, 0.22))
 
-        # Fallback: return cached positions, but ensure order matches caller expectations.
+        # Fallback: optionally return cached positions (for non-critical paths).
+        if not allow_cached_fallback:
+            return []
+
+        # Return cached positions, ensuring order matches caller expectations.
         try:
             cached = self.follower_manager.get_positions() or []
         except Exception:
