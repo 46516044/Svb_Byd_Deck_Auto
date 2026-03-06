@@ -10,6 +10,7 @@ from src.config.card_priorities import get_evolve_priority_cards
 from src.config import settings
 from src.game.policy.targets import TargetSelector
 from src.game.policy.effects import get_card_effect_steps
+from src.utils.card_filename import normalize_config_key
 
 from src.config.strategy_effects import normalize_effect_steps_to_ops
 from src.game.effects import EffectEngine, FollowerContext
@@ -181,11 +182,16 @@ class EvolutionSpecialActions:
 
             target_x, target_y, target_type, target_name = target
             target_priority = 999
-            if target_name and target_name in evolve_priority_cards:
+            if target_name:
                 try:
-                    target_priority = int(
-                        evolve_priority_cards[target_name].get("priority", 999)
-                    )
+                    cfg = None
+                    target_key = normalize_config_key(str(target_name or ""))
+                    for k, v in dict(evolve_priority_cards or {}).items():
+                        if normalize_config_key(str(k or "")) == target_key:
+                            cfg = v
+                            break
+                    if isinstance(cfg, dict):
+                        target_priority = int(cfg.get("priority", 999))
                 except Exception:
                     target_priority = 999
 

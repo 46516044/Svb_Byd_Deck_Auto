@@ -7,7 +7,7 @@ executor/engine modules.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 @dataclass
@@ -26,6 +26,9 @@ class HandCardContext:
 
     # Full recognized card payload (optional)
     card: Dict[str, Any] = field(default_factory=dict)
+
+    # Runtime diagnostics for select_targets failures (used by caller policy)
+    select_targets_fail_kinds: List[str] = field(default_factory=list)
 
 
 @dataclass

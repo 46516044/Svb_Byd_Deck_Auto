@@ -125,6 +125,7 @@ class DeviceState:
         self.last_stage_change_time = time.time()
         self.has_clicked_plus_this_round = False
         self.stop_after_current_match = False
+        self.mulligan_done_this_match = False
 
         # 额外费用点状态管理
         self.extra_cost_used_early = False  # 1-5回合是否已使用额外费用点
@@ -384,8 +385,15 @@ class DeviceState:
 
         self._resume_advance_round_pending = False
 
-        # Only advance turn counter inside a match.
-        if getattr(self, "in_match", False):
+        # Only advance turn counter inside an active battle phase.
+        # In pre-battle pages (war/decision), do not advance turn.
+        phase_key = str(getattr(self, "current_stage_key", "") or "")
+        should_advance_turn = bool(
+            getattr(self, "in_match", False)
+            and phase_key not in {"war", "decision"}
+        )
+
+        if should_advance_turn:
             try:
                 prev = int(getattr(self, "current_round_count", 1) or 1)
             except Exception:
@@ -418,9 +426,13 @@ class DeviceState:
             pass
 
         try:
-            if getattr(self, "in_match", False):
+            if should_advance_turn:
                 self.logger.info(
                     f"[控制] 恢复后默认本回合已结束：turn -> {self.current_round_count}"
+                )
+            elif getattr(self, "in_match", False):
+                self.logger.info(
+                    f"[控制] 恢复运行（预对战阶段，不推进回合）：turn={self.current_round_count}"
                 )
             else:
                 self.logger.info("[控制] 恢复运行")
@@ -751,9 +763,20 @@ class DeviceState:
         self.last_round_cost_used = 0
         self.last_round_available_cost = 0
         self.cost_history.clear()
+        self.mulligan_done_this_match = False
 
     def start_new_match(self):
         """开始新对战"""
+        # 防止同一局在短时间内被重复触发start。
+        if self.in_match and self.match_start_time is not None:
+            elapsed = time.time() - float(self.match_start_time)
+            if self.current_round_count <= 1 and elapsed < 12.0:
+                self.logger.debug(
+                    "忽略重复start_new_match: "
+                    f"elapsed={elapsed:.1f}s round={self.current_round_count}"
+                )
+                return
+
         if self.in_match:
             self.end_current_match()
 
@@ -773,6 +796,7 @@ class DeviceState:
         self.last_round_cost_used = 0
         self.last_round_available_cost = 0
         self.cost_history.clear()
+        self.mulligan_done_this_match = False
 
         self.logger.info(f"检测到新对战开始 - 第{self.current_run_matches}场对战")
         # 将对战次数信息发送到日志队列，供UI界面显示

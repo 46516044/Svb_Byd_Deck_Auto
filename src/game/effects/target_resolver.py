@@ -55,14 +55,12 @@ def resolve_targets(
 
     if kind == "enemy_follower":
         # ward_or_highest_hp can avoid a screenshot by scanning ward directly.
+        wards: List[Tuple[int, int]] = []
         if selector == "ward_or_highest_hp":
             try:
                 wards = ds.game_manager.scan_shield_targets() if ds.game_manager else []
             except Exception:
                 wards = []
-            if wards:
-                out = [(_safe_int(x, 0), _safe_int(y, 0)) for (x, y) in list(wards)[:n]]
-                return out
 
         screenshot = None
         try:
@@ -82,7 +80,24 @@ def resolve_targets(
             enemy_followers = []
 
         if not enemy_followers:
-            return []
+            # Fallback: when there is no enemy follower but selectable amulet-like targets exist,
+            # return those positions so the card can still be cast.
+            try:
+                amulet_targets = (
+                    ds.game_manager.card_can_choose_target_like_amulet()
+                    if ds.game_manager
+                    else []
+                )
+            except Exception:
+                amulet_targets = []
+
+            if not amulet_targets:
+                return []
+
+            out: List[Tuple[int, int]] = []
+            for x, y in list(amulet_targets)[:n]:
+                out.append((_safe_int(x, 0), _safe_int(y, 0)))
+            return out
 
         picked: List[Any] = []
         if selector in ("", "highest_hp"):
@@ -107,14 +122,21 @@ def resolve_targets(
                 )
 
         elif selector == "ward_or_highest_hp":
-            # If ward wasn't detected by scan_shield_targets, fallback to highest_hp.
             if n <= 1:
-                one = TargetSelector.enemy_follower_highest_hp(enemy_followers)
+                one = TargetSelector.enemy_follower_ward_or_highest_hp(
+                    enemy_followers,
+                    list(wards or []),
+                )
                 if one is not None:
                     picked = [one]
             else:
+                ward_followers = TargetSelector.enemy_followers_in_wards(
+                    enemy_followers,
+                    list(wards or []),
+                )
+                source = ward_followers if ward_followers else list(enemy_followers or [])
                 picked = TargetSelector.enemy_followers_highest_hp(
-                    enemy_followers, n=n, distinct_xy=bool(distinct_xy)
+                    source, n=n, distinct_xy=bool(distinct_xy)
                 )
 
         else:

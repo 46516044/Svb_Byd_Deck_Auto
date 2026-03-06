@@ -9,12 +9,12 @@ import random
 import time
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from src.config import settings
 from src.config.game_constants import (
     DEFAULT_ATTACK_TARGET, DEFAULT_ATTACK_RANDOM,
     POSITION_RANDOM_RANGE, SHOW_CARDS_BUTTON, SHOW_CARDS_RANDOM_X, SHOW_CARDS_RANDOM_Y,
-    BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
+    BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM, OUR_FOLLOWER_REGION
 )
 from src.config.card_priorities import (
     get_card_priority_pre_evolution,
@@ -54,6 +54,12 @@ class GameActions:
         }
         self._perf_scan_our_followers_last_log_ts = 0.0
 
+        # Spot-based scan stabilization (max 5 board slots).
+        self._spot_state: Dict[int, Dict[str, Any]] = {}
+        self._forced_normal_slots: Dict[int, int] = {}
+        self._spot_round_key: Optional[Tuple[int, int]] = None
+        self._spot_centers: List[int] = self._build_spot_centers()
+
         self.battle_runtime = None
         self._runtime_epoch = None
         try:
@@ -63,11 +69,231 @@ class GameActions:
             setattr(self.device_state, "battle_runtime_state", self.battle_runtime)
         except Exception:
             self.battle_runtime = None
+
+        # Step3C: lightweight phase cache flags.
+        self._play_phase_enemy_affected = False
+        self._cached_enemy_presence_for_evolve = None
     
     @property
     def follower_manager(self):
         """动态获取follower_manager，确保在GameManager初始化后才可用"""
         return self.device_state.follower_manager
+
+    def _build_spot_centers(self) -> List[int]:
+        """Build 5 fixed slot centers from our follower region."""
+
+        try:
+            x1, _y1, x2, _y2 = OUR_FOLLOWER_REGION
+            width = max(1, int(x2) - int(x1))
+            step = float(width) / 5.0
+            return [int(round(int(x1) + step * (i + 0.5))) for i in range(5)]
+        except Exception:
+            return [975, 797, 620, 442, 264]
+
+    def _slot_id_for_x(self, x: Any) -> int:
+        """Map x coordinate to nearest board slot [0..4], rightmost=0."""
+
+        try:
+            x_i = int(x)
+        except Exception:
+            x_i = 0
+
+        centers = list(self._spot_centers or [975, 797, 620, 442, 264])
+        if not centers:
+            return 0
+
+        left_to_right_idx = min(
+            range(len(centers)),
+            key=lambda i: abs(int(centers[i]) - x_i),
+        )
+        # Convert to right->left slot id for easier reasoning in logs.
+        return int((len(centers) - 1) - left_to_right_idx)
+
+    def _current_round_key(self) -> Tuple[int, int]:
+        try:
+            match_idx = int(getattr(self.device_state, "current_run_matches", 0) or 0)
+        except Exception:
+            match_idx = 0
+        try:
+            round_idx = int(getattr(self.device_state, "current_round_count", 1) or 1)
+        except Exception:
+            round_idx = 1
+        return (match_idx, round_idx)
+
+    def _sync_spot_round(self) -> None:
+        key = self._current_round_key()
+        prev = self._spot_round_key
+        if prev is None:
+            self._spot_round_key = key
+            return
+        if key != prev:
+            self._spot_state.clear()
+            self._forced_normal_slots.clear()
+            self._spot_round_key = key
+
+    def _mark_recent_attack_slot(self, pos: Sequence[Any]) -> None:
+        """After a successful attack, force that slot into normal for current round."""
+
+        if not isinstance(pos, (list, tuple)) or len(pos) < 1:
+            return
+        self._sync_spot_round()
+        slot = self._slot_id_for_x(pos[0])
+        round_idx = self._current_round_key()[1]
+        self._forced_normal_slots[int(slot)] = int(round_idx)
+        st = self._spot_state.get(int(slot))
+        if isinstance(st, dict):
+            st["type"] = "normal"
+            st["normal_streak"] = max(2, int(st.get("normal_streak", 0)))
+            st["round"] = int(round_idx)
+
+    def _aggregate_followers_from_shots(
+        self,
+        shot_followers: Sequence[Sequence[Tuple[Any, Any, Any, Any]]],
+        *,
+        sort_desc: bool,
+    ) -> List[Tuple[int, int, str, Optional[str]]]:
+        """Aggregate multiple single-frame scans by board slot (max 5)."""
+
+        shots = [list(s or []) for s in list(shot_followers or []) if s]
+        if not shots:
+            return []
+        if len(shots) == 1:
+            one = []
+            for it in shots[0]:
+                if not isinstance(it, (list, tuple)) or len(it) < 3:
+                    continue
+                try:
+                    one.append((int(it[0]), int(it[1]), str(it[2] or "normal"), it[3] if len(it) > 3 else None))
+                except Exception:
+                    continue
+            return sorted(one, key=lambda f: int(f[0]), reverse=bool(sort_desc))[:5]
+
+        slot_items: Dict[int, List[Tuple[int, int, str, Optional[str]]]] = {}
+        for shot in shots:
+            used_slots: set[int] = set()
+            for it in sorted(shot, key=lambda f: int(f[0]), reverse=True):
+                if not isinstance(it, (list, tuple)) or len(it) < 3:
+                    continue
+                try:
+                    x_i = int(it[0])
+                    y_i = int(it[1])
+                except Exception:
+                    continue
+                t_s = str(it[2] or "normal")
+                n_s = it[3] if len(it) > 3 else None
+                slot = int(self._slot_id_for_x(x_i))
+                if slot in used_slots:
+                    continue
+                used_slots.add(slot)
+                slot_items.setdefault(slot, []).append((x_i, y_i, t_s, n_s))
+
+        out: List[Tuple[int, int, str, Optional[str]]] = []
+        for slot, items in list(slot_items.items()):
+            if not items:
+                continue
+
+            xs = sorted([int(it[0]) for it in items])
+            ys = sorted([int(it[1]) for it in items])
+            x_mid = int(xs[len(xs) // 2])
+            y_mid = int(ys[len(ys) // 2])
+
+            types = [str(it[2] or "normal") for it in items]
+            if "green" in types:
+                t_sel = "green"
+            elif "yellow" in types:
+                t_sel = "yellow"
+            else:
+                t_sel = "normal"
+
+            names = [it[3] for it in items if len(it) > 3 and it[3]]
+            name_sel = None
+            if names:
+                from collections import Counter
+
+                name_sel = Counter(names).most_common(1)[0][0]
+
+            out.append((x_mid, y_mid, t_sel, name_sel))
+
+        out = sorted(out, key=lambda f: int(f[0]), reverse=bool(sort_desc))
+        return out[:5]
+
+    def _stabilize_followers_by_spot(
+        self,
+        followers: Sequence[Tuple[Any, Any, Any, Any]],
+        *,
+        sort_desc: bool,
+    ) -> List[Tuple[int, int, str, Optional[str]]]:
+        """Stabilize follower type/name by board slot history.
+
+        Rules:
+        - normal can downgrade yellow only after 2 consecutive normal hits.
+        - normal cannot downgrade green (scan-only protection).
+        - empty name never overwrites existing slot name.
+        """
+
+        now = time.time()
+        self._sync_spot_round()
+        round_idx = self._current_round_key()[1]
+
+        out: List[Tuple[int, int, str, Optional[str]]] = []
+
+        raw = list(followers or [])
+        if not raw:
+            return []
+
+        for item in sorted(raw, key=lambda f: int(f[0]), reverse=True):
+            if not isinstance(item, (list, tuple)) or len(item) < 3:
+                continue
+            try:
+                x_i = int(item[0])
+                y_i = int(item[1])
+            except Exception:
+                continue
+
+            in_type = str(item[2] or "normal")
+            in_name = item[3] if len(item) > 3 else None
+
+            slot = int(self._slot_id_for_x(x_i))
+            prev = self._spot_state.get(slot, {})
+            prev_type = str(prev.get("type") or "")
+            prev_name = prev.get("name")
+            prev_streak = int(prev.get("normal_streak", 0) or 0)
+            forced_normal = int(self._forced_normal_slots.get(slot, -1) or -1) == int(round_idx)
+
+            eff_type = in_type
+            normal_streak = 0
+
+            if in_type == "normal":
+                normal_streak = prev_streak + 1
+                if forced_normal:
+                    eff_type = "normal"
+                elif prev_type == "green":
+                    eff_type = "green"
+                elif prev_type == "yellow":
+                    eff_type = "normal" if normal_streak >= 2 else "yellow"
+                else:
+                    eff_type = "normal"
+            else:
+                eff_type = in_type
+                normal_streak = 0
+                if slot in self._forced_normal_slots:
+                    self._forced_normal_slots.pop(slot, None)
+
+            eff_name = in_name if in_name else prev_name
+
+            out.append((x_i, y_i, str(eff_type), eff_name))
+            self._spot_state[slot] = {
+                "type": str(eff_type),
+                "name": eff_name,
+                "normal_streak": int(normal_streak),
+                "x": int(x_i),
+                "y": int(y_i),
+                "ts": now,
+                "round": int(round_idx),
+            }
+
+        out = sorted(out, key=lambda f: int(f[0]), reverse=bool(sort_desc))
+        return out[:5]
 
     def _ensure_runtime_epoch(self):
         runtime = getattr(self, "battle_runtime", None)
@@ -150,9 +376,11 @@ class GameActions:
         if runtime is None or not hasattr(runtime, "mark_latest_play_origin"):
             return
         try:
+            # Wait for summon animation to settle before tagging follower origin.
+            self.device_state.sleep(1.0)
             followers = self._refresh_our_followers(
                 sort_desc=True,
-                extra_shots=1,
+                extra_shots=0,
                 retries=0,
                 with_names=True,
                 allow_cached_fallback=False,
@@ -295,32 +523,54 @@ class GameActions:
             ]
             _EffectEngine.run_ops(ops_to_run, ctx=ctx, trigger_id="on_attack")
 
-        should_check_shield = enemy_check
         shield_targets = []
         shield_detected = False
-        if should_check_shield:
-            shield_targets = self._scan_shield_targets()
-            shield_detected = bool(shield_targets)
+
+        # Step3C: attack-phase cache (single phase, local lifetime).
+        attack_cache = {
+            "enemy": None,
+            "ward": list(shield_targets or []),
+            "enemy_dirty": True,
+            "ward_dirty": False,
+        }
 
         def _strict_refresh_attack_followers(*, with_names: bool = False, retries: int = 1):
-            """Attack-critical scan: 3-frame merge + retry, no stale-cache fallback."""
+            """Attack-critical scan: 3-shots + retry, no stale-cache fallback."""
 
             return self._refresh_our_followers(
                 sort_desc=True,
                 extra_shots=2,
-                retries=max(1, int(retries)),
+                retries=max(0, int(retries)),
                 with_names=bool(with_names),
                 allow_cached_fallback=False,
             )
 
+        _named_scan_cache = {"followers": None, "ts": 0.0}
+
+        def _invalidate_named_scan_cache():
+            _named_scan_cache["followers"] = None
+            _named_scan_cache["ts"] = 0.0
+
+        def _get_named_followers_cached():
+            now = time.time()
+            cached = _named_scan_cache.get("followers")
+            cache_ts = float(_named_scan_cache.get("ts", 0.0) or 0.0)
+            if cached and (now - cache_ts) <= 0.35:
+                return list(cached)
+
+            named_followers = list(_strict_refresh_attack_followers(with_names=True, retries=0) or [])
+            if named_followers:
+                self._runtime_sync_ours(named_followers)
+            _named_scan_cache["followers"] = list(named_followers)
+            _named_scan_cache["ts"] = now
+            return named_followers
+
         def _pick_named_attacker(current_pos: Tuple[Any, Any], *, preferred_type: Optional[str] = None):
             """Refresh with names and rematch attacker by position/type."""
 
-            named_followers = list(_strict_refresh_attack_followers(with_names=True, retries=0) or [])
+            named_followers = list(_get_named_followers_cached() or [])
             if not named_followers:
                 return None
-
-            self._runtime_sync_ours(named_followers)
 
             try:
                 cx, cy = int(current_pos[0]), int(current_pos[1])
@@ -350,19 +600,211 @@ class GameActions:
 
             return best
 
-        def _has_attack_followers(followers: Any) -> bool:
+        def _as_int_or_none(v: Any) -> Optional[int]:
             try:
-                return any(len(f) > 2 and f[2] in ("green", "yellow") for f in (followers or []))
+                return int(v)
+            except Exception:
+                return None
+
+        def _scan_enemy_followers_synced(*, ward_positions: Optional[Sequence[Sequence[Any]]] = None):
+            try:
+                enemy_screenshot = self.device_state.take_screenshot()
+                if enemy_screenshot is None:
+                    return []
+                enemy_followers = self._scan_enemy_followers(enemy_screenshot)
+            except Exception:
+                enemy_followers = []
+
+            if enemy_followers:
+                self._runtime_sync_enemy(enemy_followers, ward_targets=list(ward_positions or []))
+            return list(enemy_followers or [])
+
+        def _get_enemy_followers_cached(*, force: bool = False, ward_positions=None):
+            if force or attack_cache.get("enemy_dirty") or attack_cache.get("enemy") is None:
+                refreshed = _scan_enemy_followers_synced(ward_positions=ward_positions)
+                attack_cache["enemy"] = list(refreshed or [])
+                attack_cache["enemy_dirty"] = False
+            return list(attack_cache.get("enemy") or [])
+
+        def _get_ward_targets_cached(*, force: bool = False):
+            if force or attack_cache.get("ward_dirty") or attack_cache.get("ward") is None:
+                attack_cache["ward"] = list(self._scan_shield_targets() or [])
+                attack_cache["ward_dirty"] = False
+            return list(attack_cache.get("ward") or [])
+
+        def _mark_enemy_board_dirty() -> None:
+            attack_cache["enemy_dirty"] = True
+            attack_cache["ward_dirty"] = True
+
+        def _choose_attack_plan(
+            enemy_followers: Sequence[Sequence[Any]],
+            *,
+            allowed_types: Sequence[str],
+            ward_only: bool,
+            ward_positions: Optional[Sequence[Sequence[Any]]] = None,
+        ):
+            """Select attacker+target by type priority and residual minimization.
+
+            Priority:
+            1) attacker type order follows ``allowed_types`` (e.g. yellow then green)
+            2) within same type, if lethal exists, choose residual closest to 0
+            3) if no lethal, fallback to right-to-left first valid plan
+            """
+
+            enemy_list = list(enemy_followers or [])
+            if not enemy_list:
+                return None
+
+            for type_priority in list(allowed_types or []):
+                candidates = [
+                    f
+                    for f in (all_followers or [])
+                    if isinstance(f, (list, tuple)) and len(f) > 2 and str(f[2] or "") == str(type_priority)
+                ]
+                if not candidates:
+                    continue
+
+                plans = []
+                for item in candidates:
+                    try:
+                        fx, fy = int(item[0]), int(item[1])
+                    except Exception:
+                        continue
+
+                    attacker = (fx, fy)
+                    attacker_name = item[3] if len(item) > 3 else None
+                    if not attacker_name:
+                        named_match = _pick_named_attacker(attacker, preferred_type=str(type_priority))
+                        if isinstance(named_match, (list, tuple)) and len(named_match) >= 4:
+                            attacker = (int(named_match[0]), int(named_match[1]))
+                            attacker_name = named_match[3]
+
+                    target_xy, target_reason = self._pick_enemy_target(
+                        attacker,
+                        enemy_list,
+                        ward_targets=list(ward_positions or []),
+                        ward_only=bool(ward_only),
+                    )
+                    if target_xy is None:
+                        continue
+
+                    mode = str(target_reason.get("mode") or "")
+                    residual = _as_int_or_none(target_reason.get("residual"))
+                    plans.append(
+                        {
+                            "attacker": attacker,
+                            "attacker_name": attacker_name,
+                            "attacker_type": str(type_priority),
+                            "target_xy": (int(target_xy[0]), int(target_xy[1])),
+                            "reason": target_reason,
+                            "mode": mode,
+                            "residual": residual,
+                        }
+                    )
+
+                if not plans:
+                    continue
+
+                kill_plans = [
+                    p for p in plans if p.get("mode") == "kill_overflow" and p.get("residual") is not None
+                ]
+                if kill_plans:
+                    kill_plans = sorted(
+                        kill_plans,
+                        key=lambda p: (int(p.get("residual") or -999), int(p["attacker"][0])),
+                        reverse=True,
+                    )
+                    return kill_plans[0]
+
+                # No lethal in this type: keep existing behavior (right-to-left first available).
+                return plans[0]
+
+            return None
+
+        def _is_slot_forced_normal_local(x_val: Any) -> bool:
+            try:
+                slot = int(self._slot_id_for_x(x_val))
+                round_idx = int(self._current_round_key()[1])
+                forced_round = int((self._forced_normal_slots or {}).get(slot, -1))
+                return forced_round == round_idx
             except Exception:
                 return False
 
+        def _iter_unspent_attackers(
+            followers: Any,
+            *,
+            allowed_types: Sequence[str],
+        ):
+            allowed = {str(t) for t in list(allowed_types or [])}
+            for item in list(followers or []):
+                if not isinstance(item, (list, tuple)) or len(item) < 3:
+                    continue
+                t_s = str(item[2] or "")
+                if t_s not in allowed:
+                    continue
+                if _is_slot_forced_normal_local(item[0]):
+                    continue
+                yield item
+
+        def _has_attack_followers(
+            followers: Any,
+            *,
+            allowed_types: Sequence[str] = ("green", "yellow"),
+        ) -> bool:
+            try:
+                return any(True for _ in _iter_unspent_attackers(followers, allowed_types=allowed_types))
+            except Exception:
+                return False
+
+        def _local_consume_attacker_slot(
+            followers: Any,
+            attacker_pos: Sequence[Any],
+        ) -> List[Tuple[Any, Any, Any, Any]]:
+            if not isinstance(attacker_pos, (list, tuple)) or len(attacker_pos) < 1:
+                return list(followers or [])
+            try:
+                target_slot = int(self._slot_id_for_x(attacker_pos[0]))
+            except Exception:
+                return list(followers or [])
+
+            consumed: List[Tuple[Any, Any, Any, Any]] = []
+            for item in list(followers or []):
+                if not isinstance(item, (list, tuple)) or len(item) < 3:
+                    continue
+                try:
+                    x_i = int(item[0])
+                    y_i = int(item[1])
+                except Exception:
+                    continue
+                t_s = str(item[2] or "normal")
+                n_s = item[3] if len(item) > 3 else None
+                try:
+                    slot = int(self._slot_id_for_x(x_i))
+                except Exception:
+                    slot = -1
+                if slot == target_slot:
+                    t_s = "normal"
+                consumed.append((x_i, y_i, t_s, n_s))
+
+            try:
+                consumed = sorted(consumed, key=lambda f: int(f[0]), reverse=True)
+            except Exception:
+                pass
+            return consumed
+
         self._ensure_runtime_epoch()
+
+        # Attack baseline: ours(handled by caller), enemy + ward one-shot at phase start.
+        shield_targets = _get_ward_targets_cached(force=True)
+        shield_detected = bool(shield_targets)
+        _ = _get_enemy_followers_cached(force=True, ward_positions=shield_targets)
 
 
         # 攻击阶段：从右往左优先处理（新召唤随从通常出现在右侧）。
-        # 默认使用严格扫描，避免单帧误判导致提前结束回合。
+        # 默认使用带命名的严格扫描，避免先无名再补名的重复开销。
         if all_followers is None:
-            all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
+            all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=0) or [])
+            _invalidate_named_scan_cache()
         else:
             # Ensure expected order (right -> left)
             try:
@@ -375,25 +817,13 @@ class GameActions:
                 all_followers = list(all_followers or [])
         all_followers = list(all_followers or [])
 
-        # Step3B 需要尽量拿到我方随从名字（用于解析基础身材）。
-        if not any(len(f) > 3 and f[3] for f in all_followers):
-            seeded_named = list(_strict_refresh_attack_followers(with_names=True, retries=0) or [])
-            if seeded_named:
-                all_followers = seeded_named
-
         self._runtime_sync_ours(all_followers)
 
         # Structured observation log (no extra recognition).
         enemy_positions = enemy_check if isinstance(enemy_check, (list, tuple)) else []
         self._log_observed_state(note="attack/start", enemy=enemy_positions, ward=shield_targets)
 
-        attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
-        if not attackable:
-            self.device_state.logger.info("首次未检测到可攻击随从，进行确认重扫")
-            all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=1) or [])
-            self._runtime_sync_ours(all_followers)
-            attackable = [f for f in all_followers if len(f) > 2 and f[2] in ("green", "yellow")]
-        if not attackable:
+        if not _has_attack_followers(all_followers):
             self.device_state.logger.info("未检测到可进行攻击的随从，跳过攻击操作")
             return
 
@@ -404,153 +834,124 @@ class GameActions:
             while shield_targets and attempt_count < max_attempts:
                 attempt_count += 1
                 self.device_state.logger.info(f"破盾尝试第{attempt_count}/{max_attempts}次")
-                current_shield = shield_targets[-1]
-                shield_x, shield_y = int(current_shield[0]), int(current_shield[1])
+                enemy_followers = _get_enemy_followers_cached(
+                    force=False,
+                    ward_positions=shield_targets,
+                )
 
-                selected_follower = None
-                selected_follower_name = None
-
-                # 护盾阶段默认改为“从右往左”出手，避免最近者策略导致左侧先手。
-                # 保留最近者逻辑，必要时可切换。
+                # 护盾阶段默认关闭“最近者策略”。保留开关便于快速回退。
                 use_nearest_shield_attacker = False
-
+                selected_plan = None
                 if use_nearest_shield_attacker:
-                    for type_priority in ["yellow", "green"]:
+                    for type_priority in ("yellow", "green"):
                         type_followers = [
-                            (x, y, name)
-                            for x, y, t, name in all_followers
-                            if t == type_priority
+                            f
+                            for f in (all_followers or [])
+                            if isinstance(f, (list, tuple)) and len(f) > 2 and str(f[2] or "") == type_priority
                         ]
                         if not type_followers:
                             continue
 
-                        # 选择离护盾最近的该类型随从（保留旧逻辑）
-                        min_distance = float("inf")
-                        for fx, fy, fname in type_followers:
-                            dist = ((fx - shield_x) ** 2 + (fy - shield_y) ** 2) ** 0.5
-                            if dist < min_distance:
-                                min_distance = dist
-                                selected_follower = (fx, fy)
-                                selected_follower_name = fname
-                        if selected_follower:
+                        pick = type_followers[0]
+                        try:
+                            selected_plan = {
+                                "attacker": (int(pick[0]), int(pick[1])),
+                                "attacker_name": pick[3] if len(pick) > 3 else None,
+                                "attacker_type": type_priority,
+                            }
+                        except Exception:
+                            selected_plan = None
+                        if selected_plan:
                             break
                 else:
-                    # 从右往左，但类型优先级固定为：突进(yellow) > 疾驰(green)
-                    # 这样在有护盾时会优先消耗突进攻击。
-                    for type_priority in ("yellow", "green"):
-                        for fx, fy, ft, fname in all_followers:
-                            if ft != type_priority:
-                                continue
-                            selected_follower = (fx, fy)
-                            selected_follower_name = fname
-                            break
-                        if selected_follower:
-                            break
-
-                if selected_follower:
-                    selected_type = None
-                    try:
-                        for fx, fy, ft, _ in all_followers:
-                            if int(fx) == int(selected_follower[0]) and int(fy) == int(selected_follower[1]):
-                                selected_type = ft
-                                break
-                    except Exception:
-                        selected_type = None
-
-                    if not selected_follower_name:
-                        named_match = _pick_named_attacker(
-                            selected_follower,
-                            preferred_type=selected_type,
-                        )
-                        if isinstance(named_match, (list, tuple)) and len(named_match) >= 4:
-                            selected_follower = (int(named_match[0]), int(named_match[1]))
-                            selected_follower_name = named_match[3]
-
-                    # 破盾目标优先从“守护集合”中按可击杀/最少溢出选择。
-                    enemy_followers = []
-                    try:
-                        enemy_screenshot = self.device_state.take_screenshot()
-                        if enemy_screenshot is not None:
-                            enemy_followers = self._scan_enemy_followers(enemy_screenshot)
-                    except Exception:
-                        enemy_followers = []
-
-                    if enemy_followers:
-                        self._runtime_sync_enemy(enemy_followers, ward_targets=shield_targets)
-                        target_xy, target_reason = self._pick_enemy_target(
-                            selected_follower,
-                            enemy_followers,
-                            ward_targets=shield_targets,
-                            ward_only=True,
-                        )
-                        if target_xy is not None:
-                            shield_x, shield_y = int(target_xy[0]), int(target_xy[1])
-                        self.device_state.logger.info(
-                            "护盾目标选择: "
-                            f"mode={target_reason.get('mode')} atk={target_reason.get('attacker_atk')} "
-                            f"hp={target_reason.get('target_hp')} residual={target_reason.get('residual')}"
-                        )
-
-                    selected_type_key = str(selected_type or "")
-                    type_name = type_name_map.get(selected_type_key, selected_type_key or "可攻击")
-                    if selected_follower_name:
-                        self.device_state.logger.info(
-                            f"使用{type_name}随从[{selected_follower_name}]攻击护盾"
-                        )
-                    else:
-                        self.device_state.logger.info(f"使用{type_name}随从攻击护盾")
-
-                    human_like_drag(
-                        self.device_state.u2_device,
-                        selected_follower[0],
-                        selected_follower[1],
-                        shield_x,
-                        shield_y,
-                        duration=random.uniform(*settings.get_human_like_drag_duration_range()),
+                    selected_plan = _choose_attack_plan(
+                        enemy_followers,
+                        allowed_types=("yellow", "green"),
+                        ward_only=True,
+                        ward_positions=shield_targets,
                     )
-                    self.device_state.sleep(1)
-                    _run_on_attack_effects(selected_follower_name, selected_follower)
 
-                    combat = self._runtime_apply_local_combat(selected_follower, (shield_x, shield_y))
-                    if combat.get("applied"):
-                        self.device_state.logger.info(
-                            "本地结算(护盾): "
-                            f"atk={combat.get('attacker_atk')} "
-                            f"target_hp={combat.get('target_hp_before')}->{combat.get('target_hp_after')} "
-                            f"target_dead={combat.get('target_dead')}"
-                        )
-
-                if not selected_follower:
+                if not isinstance(selected_plan, dict):
                     self.device_state.logger.info("没有可用的突进/疾驰随从攻击护盾")
                     return # 退出循环
 
-                # 攻击后更新随从信息（严格重扫，减少漏检）
-                all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=1) or [])
+                selected_follower = tuple(selected_plan.get("attacker") or ())
+                if len(selected_follower) < 2:
+                    self.device_state.logger.info("护盾阶段未找到有效攻击随从")
+                    return
+
+                selected_follower_name = selected_plan.get("attacker_name")
+                selected_type = str(selected_plan.get("attacker_type") or "")
+                target_reason = dict(selected_plan.get("reason") or {})
+                shield_xy = selected_plan.get("target_xy")
+                if isinstance(shield_xy, (list, tuple)) and len(shield_xy) >= 2:
+                    shield_x, shield_y = int(shield_xy[0]), int(shield_xy[1])
+                else:
+                    shield_x, shield_y = int(shield_targets[-1][0]), int(shield_targets[-1][1])
+
+                if not selected_follower_name:
+                    named_match = _pick_named_attacker(
+                        selected_follower,
+                        preferred_type=selected_type,
+                    )
+                    if isinstance(named_match, (list, tuple)) and len(named_match) >= 4:
+                        selected_follower = (int(named_match[0]), int(named_match[1]))
+                        selected_follower_name = named_match[3]
+
+                self.device_state.logger.info(
+                    "护盾目标选择: "
+                    f"mode={target_reason.get('mode')} atk={target_reason.get('attacker_atk')} "
+                    f"hp={target_reason.get('target_hp')} residual={target_reason.get('residual')}"
+                )
+
+                selected_type_key = str(selected_type or "")
+                type_name = type_name_map.get(selected_type_key, selected_type_key or "可攻击")
+                if selected_follower_name:
+                    self.device_state.logger.info(
+                        f"使用{type_name}随从[{selected_follower_name}]攻击护盾"
+                    )
+                else:
+                    self.device_state.logger.info(f"使用{type_name}随从攻击护盾")
+
+                human_like_drag(
+                    self.device_state.u2_device,
+                    selected_follower[0],
+                    selected_follower[1],
+                    shield_x,
+                    shield_y,
+                    duration=random.uniform(*settings.get_human_like_drag_duration_range()),
+                )
+                self.device_state.sleep(1)
+                _run_on_attack_effects(selected_follower_name, selected_follower)
+                self._mark_recent_attack_slot(selected_follower)
+                all_followers = _local_consume_attacker_slot(all_followers, selected_follower)
+
+                combat = self._runtime_apply_local_combat(selected_follower, (shield_x, shield_y))
+                if combat.get("applied"):
+                    self.device_state.logger.info(
+                        "本地结算(护盾): "
+                        f"atk={combat.get('attacker_atk')} "
+                        f"target_hp={combat.get('target_hp_before')}->{combat.get('target_hp_after')} "
+                        f"target_dead={combat.get('target_dead')}"
+                    )
+
+                if not _has_attack_followers(all_followers):
+                    self.device_state.logger.info("攻击后没有可用的突进/疾驰随从，停止破盾")
+                    return
+
+                # 仍有可攻击随从时再重扫更新（避免末次攻击后的无效重扫）
+                all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=0) or [])
+                _invalidate_named_scan_cache()
                 self._runtime_sync_ours(all_followers)
-
-                # 检查更新后的随从是否还有突进/疾驰能力，没有则直接返回
-                has_attack_followers = False
-                for type_priority in ["yellow", "green"]:
-                    type_followers = [(x, y, name) for x, y, t, name in all_followers if t == type_priority]
-                    if type_followers:
-                        has_attack_followers = True
-                        break
-
-                if not has_attack_followers:
-                    self.device_state.logger.info("护盾阶段检测不到可攻击随从，进行确认重扫")
-                    all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=1) or [])
-                    self._runtime_sync_ours(all_followers)
-                    if not _has_attack_followers(all_followers):
-                        self.device_state.logger.info("攻击后没有可用的突进/疾驰随从，停止破盾")
-                        return
+                _mark_enemy_board_dirty()
 
                 # 重新扫描护盾，检查当前护盾是否还在
-                shield_targets = self._scan_shield_targets()
+                shield_targets = _get_ward_targets_cached(force=True)
                 
                 self.device_state.sleep(0.2)
             
             # 检查是否因为达到最大尝试次数而退出循环
-            if attempt_count >= max_attempts:
+            if attempt_count >= max_attempts and shield_targets:
                 self.device_state.logger.warning(f"达到最大破盾尝试次数({max_attempts}次)，停止破盾操作")
 
             # 破盾结束后，基于最新扫描结果决定是否继续后续攻击
@@ -560,19 +961,131 @@ class GameActions:
                 self.device_state.logger.info("护盾仍存在，停止后续攻击操作")
                 return
 
-        # 没有护盾，使用绿色随从攻击敌方主人（从右往左，每次攻击后快速重扫）
+        # 无护盾阶段统一策略：先突进处理随从，再疾驰打脸。
+        seed_named = list(
+            _strict_refresh_attack_followers(
+                with_names=bool(attack_effects_enabled),
+                retries=0,
+            )
+            or []
+        )
+        if seed_named:
+            all_followers = seed_named
+            self._runtime_sync_ours(all_followers)
+
+        # If enemy board is empty, skip yellow planning/scans and go straight to green face attacks.
+        enemy_present = bool(_get_enemy_followers_cached(force=False, ward_positions=None))
+
+        max_yellow_attacks = 10
+        yellow_attack_count = 0
+        while enemy_present and yellow_attack_count < max_yellow_attacks:
+            yellow_followers = list(
+                _iter_unspent_attackers(all_followers, allowed_types=("yellow",))
+            )
+            if not yellow_followers:
+                break
+
+            enemy_followers = _get_enemy_followers_cached(force=False, ward_positions=None)
+            if not enemy_followers:
+                self.device_state.logger.info("未检测到敌方随从，突进攻击结束")
+                break
+
+            plan = _choose_attack_plan(
+                enemy_followers,
+                allowed_types=("yellow",),
+                ward_only=False,
+                ward_positions=None,
+            )
+            if not isinstance(plan, dict):
+                self.device_state.logger.info("突进未找到可攻击目标，结束突进攻击")
+                break
+
+            selected_follower = tuple(plan.get("attacker") or ())
+            if len(selected_follower) < 2:
+                self.device_state.logger.info("突进阶段未找到有效攻击随从")
+                break
+
+            selected_follower_name = plan.get("attacker_name")
+            target_reason = dict(plan.get("reason") or {})
+            target_xy = plan.get("target_xy")
+            if not (isinstance(target_xy, (list, tuple)) and len(target_xy) >= 2):
+                self.device_state.logger.info("突进未找到有效目标坐标，结束突进攻击")
+                break
+
+            if not selected_follower_name:
+                named_match = _pick_named_attacker(selected_follower, preferred_type="yellow")
+                if isinstance(named_match, (list, tuple)) and len(named_match) >= 4:
+                    selected_follower = (int(named_match[0]), int(named_match[1]))
+                    selected_follower_name = named_match[3]
+
+            enemy_x, enemy_y = int(target_xy[0]), int(target_xy[1])
+            if selected_follower_name:
+                self.device_state.logger.info(
+                    f"使用突进随从[{selected_follower_name}]攻击敌方随从 mode={target_reason.get('mode')} "
+                    f"atk={target_reason.get('attacker_atk')} hp={target_reason.get('target_hp')} "
+                    f"residual={target_reason.get('residual')}"
+                )
+            else:
+                self.device_state.logger.info(
+                    "使用突进随从攻击敌方随从 "
+                    f"mode={target_reason.get('mode')} atk={target_reason.get('attacker_atk')} "
+                    f"hp={target_reason.get('target_hp')} residual={target_reason.get('residual')}"
+                )
+
+            human_like_drag(
+                self.device_state.u2_device,
+                selected_follower[0],
+                selected_follower[1],
+                enemy_x,
+                enemy_y,
+                duration=random.uniform(*settings.get_human_like_drag_duration_range()),
+            )
+            yellow_attack_count += 1
+            self.device_state.sleep(1.5)
+            _run_on_attack_effects(selected_follower_name, selected_follower)
+            self._mark_recent_attack_slot(selected_follower)
+            all_followers = _local_consume_attacker_slot(all_followers, selected_follower)
+
+            combat = self._runtime_apply_local_combat(selected_follower, (enemy_x, enemy_y))
+            if combat.get("applied"):
+                self.device_state.logger.info(
+                    "本地结算(突进): "
+                    f"atk={combat.get('attacker_atk')} "
+                    f"target_hp={combat.get('target_hp_before')}->{combat.get('target_hp_after')} "
+                    f"target_dead={combat.get('target_dead')}"
+                )
+
+            if not _has_attack_followers(all_followers, allowed_types=("yellow",)):
+                self.device_state.logger.info("突进随从已全部完成攻击")
+                break
+
+            # 仍有突进随从可攻击时再重扫。
+            all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=0) or [])
+            _invalidate_named_scan_cache()
+            self._runtime_sync_ours(all_followers)
+            _mark_enemy_board_dirty()
+
+        # 黄色处理完后，疾驰再打脸。
         max_green_attacks = 10
         green_attack_count = 0
+        green_refresh_with_names = True
         while green_attack_count < max_green_attacks:
-            green_followers = [(x, y, name) for x, y, t, name in all_followers if t == "green"]
+            green_followers = list(
+                _iter_unspent_attackers(all_followers, allowed_types=("green",))
+            )
             if not green_followers:
-                all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
-                self._runtime_sync_ours(all_followers)
-                green_followers = [(x, y, name) for x, y, t, name in all_followers if t == "green"]
-                if not green_followers:
-                    break
+                break
 
-            x, y, name = green_followers[0]  # 已按x从右到左排序
+            pick = green_followers[0]  # 已按x从右到左排序
+            x, y = int(pick[0]), int(pick[1])
+            name = pick[3] if len(pick) > 3 else None
+
+            if not name and attack_effects_enabled:
+                named_match = _pick_named_attacker((x, y), preferred_type="green")
+                if isinstance(named_match, (list, tuple)) and len(named_match) >= 4:
+                    x, y = int(named_match[0]), int(named_match[1])
+                    name = named_match[3]
+
             if name:
                 self.device_state.logger.info(f"使用疾驰随从[{name}]攻击敌方玩家")
             else:
@@ -591,94 +1104,18 @@ class GameActions:
             self.device_state.sleep(0.45)
 
             _run_on_attack_effects(name, (x, y))
+            self._mark_recent_attack_slot((x, y))
+            all_followers = _local_consume_attacker_slot(all_followers, (x, y))
 
-            all_followers = list(_strict_refresh_attack_followers(with_names=False, retries=1) or [])
+            if not _has_attack_followers(all_followers, allowed_types=("green",)):
+                self.device_state.logger.info("疾驰随从已全部完成攻击")
+                break
+
+            all_followers = list(
+                _strict_refresh_attack_followers(with_names=green_refresh_with_names, retries=0) or []
+            )
+            _invalidate_named_scan_cache()
             self._runtime_sync_ours(all_followers)
-
-        # 使用黄色突进随从攻击敌方随从（可击杀/最少溢出优先，无法计算时回退最小血量）
-        if not shield_detected:
-            seed_named = list(_strict_refresh_attack_followers(with_names=True, retries=0) or [])
-            if seed_named:
-                all_followers = seed_named
-                self._runtime_sync_ours(all_followers)
-
-            max_yellow_attacks = 10
-            yellow_attack_count = 0
-            while yellow_attack_count < max_yellow_attacks:
-                yellow_followers = [(x, y, name) for x, y, t, name in all_followers if t == "yellow"]
-                if not yellow_followers:
-                    all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=1) or [])
-                    self._runtime_sync_ours(all_followers)
-                    yellow_followers = [(x, y, name) for x, y, t, name in all_followers if t == "yellow"]
-                    if not yellow_followers:
-                        break
-
-                x, y, name = yellow_followers[0]  # 已按x从右到左排序
-
-                if not name:
-                    named_match = _pick_named_attacker((x, y), preferred_type="yellow")
-                    if isinstance(named_match, (list, tuple)) and len(named_match) >= 4:
-                        x, y, _t, name = named_match
-
-                enemy_screenshot = self.device_state.take_screenshot()
-                if not enemy_screenshot:
-                    self.device_state.logger.warning("截图失败，跳过攻击")
-                    break
-
-                enemy_followers = self._scan_enemy_followers(enemy_screenshot)
-                if not enemy_followers:
-                    self.device_state.logger.info("未检测到敌方随从，突进攻击结束")
-                    break
-
-                self._runtime_sync_enemy(enemy_followers)
-                target_xy, target_reason = self._pick_enemy_target(
-                    (x, y),
-                    enemy_followers,
-                    ward_targets=None,
-                    ward_only=False,
-                )
-                if target_xy is None:
-                    self.device_state.logger.info("突进未找到可攻击目标，结束突进攻击")
-                    break
-
-                enemy_x, enemy_y = int(target_xy[0]), int(target_xy[1])
-                if name:
-                    self.device_state.logger.info(
-                        f"使用突进随从[{name}]攻击敌方随从 mode={target_reason.get('mode')} "
-                        f"atk={target_reason.get('attacker_atk')} hp={target_reason.get('target_hp')} "
-                        f"residual={target_reason.get('residual')}"
-                    )
-                else:
-                    self.device_state.logger.info(
-                        "使用突进随从攻击敌方随从 "
-                        f"mode={target_reason.get('mode')} atk={target_reason.get('attacker_atk')} "
-                        f"hp={target_reason.get('target_hp')} residual={target_reason.get('residual')}"
-                    )
-
-                human_like_drag(
-                    self.device_state.u2_device,
-                    x,
-                    y,
-                    enemy_x,
-                    enemy_y,
-                    duration=random.uniform(*settings.get_human_like_drag_duration_range()),
-                )
-                yellow_attack_count += 1
-                self.device_state.sleep(1.5)
-                _run_on_attack_effects(name, (x, y))
-
-                combat = self._runtime_apply_local_combat((x, y), (enemy_x, enemy_y))
-                if combat.get("applied"):
-                    self.device_state.logger.info(
-                        "本地结算(突进): "
-                        f"atk={combat.get('attacker_atk')} "
-                        f"target_hp={combat.get('target_hp_before')}->{combat.get('target_hp_after')} "
-                        f"target_dead={combat.get('target_dead')}"
-                    )
-
-                # 攻击后严格重扫（从右往左），避免漏掉新突进/疾驰随从
-                all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=1) or [])
-                self._runtime_sync_ours(all_followers)
 
     def perform_evolution_actions(self):
         """执行进化/超进化操作"""
@@ -936,6 +1373,8 @@ class GameActions:
             return
 
         enemy_check = self._await_enemy_check(enemy_future)
+        # Give summon / board animations time to settle before attack scanning.
+        self.device_state.sleep(1.0)
         AttackPhase(self).run(enemy_check)
         self.device_state.sleep(1)
 
@@ -956,12 +1395,31 @@ class GameActions:
 
         enemy_check = self._await_enemy_check(enemy_future)
 
-        # 旧逻辑：进化判断前先刷新一次随从
-        self._refresh_our_followers(sort_desc=False)
+        # Step3C: evolve-pre only needs 1-shot ours scan.
+        self._refresh_our_followers(
+            sort_desc=False,
+            extra_shots=0,
+            retries=0,
+            with_names=False,
+        )
+
+        # Step3C: if play phase had no enemy-affecting action, reuse pre-play enemy presence.
+        # Otherwise refresh once before evolve decision.
+        self._cached_enemy_presence_for_evolve = bool(enemy_check)
+        if bool(getattr(self, "_play_phase_enemy_affected", False)):
+            try:
+                screen = self.device_state.take_screenshot()
+                if screen is not None:
+                    self._cached_enemy_presence_for_evolve = bool(self._scan_enemy_ATK(screen))
+            except Exception:
+                self._cached_enemy_presence_for_evolve = bool(enemy_check)
 
         policy = self.battle_policy or LegacyBattlePolicy()
         EvolvePhase(self, policy).run()
+        self._cached_enemy_presence_for_evolve = None
 
+        # Give summon / evolution animations time to settle before attack scanning.
+        self.device_state.sleep(1.0)
         AttackPhase(self).run(enemy_check)
         self.device_state.sleep(1)
 
@@ -969,6 +1427,7 @@ class GameActions:
     def _play_cards(self, image):
         """改进的出牌策略：每出一张牌都重新检测手牌，最多重试展牌次数为当前回合数"""
         self._banlist_blocked_this_round = False
+        self._play_phase_enemy_affected = False
         # 获取当前回合可用费用
         current_round = self.device_state.current_round_count
         available_cost = min(10, current_round)  # 基础费用 = 当前回合数（最大10）
@@ -1297,6 +1756,12 @@ class GameActions:
             if not result:
                 self.device_state.logger.info(f"卡牌 {name} 未成功打出，跳过后续逻辑")
                 continue
+
+            try:
+                if self._card_play_may_affect_enemy(card_to_play):
+                    self._play_phase_enemy_affected = True
+            except Exception:
+                pass
             
             planned_cards.remove(card_to_play)
             if planned_cards and (
@@ -1362,7 +1827,11 @@ class GameActions:
             hasattr(self, '_last_played_card') and 
             self._last_played_card == "诅咒派对"):
             
-            extra_cost = self._extra_scan_after_add_newcards(hand_manager, high_priority_cards_cfg,self._last_played_card)
+            extra_cost = self._extra_scan_after_add_newcards(
+                hand_manager,
+                high_priority_cards_cfg,
+                self._last_played_card,
+            )
             total_cost_used += extra_cost  # 添加额外扫描打出的费用
 
         if not hasattr(self.device_state, 'cost_history'):
@@ -1370,7 +1839,7 @@ class GameActions:
         self.device_state.cost_history.append(total_cost_used)
         self.device_state.logger.info(f"本回合出牌完成，消耗{total_cost_used}费 (可用费用: {available_cost})")
 
-    def _extra_scan_after_add_newcards(self, hand_manager, high_priority_cards_cfg,last_played_card):
+    def _extra_scan_after_add_newcards(self, hand_manager, _high_priority_cards_cfg, last_played_card):
         """用完费用后的额外扫描逻辑"""
         # 与主出牌逻辑保持一致：根据进化是否解锁选择对应阶段的优先级
         if is_evolution_unlocked(self.device_state):
@@ -1406,9 +1875,12 @@ class GameActions:
             zero_cost_cards = [c for c in filtered_cards if c.get('cost', 0) == 0]
             if zero_cost_cards:
                 # 按优先级排序0费卡牌
-                high_priority_names = set(high_priority_cards_cfg.keys())
-                priority_zero = [c for c in zero_cost_cards if c.get('name', '') in high_priority_names]
-                normal_zero = [c for c in zero_cost_cards if c.get('name', '') not in high_priority_names]
+                priority_zero = [
+                    c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) != 999
+                ]
+                normal_zero = [
+                    c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) == 999
+                ]
                 priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
                 normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
                 sorted_zero_cards = priority_zero + normal_zero
@@ -1452,9 +1924,12 @@ class GameActions:
                     zero_cost_cards = [c for c in filtered_cards if c.get('cost', 0) == 0]
                     if zero_cost_cards:
                         # 按优先级排序0费卡牌
-                        high_priority_names = set(high_priority_cards_cfg.keys())
-                        priority_zero = [c for c in zero_cost_cards if c.get('name', '') in high_priority_names]
-                        normal_zero = [c for c in zero_cost_cards if c.get('name', '') not in high_priority_names]
+                        priority_zero = [
+                            c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) != 999
+                        ]
+                        normal_zero = [
+                            c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) == 999
+                        ]
                         priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
                         normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
                         sorted_zero_cards = priority_zero + normal_zero
@@ -1502,9 +1977,12 @@ class GameActions:
                 zero_cost_cards = [c for c in filtered_cards if c.get('cost', 0) == 0]
                 if zero_cost_cards:
                     # 按优先级排序0费卡牌
-                    high_priority_names = set(high_priority_cards_cfg.keys())
-                    priority_zero = [c for c in zero_cost_cards if c.get('name', '') in high_priority_names]
-                    normal_zero = [c for c in zero_cost_cards if c.get('name', '') not in high_priority_names]
+                    priority_zero = [
+                        c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) != 999
+                    ]
+                    normal_zero = [
+                        c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) == 999
+                    ]
                     priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
                     normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
                     sorted_zero_cards = priority_zero + normal_zero
@@ -1564,6 +2042,68 @@ class GameActions:
             self._should_remove_from_hand = True
         
         return result
+
+    def _card_play_may_affect_enemy(self, card: Dict[str, Any]) -> bool:
+        """Best-effort detector for enemy-affecting on_play cards (Step3C cache invalidation)."""
+
+        try:
+            from src.config.strategy_effects import get_card_effect_steps, normalize_effect_steps_to_ops
+        except Exception:
+            return False
+
+        card_name = str((card or {}).get("name") or "")
+        cfg_key = str(
+            (card or {}).get("_config_key")
+            or (card or {}).get("_cfg_key")
+            or (card or {}).get("config_key")
+            or card_name
+        )
+        if not card_name and not cfg_key:
+            return False
+
+        steps = get_card_effect_steps(
+            getattr(self.device_state, "config", None),
+            card_name=cfg_key,
+            trigger="on_play",
+        )
+        if (not steps) and cfg_key != card_name:
+            steps = get_card_effect_steps(
+                getattr(self.device_state, "config", None),
+                card_name=card_name,
+                trigger="on_play",
+            )
+        ops = normalize_effect_steps_to_ops(steps)
+        if not ops:
+            return False
+
+        enemy_legacy_types = {
+            "enemy_player",
+            "shield_or_highest_hp",
+            "double_enemy",
+            "enemy_followers_hp_less_than_6",
+            "shield_or_highest_hp_no_enemy_retrun_point",
+        }
+
+        for op in ops:
+            if not isinstance(op, dict):
+                continue
+            op_name = str(op.get("op") or "")
+            if op_name == "legacy_target_type":
+                tt = str(op.get("target_type") or "")
+                if tt in enemy_legacy_types:
+                    return True
+
+            if op_name == "select_targets":
+                kind = str(op.get("kind") or "")
+                if "enemy" in kind or "ward" in kind:
+                    return True
+
+            for key in ("kind", "target", "target_kind", "target_type"):
+                value = str(op.get(key) or "")
+                if "enemy" in value or "ward" in value:
+                    return True
+
+        return False
 
 
 
@@ -2048,7 +2588,8 @@ class GameActions:
     ):
         """统一的“扫描并刷新我方随从”入口。
 
-        通过短间隔多帧采样 + 必要时重试，减少外层零散补扫。
+        通过多次单帧采样（默认3次）+ slot聚合 + 必要时确认重扫，
+        减少外层零散补扫并稳定类型/命名结果。
         """
         # Keep old names when doing fast scans (no SIFT naming).
         try:
@@ -2065,19 +2606,89 @@ class GameActions:
         except Exception:
             debug_mode = False
 
+        def _finalize_followers(found):
+            followers_local = list(found or [])
+            if not followers_local:
+                return []
+
+            # Optional: backfill names from cache when we skipped naming.
+            if not with_names and cached_before and len(cached_before) == len(followers_local):
+                try:
+                    if any(len(f) > 3 and f[3] for f in cached_before):
+                        filled = []
+                        for x, y, t, name in followers_local:
+                            if name:
+                                filled.append((x, y, t, name))
+                                continue
+                            best = None
+                            best_dx = 10**9
+                            for cx, cy, ct, cname in cached_before:
+                                if not cname:
+                                    continue
+                                dx = abs(int(cx) - int(x))
+                                if dx < 30 and dx < best_dx:
+                                    best_dx = dx
+                                    best = cname
+                            filled.append((x, y, t, best))
+                        followers_local = filled
+                except Exception:
+                    pass
+
+            try:
+                followers_local = self._stabilize_followers_by_spot(
+                    followers_local,
+                    sort_desc=bool(sort_desc),
+                )
+            except Exception:
+                followers_local = list(followers_local or [])
+
+            self.follower_manager.update_positions(followers_local)
+            try:
+                if debug_flag or debug_mode:
+                    self.device_state.logger.info(f"我方当前场上随从: {followers_local}")
+                else:
+                    self.device_state.logger.debug(f"我方当前场上随从: {followers_local}")
+            except Exception:
+                pass
+            return followers_local
+
+        last_followers = []
         for attempt in range(max(0, int(retries)) + 1):
             t0 = time.perf_counter()
             screenshot = self.device_state.take_screenshot()
             if screenshot is None:
                 break
-            followers = self._scan_our_followers(
-                screenshot,
-                extra_shots=extra_shots,
-                sort_desc=sort_desc,
-                shot_delay_range=shot_delay_range,
-                debug_flag=debug_flag,
-                with_names=with_names,
-            )
+            shots: List[List[Tuple[Any, Any, Any, Any]]] = []
+            total_shots = max(1, 1 + int(max(0, int(extra_shots))))
+
+            for si in range(total_shots):
+                shot = screenshot if si == 0 else self.device_state.take_screenshot()
+                if shot is None:
+                    continue
+                one = self._scan_our_followers(
+                    shot,
+                    extra_shots=0,
+                    sort_desc=sort_desc,
+                    shot_delay_range=shot_delay_range,
+                    debug_flag=debug_flag,
+                    with_names=with_names,
+                )
+                if one:
+                    shots.append(list(one))
+
+                if si < (total_shots - 1):
+                    try:
+                        dmin, dmax = float(shot_delay_range[0]), float(shot_delay_range[1])
+                    except Exception:
+                        dmin, dmax = 0.08, 0.16
+                    if dmax < dmin:
+                        dmin, dmax = dmax, dmin
+                    dmin = max(0.0, dmin)
+                    dmax = max(dmin, dmax)
+                    self.device_state.sleep(random.uniform(dmin, dmax))
+
+            followers = self._aggregate_followers_from_shots(shots, sort_desc=bool(sort_desc))
+            last_followers = list(followers or [])
 
             # Perf record (includes the scan_our_followers path and any extra shots inside it).
             dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -2109,33 +2720,65 @@ class GameActions:
                 pass
 
             if followers:
-                # Optional: backfill names from cache when we skipped naming.
-                if not with_names and cached_before and len(cached_before) == len(followers):
+                return _finalize_followers(followers)
+            if attempt < retries:
+                time.sleep(random.uniform(0.12, 0.22))
+
+        # Unified bottom-layer empty confirm scan (total: at most 2 scans when retries=0).
+        if not last_followers:
+            try:
+                self.device_state.sleep(0.2)
+                t0 = time.perf_counter()
+                screenshot = self.device_state.take_screenshot()
+                if screenshot is not None:
+                    confirm_shots: List[List[Tuple[Any, Any, Any, Any]]] = []
+                    total_shots = max(1, 1 + int(max(0, int(extra_shots))))
+                    for si in range(total_shots):
+                        shot = screenshot if si == 0 else self.device_state.take_screenshot()
+                        if shot is None:
+                            continue
+                        one = self._scan_our_followers(
+                            shot,
+                            extra_shots=0,
+                            sort_desc=sort_desc,
+                            shot_delay_range=shot_delay_range,
+                            debug_flag=debug_flag,
+                            with_names=with_names,
+                        )
+                        if one:
+                            confirm_shots.append(list(one))
+
+                        if si < (total_shots - 1):
+                            try:
+                                dmin, dmax = float(shot_delay_range[0]), float(shot_delay_range[1])
+                            except Exception:
+                                dmin, dmax = 0.08, 0.16
+                            if dmax < dmin:
+                                dmin, dmax = dmax, dmin
+                            dmin = max(0.0, dmin)
+                            dmax = max(dmin, dmax)
+                            self.device_state.sleep(random.uniform(dmin, dmax))
+
+                    confirm = self._aggregate_followers_from_shots(
+                        confirm_shots,
+                        sort_desc=bool(sort_desc),
+                    )
+
+                    dt_ms = (time.perf_counter() - t0) * 1000.0
                     try:
-                        if any(len(f) > 3 and f[3] for f in cached_before):
-                            filled = []
-                            for x, y, t, name in followers:
-                                if name:
-                                    filled.append((x, y, t, name))
-                                    continue
-                                best = None
-                                best_dx = 10**9
-                                for cx, cy, ct, cname in cached_before:
-                                    if not cname:
-                                        continue
-                                    dx = abs(int(cx) - int(x))
-                                    if dx < 30 and dx < best_dx:
-                                        best_dx = dx
-                                        best = cname
-                                filled.append((x, y, t, best))
-                            followers = filled
+                        perf = getattr(self, "_perf_scan_our_followers", None)
+                        if isinstance(perf, dict) and mode in perf and isinstance(perf.get(mode), dict):
+                            perf[mode]["calls"] = int(perf[mode].get("calls", 0)) + 1
+                            perf[mode]["total_ms"] = float(perf[mode].get("total_ms", 0.0)) + float(dt_ms)
+                            if confirm:
+                                perf[mode]["ok"] = int(perf[mode].get("ok", 0)) + 1
                     except Exception:
                         pass
 
-                self.follower_manager.update_positions(followers)
-                return followers
-            if attempt < retries:
-                time.sleep(random.uniform(0.12, 0.22))
+                    if confirm:
+                        return _finalize_followers(confirm)
+            except Exception:
+                pass
 
         # Fallback: optionally return cached positions (for non-critical paths).
         if not allow_cached_fallback:

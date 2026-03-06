@@ -113,7 +113,7 @@ class GameStateMachine:
                     device_state.logger.debug(
                         f"检测到决斗按钮 - 当前in_match: {device_state.in_match}"
                     )
-                    # 记录新对战
+                    # war命中即视为新对战入口，重复触发由start_new_match内部防抖。
                     device_state.start_new_match()
                     # 计算中心点并点击
                     center_x = max_loc[0] + template_info["w"] // 2
@@ -145,38 +145,46 @@ class GameStateMachine:
                     continue
 
                 if key == "decision":
-                    device_state.start_new_match()
-                    config = device_state.config
+                    # decision阶段若先于war被识别，兜底启动新对战。
+                    if not getattr(device_state, "in_match", False):
+                        device_state.start_new_match()
+                    # 每局只执行一次换牌策略。
+                    if not bool(getattr(device_state, "mulligan_done_this_match", False)):
+                        config = device_state.config
 
-                    # 读取配置：是否使用增强策略（默认False，使用旧策略）
-                    use_enhanced = config.get("game", {}).get(
-                        "use_enhanced_mulligan", False
-                    )
-                    strategy_setting = config.get("game", {}).get(
-                        "card_replacement_strategy", "4费档次"
-                    )
+                        # 读取配置：是否使用增强策略（默认False，使用旧策略）
+                        use_enhanced = config.get("game", {}).get(
+                            "use_enhanced_mulligan", False
+                        )
+                        strategy_setting = config.get("game", {}).get(
+                            "card_replacement_strategy", "4费档次"
+                        )
 
-                    device_state.logger.info(
-                        f"执行换牌策略: {strategy_setting} ({'增强规则' if use_enhanced else '旧规则'})"
-                    )
+                        device_state.logger.info(
+                            f"执行换牌策略: {strategy_setting} ({'增强规则' if use_enhanced else '旧规则'})"
+                        )
 
-                    # 等待换牌界面卡牌动画完成
-                    device_state.sleep(0.4)
+                        # 等待换牌界面卡牌动画完成
+                        device_state.sleep(0.4)
 
-                    # 根据配置选择策略
-                    if use_enhanced:
-                        # 使用SIFT + 增强策略（默认）
-                        success = game_manager.game_actions._detect_change_card_sift()
-                    else:
-                        # 使用SIFT + 旧策略规则
-                        success = game_manager.game_actions._detect_change_card()
-
-                    if not success:
-                        device_state.logger.warning("换牌执行失败")
-                        # 如果增强策略失败，尝试fallback到旧规则
+                        # 根据配置选择策略
                         if use_enhanced:
-                            device_state.logger.info("回退到旧策略规则")
-                            game_manager.game_actions._detect_change_card()
+                            # 使用SIFT + 增强策略（默认）
+                            success = game_manager.game_actions._detect_change_card_sift()
+                        else:
+                            # 使用SIFT + 旧策略规则
+                            success = game_manager.game_actions._detect_change_card()
+
+                        if not success:
+                            device_state.logger.warning("换牌执行失败")
+                            # 如果增强策略失败，尝试fallback到旧规则
+                            if use_enhanced:
+                                device_state.logger.info("回退到旧策略规则")
+                                game_manager.game_actions._detect_change_card()
+
+                        device_state.mulligan_done_this_match = True
+                    else:
+                        device_state.logger.info("本局换牌已执行，跳过重复换牌")
 
                     device_state.sleep(0.5)
                     center_x = max_loc[0] + template_info["w"] // 2
@@ -185,6 +193,8 @@ class GameStateMachine:
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
                     )
+                    # 避免decision界面残留导致下一轮再次执行换牌。
+                    device_state.sleep(3)
                     break
 
                 if key == "end_round":

@@ -18,6 +18,8 @@
 from typing import List, Tuple, Dict, Optional
 import logging
 
+from src.utils.card_filename import make_enhance_key, normalize_config_key, split_enhance_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,16 +65,55 @@ def get_card_priority(card_name: str, priority_cards: Optional[Dict] = None) -> 
     Returns:
         int: 优先级数字（越小优先级越高，默认500）
     """
-    if priority_cards and card_name in priority_cards:
-        cfg = priority_cards[card_name]
+    def _name_candidates(raw_name: str) -> List[str]:
+        raw = str(raw_name or "").strip()
+        if not raw:
+            return []
+
+        out: List[str] = [raw]
+        base, enhance_cost = split_enhance_key(raw)
+        base_norm = normalize_config_key(str(base or ""))
+
+        if enhance_cost is not None and base_norm:
+            enh_key = make_enhance_key(base_norm, int(enhance_cost))
+            if enh_key not in out:
+                out.append(enh_key)
+
+        if base_norm and base_norm not in out:
+            out.append(base_norm)
+
+        return out
+
+    def _resolve_cfg(raw_name: str, mapping: Optional[Dict]) -> Optional[Dict]:
+        if not isinstance(mapping, dict) or not mapping:
+            return None
+
+        # 1) Fast path: direct key lookup with candidate names.
+        for key in _name_candidates(raw_name):
+            if key in mapping:
+                cfg_v = mapping.get(key)
+                return cfg_v if isinstance(cfg_v, dict) else {"priority": cfg_v}
+
+        # 2) Normalized lookup: strip follower suffixes and align enhance key format.
+        normalized_mapping: Dict[str, Dict] = {}
+        for k, v in mapping.items():
+            nk = normalize_config_key(str(k or ""))
+            if not nk:
+                continue
+            if nk not in normalized_mapping:
+                normalized_mapping[nk] = v if isinstance(v, dict) else {"priority": v}
+
+        for key in _name_candidates(raw_name):
+            nk = normalize_config_key(str(key or ""))
+            if nk in normalized_mapping:
+                return normalized_mapping[nk]
+
+        return None
+
+    cfg = _resolve_cfg(card_name, priority_cards)
+    if cfg is not None:
 
         # Backward compatibility: extremely old format may store an int/str.
-        if not isinstance(cfg, dict):
-            try:
-                return int(cfg)
-            except Exception:
-                return 500
-
         # 强制留牌（必留）：优先级视为最高。
         try:
             if isinstance(cfg, dict) and cfg.get("force_keep") is True:

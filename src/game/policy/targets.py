@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from src.utils.card_filename import normalize_config_key
+
 
 def _safe_int(v: Any, default: int = 0) -> int:
     try:
@@ -52,6 +54,56 @@ class TargetSelector:
         return max(enemy_followers, key=_enemy_hp_key)
 
     @staticmethod
+    def enemy_followers_in_wards(
+        enemy_followers: Sequence[Sequence[Any]],
+        ward_positions: Sequence[Sequence[Any]],
+        *,
+        x_tolerance: int = 50,
+    ) -> List[Sequence[Any]]:
+        """Filter enemy followers that match ward positions by x-axis proximity."""
+
+        if not enemy_followers or not ward_positions:
+            return []
+
+        wards_x = []
+        for w in ward_positions:
+            try:
+                wards_x.append(_safe_int(w[0], 0))
+            except Exception:
+                continue
+        if not wards_x:
+            return []
+
+        out: List[Sequence[Any]] = []
+        tol = max(1, int(x_tolerance))
+        for f in enemy_followers:
+            try:
+                fx = _safe_int(f[0], 0)
+            except Exception:
+                continue
+            if any(abs(fx - wx) < tol for wx in wards_x):
+                out.append(f)
+        return out
+
+    @staticmethod
+    def enemy_follower_highest_hp_in_wards(
+        enemy_followers: Sequence[Sequence[Any]],
+        ward_positions: Sequence[Sequence[Any]],
+        *,
+        x_tolerance: int = 50,
+    ) -> Optional[Sequence[Any]]:
+        """Pick highest HP follower among ward followers only."""
+
+        ward_followers = TargetSelector.enemy_followers_in_wards(
+            enemy_followers,
+            ward_positions,
+            x_tolerance=int(x_tolerance),
+        )
+        if not ward_followers:
+            return None
+        return max(ward_followers, key=_enemy_hp_key)
+
+    @staticmethod
     def enemy_followers_highest_hp(
         enemy_followers: Sequence[Sequence[Any]],
         *,
@@ -78,6 +130,24 @@ class TargetSelector:
             picked.append(f)
 
         return picked
+
+    @staticmethod
+    def enemy_follower_ward_or_highest_hp(
+        enemy_followers: Sequence[Sequence[Any]],
+        ward_positions: Sequence[Sequence[Any]],
+        *,
+        x_tolerance: int = 50,
+    ) -> Optional[Sequence[Any]]:
+        """Pick highest HP ward follower first; fallback to highest HP follower."""
+
+        ward_pick = TargetSelector.enemy_follower_highest_hp_in_wards(
+            enemy_followers,
+            ward_positions,
+            x_tolerance=int(x_tolerance),
+        )
+        if ward_pick is not None:
+            return ward_pick
+        return TargetSelector.enemy_follower_highest_hp(enemy_followers)
 
     @staticmethod
     def enemy_follower_hp_leq(
@@ -154,10 +224,19 @@ class TargetSelector:
         exclude = set(exclude_names or [])
         priority_cfg = evolve_priority_cards or {}
 
+        exclude_norm = {normalize_config_key(str(n or "")) for n in list(exclude or [])}
+        priority_norm: Dict[str, Any] = {}
+        for k, v in dict(priority_cfg or {}).items():
+            nk = normalize_config_key(str(k or ""))
+            if not nk:
+                continue
+            if nk not in priority_norm:
+                priority_norm[nk] = v
+
         def _prio(name: Any) -> int:
             if not isinstance(name, str) or not name:
                 return 999
-            cfg = priority_cfg.get(name)
+            cfg = priority_norm.get(normalize_config_key(name))
             if isinstance(cfg, dict):
                 return _safe_int(cfg.get("priority", 999), 999)
             return 999
@@ -168,7 +247,7 @@ class TargetSelector:
             name = None
             if len(f) > 3:
                 name = f[3]
-            if isinstance(name, str) and name and name not in exclude:
+            if isinstance(name, str) and name and normalize_config_key(name) not in exclude_norm:
                 named.append(f)
             elif name is None:
                 unnamed.append(f)

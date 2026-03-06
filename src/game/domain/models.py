@@ -127,6 +127,7 @@ class FollowerRuntimeState:
     damage_taken: int = 0
     is_ward: bool = False
     evolved_type: str = "none"
+    miss_count: int = 0
 
     def evolution_bonus(self) -> int:
         if self.evolved_type == "super":

@@ -18,8 +18,7 @@ if TYPE_CHECKING:
 class BattlePolicy(Protocol):
     name: str
 
-    def should_evolve(self, actions: "GameActions") -> bool:
-        """Return True if evolve/super-evolve phase should run."""
+    def should_evolve(self, actions: "GameActions") -> bool: ...
 
 
 class LegacyBattlePolicy:
@@ -34,16 +33,22 @@ class LegacyBattlePolicy:
         if not (getattr(ds, "evolution_point", 0) > 0 or getattr(ds, "super_evolution_point", 0) > 0):
             return False
 
-        # Condition 1: enemy has followers (scan fresh screenshot).
-        screenshot = ds.take_screenshot()
-        if screenshot:
-            try:
-                enemy_followers = actions._scan_enemy_ATK(screenshot)
-            except Exception:
-                enemy_followers = []
-            if enemy_followers:
-                ds.logger.info("检测到敌方随从，满足进化/超进化条件")
+        # Condition 1: enemy has followers.
+        cached_enemy_presence = getattr(actions, "_cached_enemy_presence_for_evolve", None)
+        if cached_enemy_presence is not None:
+            if bool(cached_enemy_presence):
+                ds.logger.info("复用缓存检测到敌方随从，满足进化/超进化条件")
                 return True
+        else:
+            screenshot = ds.take_screenshot()
+            if screenshot:
+                try:
+                    enemy_followers = actions._scan_enemy_ATK(screenshot)
+                except Exception:
+                    enemy_followers = []
+                if enemy_followers:
+                    ds.logger.info("检测到敌方随从，满足进化/超进化条件")
+                    return True
 
         # Condition 2: our green (storm) followers exist.
         try:

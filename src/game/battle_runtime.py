@@ -368,6 +368,9 @@ class BattleRuntimeState:
         out: List[FollowerRuntimeState] = []
         wards = list(ward_positions or [])
 
+        x_limit = 128 if str(side) == "ours" else 72
+        y_limit = 120 if str(side) == "ours" else 90
+
         for item in list(scanned or []):
             if not isinstance(item, (list, tuple)) or len(item) < 2:
                 continue
@@ -375,7 +378,64 @@ class BattleRuntimeState:
             y = _safe_int(item[1], 0)
             ftype = str(item[2] if len(item) > 2 else "normal")
 
-            idx = self._match_existing_index(existing, used, x, y)
+            raw_name = ""
+            if len(item) > 3 and isinstance(item[3], str):
+                raw_name = str(item[3] or "")
+            parsed_base = ""
+            parsed_atk = None
+            parsed_hp = None
+            if raw_name:
+                parsed_base, parsed_atk, parsed_hp = parse_follower_stat_suffix(raw_name)
+                parsed_base = str(parsed_base or raw_name)
+            norm_base = normalize_card_base_name(parsed_base)
+
+            idx = None
+            if norm_base:
+                idx = self._match_existing_index(
+                    existing,
+                    used,
+                    x,
+                    y,
+                    expected_base=norm_base,
+                    x_limit=max(150, x_limit),
+                    y_limit=max(120, y_limit),
+                )
+            if idx is None:
+                idx = self._match_existing_index(
+                    existing,
+                    used,
+                    x,
+                    y,
+                    expected_base="",
+                    x_limit=x_limit,
+                    y_limit=y_limit,
+                )
+
+            if idx is None and str(side) == "ours":
+                # 对带有运行时状态（来源键/BUFF/进化）的随从放宽匹配阈值，减少动画导致的状态丢失。
+                best_idx = None
+                best_score = 10**9
+                for i, st in enumerate(list(existing or [])):
+                    if i in used:
+                        continue
+                    if not self._has_runtime_marks(st):
+                        continue
+                    dx = abs(int(getattr(st, "x", 0)) - int(x))
+                    dy = abs(int(getattr(st, "y", 0)) - int(y))
+                    if dx > 176 or dy > 150:
+                        continue
+                    score = dx * 2 + dy
+                    if norm_base:
+                        st_base = normalize_card_base_name(
+                            str(getattr(st, "base_name", "") or getattr(st, "raw_name", "") or "")
+                        )
+                        if st_base and st_base == norm_base:
+                            score -= 300
+                    if score < best_score:
+                        best_score = score
+                        best_idx = i
+                idx = best_idx
+
             if idx is not None:
                 st = existing[idx]
                 used.add(int(idx))
@@ -390,19 +450,17 @@ class BattleRuntimeState:
             if side == "enemy":
                 st.is_ward = any(abs(int(x) - _safe_int(w[0], 0)) < 50 for w in wards if len(w) >= 1)
 
-            raw_name = ""
-            if len(item) > 3 and isinstance(item[3], str):
-                raw_name = str(item[3] or "")
             if raw_name:
                 st.raw_name = raw_name
-                base_name, atk0, hp0 = parse_follower_stat_suffix(raw_name)
-                st.base_name = base_name if base_name else raw_name
-                if atk0 is not None:
-                    st.atk0 = int(atk0)
-                if hp0 is not None:
-                    st.hp0 = int(hp0)
+                st.base_name = parsed_base if parsed_base else raw_name
+                if parsed_atk is not None:
+                    st.atk0 = int(parsed_atk)
+                if parsed_hp is not None:
+                    st.hp0 = int(parsed_hp)
             elif not st.base_name:
                 st.base_name = st.raw_name or ""
+
+            st.miss_count = 0
 
             if with_hp:
                 hp_seen = _parse_hp(item[3] if len(item) > 3 else None)
@@ -420,6 +478,17 @@ class BattleRuntimeState:
 
             out.append(st)
 
+        if str(side) == "ours" and existing:
+            for i, st in enumerate(list(existing or [])):
+                if i in used:
+                    continue
+                if not self._should_preserve_unseen_ours(st):
+                    continue
+                st.miss_count = int(getattr(st, "miss_count", 0) or 0) + 1
+                if st.miss_count > 2:
+                    continue
+                out.append(st)
+
         out = sorted(out, key=lambda s: int(s.x), reverse=True)
         return out
 
@@ -429,6 +498,10 @@ class BattleRuntimeState:
         used: Iterable[int],
         x: int,
         y: int,
+        *,
+        expected_base: str = "",
+        x_limit: int = 72,
+        y_limit: int = 90,
     ) -> Optional[int]:
         used_set = set(used)
         best_idx = None
@@ -438,13 +511,44 @@ class BattleRuntimeState:
                 continue
             dx = abs(int(st.x) - int(x))
             dy = abs(int(st.y) - int(y))
-            if dx > 72 or dy > 90:
+            if dx > int(x_limit) or dy > int(y_limit):
                 continue
             score = dx * 2 + dy
+            if expected_base:
+                st_base = normalize_card_base_name(
+                    str(getattr(st, "base_name", "") or getattr(st, "raw_name", "") or "")
+                )
+                if st_base and st_base == expected_base:
+                    score -= 400
+                elif st_base:
+                    score += 180
+            if str(getattr(st, "source_cfg_key", "") or ""):
+                score -= 20
             if score < best_score:
                 best_score = score
                 best_idx = i
         return best_idx
+
+    @staticmethod
+    def _has_runtime_marks(st: FollowerRuntimeState) -> bool:
+        return bool(
+            str(getattr(st, "source_cfg_key", "") or "")
+            or int(getattr(st, "buff_atk", 0) or 0) != 0
+            or int(getattr(st, "buff_hp", 0) or 0) != 0
+            or str(getattr(st, "evolved_type", "none") or "none") != "none"
+        )
+
+    def _should_preserve_unseen_ours(self, st: FollowerRuntimeState) -> bool:
+        # 仅在短时间内保留高价值状态，避免无名帧导致BUFF/进化/来源键丢失。
+        if self._has_runtime_marks(st):
+            return True
+
+        # 已有明确基础身材/名字的随从，也允许短暂保留一小段时间。
+        if str(getattr(st, "raw_name", "") or ""):
+            return True
+        if getattr(st, "atk0", None) is not None or getattr(st, "hp0", None) is not None:
+            return True
+        return False
 
     def _find_state(
         self,

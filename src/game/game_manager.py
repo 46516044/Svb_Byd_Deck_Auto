@@ -203,7 +203,13 @@ class GameManager:
 
         return enemy_atk_positions
 
-    def scan_enemy_followers(self, screenshot, debug_flag=False, is_select=False):
+    def scan_enemy_followers(
+        self,
+        screenshot,
+        debug_flag: bool = False,
+        is_select: bool = False,
+        _retry_on_empty: bool = True,
+    ):
         """
         检测场上的敌方随从位置与血量 (Improved with sliding window + fallback recognition)
 
@@ -317,10 +323,42 @@ class GameManager:
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
                 cv2.imwrite(f"debug/enemy_hp_detection_{timestamp}.png", debug_img)
 
-            return enemy_followers
+            if enemy_followers:
+                return enemy_followers
+
+            if _retry_on_empty:
+                try:
+                    logger.info("敌方随从首次为空，执行第2次确认扫描")
+                    time.sleep(0.2)
+                    second = self.device_state.take_screenshot()
+                    if second is not None:
+                        return self.scan_enemy_followers(
+                            second,
+                            debug_flag=debug_flag,
+                            is_select=is_select,
+                            _retry_on_empty=False,
+                        )
+                except Exception:
+                    pass
+
+            return []
 
         except Exception as e:
             logger.error(f"Enemy follower detection failed: {e}", exc_info=True)
+            if _retry_on_empty:
+                try:
+                    logger.info("敌方随从检测异常，执行第2次确认扫描")
+                    time.sleep(0.2)
+                    second = self.device_state.take_screenshot()
+                    if second is not None:
+                        return self.scan_enemy_followers(
+                            second,
+                            debug_flag=debug_flag,
+                            is_select=is_select,
+                            _retry_on_empty=False,
+                        )
+                except Exception:
+                    pass
             return []
 
     def scan_our_followers(
@@ -334,16 +372,16 @@ class GameManager:
     ):
         """检测场上的我方随从位置和状态。
 
-        设计目标：把“补扫/重扫”的零碎逻辑收敛到一次扫描里。
-        默认会在较短的随机间隔内采样3帧（1 + extra_shots=2），再做去重与命名汇总，
-        用于降低动画/特效导致的单帧漏检。
+        当前策略：单帧检测，不做跨帧合并。
+        为兼容调用方，保留 ``extra_shots`` / ``shot_delay_range`` 参数，
+        但不再用于跨帧采样。
 
         Args:
             screenshot: 当前截图（PIL Image）
             debug_flag: 是否输出debug图片
-            extra_shots: 额外补充截图次数（默认2，即总共3帧）
+            extra_shots: 保留参数（单帧模式下不使用）
             sort_desc: True=按x坐标从右到左排序；False=从左到右排序
-            shot_delay_range: 多帧采样的随机间隔范围（秒）
+            shot_delay_range: 保留参数（单帧模式下不使用）
         """
         import time
         import random
@@ -354,25 +392,14 @@ class GameManager:
         import os
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        screenshots = [screenshot]
-        # 多帧采样：随机短间隔补两帧，减少过渡帧/特效干扰
-        if hasattr(self.device_state, "take_screenshot"):
+        base_shot = screenshot
+        if base_shot is None and hasattr(self.device_state, "take_screenshot"):
             try:
-                extra = int(extra_shots)
+                base_shot = self.device_state.take_screenshot()
             except Exception:
-                extra = 2
-            extra = max(0, extra)
-            try:
-                dmin, dmax = float(shot_delay_range[0]), float(shot_delay_range[1])
-            except Exception:
-                dmin, dmax = 0.12, 0.22
-            if dmax < dmin:
-                dmin, dmax = dmax, dmin
-            dmin = max(0.0, dmin)
-            dmax = max(dmin, dmax)
-            for _ in range(extra):
-                time.sleep(random.uniform(dmin, dmax))
-                screenshots.append(self.device_state.take_screenshot())
+                base_shot = None
+        if base_shot is None:
+            return []
 
         def _type_priority(t: str) -> int:
             return {"green": 3, "yellow": 2, "normal": 1}.get(t, 0)
@@ -868,48 +895,12 @@ class GameManager:
             follower_positions.sort(key=lambda pos: pos[0], reverse=sort_desc)
             return follower_positions, shot_all_follower_positions
 
-        # 多帧HSV识别（先得到每帧结果，再做汇总）
-        per_shot_followers = []
-        all_rectangles = []
-
+        # 单帧HSV识别（不做跨帧合并）
         collect_rectangles = bool(with_names)
-
-        valid_shots = [s for s in screenshots if s is not None]
-        if not valid_shots:
-            return []
-
-        if len(valid_shots) == 1:
-            followers, rects = recognize_followers(
-                valid_shots[0], debug_flag, collect_rectangles=collect_rectangles
-            )
-            followers = _dedup_by_x([(x, y, t, None) for (x, y, t) in followers])
-            per_shot_followers.append(followers)
-            if collect_rectangles:
-                all_rectangles.extend(rects)
-        else:
-            with ThreadPoolExecutor(max_workers=max(1, len(valid_shots))) as executor:
-                futures = [
-                    executor.submit(
-                        recognize_followers,
-                        shot,
-                        debug_flag,
-                        collect_rectangles=collect_rectangles,
-                    )
-                    for shot in valid_shots
-                ]
-                import logging
-
-                for future in as_completed(futures):
-                    try:
-                        followers, rects = future.result()
-                        followers = _dedup_by_x(
-                            [(x, y, t, None) for (x, y, t) in followers]
-                        )
-                        per_shot_followers.append(followers)
-                        if collect_rectangles:
-                            all_rectangles.extend(rects)
-                    except Exception as e:
-                        logging.error(f"recognize_followers线程异常: {e}")
+        followers, all_rectangles = recognize_followers(
+            base_shot, debug_flag, collect_rectangles=collect_rectangles
+        )
+        followers = _dedup_by_x([(x, y, t, None) for (x, y, t) in followers])
 
         # 矩形区域去重（仅用于SIFT命名；左上角x轴在54像素内视为同一个随从区域）
         deduplicated_follower_positions = []
@@ -1130,16 +1121,7 @@ class GameManager:
 
         sift_results = []
         if with_names and deduplicated_follower_positions:
-            # 执行SIFT识别：用最新一帧作为裁剪基准（避免跨帧矩形导致命名失败）
-            base_for_naming = None
-            for s in reversed(screenshots):
-                if s is not None:
-                    base_for_naming = s
-                    break
-            if base_for_naming is None:
-                base_for_naming = screenshot
-
-            sift_results = perform_sift_recognition_on_rectangles(base_for_naming)
+            sift_results = perform_sift_recognition_on_rectangles(base_shot)
 
         def attach_names(followers):
             named = []
@@ -1156,123 +1138,13 @@ class GameManager:
             return named
 
         if with_names and sift_results:
-            per_shot_followers = [attach_names(f) for f in per_shot_followers]
+            followers = attach_names(followers)
 
-        x_match_thresh = 54
-        scan_support_required = None
-
-        if not with_names:
-            # 攻击阶段(无命名)使用保守汇总：
-            # - 多帧按槽位聚类
-            # - 要求跨帧支持(>=2/3帧)
-            # - 限制最多5个随从，避免把动画残影并进结果
-            support_required = 2 if len(valid_shots) >= 3 else 1
-            scan_support_required = support_required
-            clusters = []
-
-            for shot_idx, shot_followers in enumerate(per_shot_followers):
-                for x, y, t, _ in shot_followers:
-                    x_i = int(x)
-                    y_i = int(y)
-                    t_s = str(t or "normal")
-
-                    matched = None
-                    for c in clusters:
-                        if abs(x_i - int(c["x"])) < x_match_thresh:
-                            matched = c
-                            break
-
-                    if matched is None:
-                        clusters.append(
-                            {
-                                "x": float(x_i),
-                                "items": [(x_i, y_i, t_s)],
-                                "shots": {int(shot_idx)},
-                            }
-                        )
-                        continue
-
-                    items = matched["items"]
-                    n = len(items)
-                    matched["x"] = (float(matched["x"]) * n + float(x_i)) / (n + 1)
-                    items.append((x_i, y_i, t_s))
-                    matched["shots"].add(int(shot_idx))
-
-            merged_meta = []
-            for c in clusters:
-                support = len(c.get("shots") or ())
-                if support < support_required:
-                    continue
-
-                items = list(c.get("items") or [])
-                if not items:
-                    continue
-
-                avg_x = int(round(sum(it[0] for it in items) / len(items)))
-                avg_y = int(round(sum(it[1] for it in items) / len(items)))
-                best_type = max((it[2] for it in items), key=_type_priority)
-                merged_meta.append((avg_x, avg_y, best_type, None, support))
-
-            # Shadowverse场上随从上限为5，超出时保留“跨帧支持更强”的候选。
-            if len(merged_meta) > 5:
-                merged_meta = sorted(
-                    merged_meta,
-                    key=lambda it: (int(it[4]), _type_priority(it[2]), int(it[0])),
-                    reverse=True,
-                )[:5]
-
-            merged = [
-                (int(x), 399 + random.randint(-7, 7), t, name)
-                for (x, y, t, name, support) in merged_meta
-            ]
-            merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
-        else:
-            # 选一帧作为基准（结果最多；若相同则名字更多；再相同则可攻击随从更多）
-            def score(followers):
-                total = len(followers)
-                named_cnt = sum(1 for it in followers if it[3])
-                atk_cnt = sum(1 for it in followers if it[2] in ("green", "yellow"))
-                return (total, named_cnt, atk_cnt)
-
-            anchor = max(per_shot_followers, key=score) if per_shot_followers else []
-
-            # 汇总：以anchor为骨架，补全名字/升级类型/补齐漏检随从
-            merged = list(anchor)
-
-            def merge_one(candidate):
-                nonlocal merged
-                for x, y, t, name in candidate:
-                    matched_idx = None
-                    for i, (mx, my, mt, mname) in enumerate(merged):
-                        if abs(x - mx) < x_match_thresh:
-                            matched_idx = i
-                            break
-
-                    if matched_idx is None:
-                        merged.append((x, y, t, name))
-                        continue
-
-                    mx, my, mt, mname = merged[matched_idx]
-                    # 类型升级：green > yellow > normal
-                    if _type_priority(t) > _type_priority(mt):
-                        mt = t
-                    # 名字补全
-                    if (not mname) and name:
-                        mname = name
-                    merged[matched_idx] = (mx, my, mt, mname)
-
-            for shot_followers in per_shot_followers:
-                if shot_followers is anchor:
-                    continue
-                merge_one(shot_followers)
-
-            # 最终按x聚类去重一次，并强制校准y坐标
-            merged = _dedup_by_x(merged, x_thresh=x_match_thresh)
-            merged = [
-                (int(x), 399 + random.randint(-7, 7), t, name)
-                for (x, y, t, name) in merged
-            ]
-            merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
+        merged = [
+            (int(x), 399 + random.randint(-7, 7), t, name)
+            for (x, y, t, name) in followers
+        ]
+        merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
         if len(merged) > 5:
             merged = sorted(
                 merged,
@@ -1281,129 +1153,49 @@ class GameManager:
             )[:5]
             merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
 
-        try:
-            debug_mode = bool(
-                isinstance(getattr(self.device_state, "config", None), dict)
-                and self.device_state.config.get("ui", {}).get("debug_mode")
-            )
-        except Exception:
-            debug_mode = False
-
-        if (debug_flag or debug_mode) and (not with_names):
-            try:
-                shot_counts = [len(s) for s in (per_shot_followers or [])]
-                self.device_state.logger.info(
-                    "我方随从多帧汇总(攻击阶段): "
-                    f"shots={shot_counts}, support_required={scan_support_required}, merged={len(merged)}"
-                )
-            except Exception:
-                pass
-
-        if debug_flag or debug_mode:
-            self.device_state.logger.info(f"我方当前场上随从: {merged}")
+        if debug_flag:
+            self.device_state.logger.info(f"我方当前场上随从(单帧): {merged}")
         else:
-            self.device_state.logger.debug(f"我方当前场上随从: {merged}")
+            self.device_state.logger.debug(f"我方当前场上随从(单帧): {merged}")
         return merged
 
     def scan_shield_targets(self, debug_flag=False):
-        """扫描护盾（多线程并发处理）"""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        """扫描护盾（单帧检测，不做跨帧合并）。"""
 
-        shield_targets = []
-        images = []
-        last_screenshot = None
+        screenshot = self.device_state.take_screenshot()
+        if screenshot is None:
+            return []
 
-        # 获取多张截图用于护盾检测
-        for _ in range(4):
-            time.sleep(0.2)
-            screenshot = self.device_state.take_screenshot()
-            if screenshot is None:
-                continue
+        try:
+            enemy_atk_positions = self.scan_enemy_ATK(screenshot, debug_flag)
+            if not enemy_atk_positions:
+                return []
+        except Exception as e:
+            import logging
+
+            logging.error(f"敌方随从位置检测异常: {str(e)}")
+            return []
+
+        try:
             region = screenshot.crop(ENEMY_SHIELD_REGION)
             bgr_image = cv2.cvtColor(np.array(region), cv2.COLOR_RGB2BGR)
-            images.append(bgr_image)
+            detected_shields = self._process_shield_image(bgr_image, debug_flag)
+        except Exception as e:
+            import logging
 
-        # 获取最后一张截图用于敌方随从有无检测
-        if images:
-            last_screenshot = self.device_state.take_screenshot()
-
-        if not images or last_screenshot is None:
-            return []  # 如果没有图像，直接返回空列表
-
-        # 使用线程池并行处理攻击力检测和护盾检测
-        with ThreadPoolExecutor(max_workers=6) as executor:
-            # 提交攻击力检测任务
-            atk_future = executor.submit(
-                self.scan_enemy_ATK, last_screenshot, debug_flag
-            )
-
-            # 提交护盾检测任务
-            shield_futures = [
-                executor.submit(self._process_shield_image, img, debug_flag)
-                for img in images
-            ]
-
-            # 收集攻击力检测结果
-            try:
-                enemy_atk_positions = atk_future.result()
-                if not enemy_atk_positions:
-                    return (
-                        []
-                    )  # 如果无敌方随从，直接返回空列表（就算护盾处理检测到护盾，没有随从的话也是误识别，比如护符之类）
-            except Exception as e:
-                import logging
-
-                logging.error(f"敌方随从位置检测异常: {str(e)}")
-                return []
-
-            # 收集护盾检测结果
-            all_positions = []
-            for future in as_completed(shield_futures):
-                try:
-                    all_positions.extend(future.result())
-                except Exception as e:
-                    import logging
-
-                    logging.error(f"护盾检测并发任务异常: {str(e)}")
-
-            # 合并去重 + 多帧一致性过滤
-            # 过去是“任意一帧命中就算护盾”，容易被特效/闪光误触发。
-            # 这里要求同一位置在多帧中重复出现，提高准确率。
-            clusters = []  # [{'x':float,'y':float,'count':int}]
-            for x, y in all_positions:
-                matched = False
-                for c in clusters:
-                    if abs(x - c['x']) < 40 and abs(y - c['y']) < 40:
-                        # 在线更新均值
-                        c['count'] += 1
-                        c['x'] = (c['x'] * (c['count'] - 1) + x) / c['count']
-                        c['y'] = (c['y'] * (c['count'] - 1) + y) / c['count']
-                        matched = True
-                        break
-                if not matched:
-                    clusters.append({'x': float(x), 'y': float(y), 'count': 1})
-
-            # 根据采样帧数动态决定一致性要求
-            # - >=3帧：至少2帧命中
-            # - <3帧：放宽到1帧（避免截图失败导致永远检测不到）
-            support_required = 2 if len(images) >= 3 else 1
-            final_shields = [
-                (int(c['x']), int(c['y']))
-                for c in clusters
-                if c['count'] >= support_required
-            ]
+            logging.error(f"护盾检测异常: {str(e)}")
+            return []
 
         shield_targets = []
 
-        # 过滤enemy_atk_positions，只保留与final_shields中任意点x轴距离小于50像素的坐标
+        # 过滤enemy_atk_positions，只保留与detected_shields中任意点x轴距离小于50像素的坐标
         for shield_pos in enemy_atk_positions:
             shield_x = shield_pos[0]
-            # 检查是否与任意敌方随从位置的x轴距离小于50像素
-            for atk_pos in final_shields:
-                atk_x = atk_pos[0]
-                if abs(shield_x - atk_x) < 50:
+            for pos in detected_shields:
+                px = pos[0]
+                if abs(shield_x - px) < 50:
                     shield_targets.append(shield_pos)
-                    break  # 找到一个匹配到的就足够了
+                    break
 
         # 按x轴排序，校准y轴坐标
         if shield_targets:

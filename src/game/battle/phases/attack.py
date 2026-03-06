@@ -11,21 +11,13 @@ class AttackPhase:
         ds = self.actions.device_state
         ds.logger.info("[Phase] attack")
 
-        # Only pay the SIFT naming cost when on_attack effects exist.
-        try:
-            from src.config.strategy_effects import has_any_effects_for_trigger
-
-            need_names = has_any_effects_for_trigger(getattr(ds, "config", None), trigger="on_attack")
-        except Exception:
-            need_names = False
-
         # Attack phase prefers a fresh strict scan to avoid stale-cache misses.
-        # Baseline: 3-frame merge + 1 retry (up to 2 attempts).
+        # Baseline: 3-shot sampling with names, retry handled by lower layer.
         our_followers = self.actions._refresh_our_followers(
             sort_desc=True,
             extra_shots=2,
-            retries=1,
-            with_names=bool(need_names),
+            retries=0,
+            with_names=True,
             allow_cached_fallback=False,
         )
 
@@ -33,12 +25,19 @@ class AttackPhase:
         if not our_followers:
             try:
                 fm = getattr(self.actions, "follower_manager", None)
-                if fm is not None and hasattr(fm, "get_positions_sorted"):
+                is_fresh = bool(
+                    fm is not None
+                    and hasattr(fm, "is_fresh")
+                    and fm.is_fresh(max_age_seconds=0.8)
+                )
+                if is_fresh and fm is not None and hasattr(fm, "get_positions_sorted"):
                     our_followers = fm.get_positions_sorted(sort_desc=True)
-                elif fm is not None:
+                elif is_fresh and fm is not None:
                     our_followers = sorted(
                         (fm.get_positions() or []), key=lambda f: int(f[0]), reverse=True
                     )
+                else:
+                    our_followers = []
             except Exception:
                 our_followers = []
 

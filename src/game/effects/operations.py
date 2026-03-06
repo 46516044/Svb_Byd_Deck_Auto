@@ -135,6 +135,13 @@ class OperationExecutor:
         if ds is None:
             return False
 
+        target_kind = ""
+        try:
+            if isinstance(target, dict):
+                target_kind = str(target.get("kind") or "")
+        except Exception:
+            target_kind = ""
+
         # Allow animations / target UI to settle.
         time.sleep(0.4)
 
@@ -149,6 +156,15 @@ class OperationExecutor:
         if not positions:
             try:
                 ds.logger.warning(f"[Effect] select_targets: no targets (target={target})")
+            except Exception:
+                pass
+            try:
+                fail_kinds = getattr(ctx, "select_targets_fail_kinds", None)
+                if isinstance(fail_kinds, list):
+                    if target_kind:
+                        fail_kinds.append(target_kind)
+                else:
+                    setattr(ctx, "select_targets_fail_kinds", [target_kind] if target_kind else [])
             except Exception:
                 pass
             return False

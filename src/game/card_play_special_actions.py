@@ -7,11 +7,12 @@ import time
 import random
 import logging
 from typing import TYPE_CHECKING
-from src.config.card_priorities import get_high_priority_cards
+from src.config.card_priorities import is_high_priority_card
 from src.config.game_constants import DEFAULT_ATTACK_TARGET, DEFAULT_ATTACK_RANDOM
 from src.game.game_actions import human_like_drag
 from src.game.policy.targets import TargetSelector
 from src.game.policy.effects import get_card_effect_steps
+from src.utils.card_filename import normalize_config_key
 
 from src.config.strategy_effects import normalize_effect_steps_to_ops, parse_select_option
 from src.game.effects import EffectEngine, HandCardContext
@@ -45,6 +46,31 @@ def get_card_evolve_mode_options(config=None):
     # Avoid business-module disk IO; callers should pass runtime config.
     return {}
 
+
+def _lookup_by_normalized_key(mapping, *keys):
+    """Lookup config value by direct key or normalized base key."""
+
+    if not isinstance(mapping, dict) or not mapping:
+        return None
+
+    for key in list(keys or []):
+        ks = str(key or "")
+        if ks in mapping:
+            return mapping.get(ks)
+
+    normalized_mapping = {}
+    for mk, mv in dict(mapping).items():
+        nk = normalize_config_key(str(mk or ""))
+        if nk and nk not in normalized_mapping:
+            normalized_mapping[nk] = mv
+
+    for key in list(keys or []):
+        nk = normalize_config_key(str(key or ""))
+        if nk in normalized_mapping:
+            return normalized_mapping.get(nk)
+
+    return None
+
 class CardPlaySpecialActions:
     """出牌特殊操作处理类"""
     
@@ -59,9 +85,9 @@ class CardPlaySpecialActions:
         card_name = card.get('name', '')
         # Enhance variants can use a separate config key.
         cfg_key = card.get('_config_key') or card.get('config_key') or card_name
-        
-        high_priority_names = set(get_high_priority_cards(self.device_state.config).keys())
+
         card_mode_options = get_card_mode_options(self.device_state.config)
+        mode_option = None
 
         # Prefer config-driven effects (Step3A op schema; legacy steps will be normalized).
         steps = get_card_effect_steps(
@@ -142,12 +168,39 @@ class CardPlaySpecialActions:
                     for o in ops
                     if isinstance(o, dict) and str(o.get("op") or "") != "legacy_target_type"
                 ]
-                EffectEngine.run_ops(ops_to_run, ctx=ctx, trigger_id="on_play")
+                run_result = EffectEngine.run_ops(ops_to_run, ctx=ctx, trigger_id="on_play")
 
-        elif str(cfg_key) in card_mode_options or str(card_name) in card_mode_options:
-            mode_option = card_mode_options.get(str(cfg_key)) or card_mode_options.get(
-                str(card_name)
-            )
+                # Unified failure policy for enemy_follower targeting:
+                # - no cost consumption
+                # - ignore this card for current round
+                fail_kinds = list(getattr(ctx, "select_targets_fail_kinds", []) or [])
+                enemy_target_failed = any(str(k) == "enemy_follower" for k in fail_kinds)
+                if enemy_target_failed:
+                    self.device_state.logger.info(
+                        f"[{card_name}] 敌方随从目标选择失败，回退为本回合忽略且不耗费"
+                    )
+                    try:
+                        from src.game.effects.operations import OperationExecutor
+
+                        OperationExecutor.cancel_action(ctx)
+                    except Exception:
+                        pass
+                    self._should_not_consume_cost = True
+                    self._should_remove_from_hand = True
+                    return False
+
+                if run_result.aborted:
+                    self.device_state.logger.warning(
+                        f"[{card_name}] on_play effects aborted，回退为本回合忽略且不耗费"
+                    )
+                    self._should_not_consume_cost = True
+                    self._should_remove_from_hand = True
+                    return False
+
+        else:
+            mode_option = _lookup_by_normalized_key(card_mode_options, str(cfg_key), str(card_name))
+
+        if mode_option is not None:
             self.device_state.logger.info(f"检测到模式卡牌{card_name}，选项: {mode_option}")
 
             human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
@@ -176,7 +229,7 @@ class CardPlaySpecialActions:
                 )
                 time.sleep(0.5)
 
-        else:
+        elif not ops:
             # 普通卡牌，正常打出
             self._default_card_play(center_x, center_y, target_x)
         
@@ -198,7 +251,9 @@ class CardPlaySpecialActions:
             self._extra_cost_bonus = 0
         
         # 如果是高优先级卡牌，多等一会
-        if str(cfg_key) in high_priority_names or str(card_name) in high_priority_names:
+        if is_high_priority_card(str(cfg_key), self.device_state.config) or is_high_priority_card(
+            str(card_name), self.device_state.config
+        ):
             time.sleep(1)
         
         time.sleep(0.5)
@@ -213,17 +268,19 @@ class CardPlaySpecialActions:
             return None
 
         try:
+            self.device_state.sleep(1.0)
             screenshot = self.device_state.take_screenshot()
             if screenshot is None:
                 return None
 
             followers = game_manager.scan_our_followers(
                 screenshot,
-                extra_shots=1,
+                extra_shots=0,
                 sort_desc=True,
                 shot_delay_range=(0.05, 0.10),
                 with_names=True,
             )
+
             if followers:
                 runtime.sync_ours(followers)
             pos = runtime.mark_latest_play_origin(card_name=str(card_name or ""), cfg_key=str(cfg_key or ""))
@@ -332,11 +389,32 @@ class CardPlaySpecialActions:
             # 划出卡牌
             human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
             time.sleep(0.9)  # 等待
-            
-            # 点击护盾随从（选择第一个护盾）
-            shield_x, shield_y = shield_targets[0]
-            self.device_state.u2_device.click(shield_x, shield_y)
-            self.device_state.logger.info(f"点击护盾随从位置: ({shield_x}, {shield_y})")
+
+            # 优先点击“护盾随从中血量最高”的目标。
+            shield_pick = None
+            try:
+                screenshot = self.device_state.take_screenshot()
+                if screenshot is not None:
+                    enemy_followers = self._scan_enemy_followers(screenshot, is_select=True)
+                    shield_pick = TargetSelector.enemy_follower_highest_hp_in_wards(
+                        enemy_followers,
+                        shield_targets,
+                    )
+            except Exception:
+                shield_pick = None
+
+            if shield_pick is not None:
+                shield_x, shield_y = int(shield_pick[0]), int(shield_pick[1])
+                hp_text = shield_pick[3] if len(shield_pick) > 3 else "?"
+                self.device_state.u2_device.click(shield_x, shield_y)
+                self.device_state.logger.info(
+                    f"点击护盾中血量最高随从: ({shield_x}, {shield_y}) HP={hp_text}"
+                )
+            else:
+                # 兜底：护盾列表第一个。
+                shield_x, shield_y = shield_targets[0]
+                self.device_state.u2_device.click(shield_x, shield_y)
+                self.device_state.logger.info(f"点击护盾随从位置(兜底): ({shield_x}, {shield_y})")
         else:
             self.device_state.logger.info("未检测到护盾，尝试检测血量最高的敌方随从")
             # 划出卡牌
@@ -401,11 +479,32 @@ class CardPlaySpecialActions:
             # 划出卡牌
             human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
             time.sleep(0.9)  # 等待
-            
-            # 点击护盾随从（选择第一个护盾）
-            shield_x, shield_y = shield_targets[0]
-            self.device_state.u2_device.click(shield_x, shield_y)
-            self.device_state.logger.info(f"点击护盾随从位置: ({shield_x}, {shield_y})")
+
+            # 优先点击“护盾随从中血量最高”的目标。
+            shield_pick = None
+            try:
+                screenshot = self.device_state.take_screenshot()
+                if screenshot is not None:
+                    enemy_followers = self._scan_enemy_followers(screenshot, is_select=True)
+                    shield_pick = TargetSelector.enemy_follower_highest_hp_in_wards(
+                        enemy_followers,
+                        shield_targets,
+                    )
+            except Exception:
+                shield_pick = None
+
+            if shield_pick is not None:
+                shield_x, shield_y = int(shield_pick[0]), int(shield_pick[1])
+                hp_text = shield_pick[3] if len(shield_pick) > 3 else "?"
+                self.device_state.u2_device.click(shield_x, shield_y)
+                self.device_state.logger.info(
+                    f"点击护盾中血量最高随从: ({shield_x}, {shield_y}) HP={hp_text}"
+                )
+            else:
+                # 兜底：护盾列表第一个。
+                shield_x, shield_y = shield_targets[0]
+                self.device_state.u2_device.click(shield_x, shield_y)
+                self.device_state.logger.info(f"点击护盾随从位置(兜底): ({shield_x}, {shield_y})")
             time.sleep(2.7)
         else:
             self.device_state.logger.info("未检测到护盾，检测敌方随从")
@@ -591,12 +690,25 @@ class CardPlaySpecialActions:
             card_mode_options = get_card_mode_options(self.device_state.config)
         
             # 优先使用进化模式选项配置，如果没有则使用普通模式选项配置
-            if card_name in card_evolve_mode_options:
-                mode_option = card_evolve_mode_options[card_name]
-                self.device_state.logger.info(f"检测到进化模式卡牌{card_name}，选项: {mode_option}")
-            elif card_name in card_mode_options:
-                mode_option = card_mode_options[card_name]
-                self.device_state.logger.info(f"检测到进化模式卡牌{card_name}，使用普通模式选项配置: {mode_option}")
+            mode_source = None
+            mode_option = _lookup_by_normalized_key(
+                card_evolve_mode_options,
+                card_name,
+            )
+            if mode_option is not None:
+                mode_source = "evolve"
+            else:
+                mode_option = _lookup_by_normalized_key(
+                    card_mode_options,
+                    card_name,
+                )
+                if mode_option is not None:
+                    mode_source = "normal"
+            if mode_option is not None:
+                if mode_source == "evolve":
+                    self.device_state.logger.info(f"检测到进化模式卡牌{card_name}，选项: {mode_option}")
+                else:
+                    self.device_state.logger.info(f"检测到进化模式卡牌{card_name}，使用普通模式选项配置: {mode_option}")
             else:
                 # 不是进化模式卡牌，返回False
                 return False
