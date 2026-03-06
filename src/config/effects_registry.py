@@ -184,6 +184,39 @@ OPERATIONS: List[Dict[str, Any]] = [
         "params_schema": [],
     },
     {
+        "op_id": "buff",
+        "label": "BUFF",
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
+        "params_schema": [
+            {
+                "name": "target",
+                "label": "BUFF类型",
+                "type": "enum",
+                "default": "others",
+                "options": [
+                    {"label": "其他友方(+X/+Y)", "value": "others"},
+                    {"label": "自身(+X/+Y)", "value": "self"},
+                ],
+            },
+            {
+                "name": "atk_delta",
+                "label": "攻击变化X",
+                "type": "int",
+                "default": 1,
+                "min": -20,
+                "max": 20,
+            },
+            {
+                "name": "hp_delta",
+                "label": "生命变化Y",
+                "type": "int",
+                "default": 1,
+                "min": -20,
+                "max": 20,
+            },
+        ],
+    },
+    {
         "op_id": "legacy_target_type",
         "label": "旧: 特殊目标(target_type)",
         "supported_context_kinds": [CONTEXT_HAND_CARD],

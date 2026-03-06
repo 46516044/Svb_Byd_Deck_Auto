@@ -27,7 +27,12 @@ from src.config.paths import get_config_path
 from src.config.config_repository import ConfigRepository
 from src.config.effects_registry import get_triggers
 from src.ui.common import get_exe_dir
-from src.utils.card_filename import parse_card_filename, make_enhance_key
+from src.utils.card_filename import (
+    make_enhance_key,
+    normalize_card_base_name,
+    normalize_config_key,
+    parse_card_filename,
+)
 
 
 # PyQt5 stubs vary across environments; keep Qt attribute access flexible.
@@ -120,8 +125,9 @@ class CardPriorityPage(QWidget):
             pass
 
     def _build_effects_tag(self, base_name: str, config_key: str, is_enhance: bool) -> str:
-        effects = self.config_data.get("strategy", {}).get("effects", {})
-        if not isinstance(effects, dict):
+        try:
+            from src.config.strategy_effects import get_card_effect_steps
+        except Exception:
             return ""
 
         tags = []
@@ -140,11 +146,8 @@ class CardPriorityPage(QWidget):
                     continue
                 key = str(base_name)
 
-            card_eff = effects.get(key)
-            if not isinstance(card_eff, dict):
-                continue
-            steps = card_eff.get(tid)
-            if isinstance(steps, list) and any(isinstance(s, dict) for s in steps):
+            steps = get_card_effect_steps(self.config_data, card_name=key, trigger=tid)
+            if steps:
                 tags.append(short)
 
         return "/".join(tags)
@@ -197,7 +200,7 @@ class CardPriorityPage(QWidget):
 
 2. 特殊效果...
    作用：进入二级编辑器，按触发时机配置操作（出牌/攻击/进化/超进化）。
-   说明：爆能档位行仅对“出牌时(on_play)”生效，其余触发按随从名（基础卡）配置。
+   说明：爆能档位行也可配置攻击/进化等触发，作为该爆能档位专属效果。
 """
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("卡牌设置帮助")
@@ -274,7 +277,7 @@ class CardPriorityPage(QWidget):
             except Exception:
                 base_cost, enhance_costs, base_name = 0, [], card_file.split("_", 1)[-1].rsplit(".", 1)[0]
 
-            base_name = str(base_name or "").strip()
+            base_name = normalize_card_base_name(str(base_name or "").strip())
             if not base_name:
                 continue
             enhance_costs = list(enhance_costs or [])
@@ -283,7 +286,7 @@ class CardPriorityPage(QWidget):
                 {
                     "file": card_file,
                     "base_name": base_name,
-                    "config_key": base_name,
+                    "config_key": normalize_config_key(base_name),
                     "base_cost": int(base_cost or 0),
                     "variant_cost": int(base_cost or 0),
                     "is_enhance": False,
@@ -295,7 +298,7 @@ class CardPriorityPage(QWidget):
                     {
                         "file": card_file,
                         "base_name": base_name,
-                        "config_key": make_enhance_key(base_name, c),
+                        "config_key": normalize_config_key(make_enhance_key(base_name, c)),
                         "base_cost": int(base_cost or 0),
                         "variant_cost": int(c),
                         "is_enhance": True,
@@ -500,7 +503,7 @@ class CardPriorityPage(QWidget):
         evolve_priority_cards = {}
         for card in self.card_widgets:
             base_name = card.get("card_name", "")
-            config_key = card.get("config_key") or base_name
+            config_key = normalize_config_key(str(card.get("config_key") or base_name))
             is_enhance = bool(card.get("is_enhance"))
 
             name_for_msg = str(config_key or base_name)

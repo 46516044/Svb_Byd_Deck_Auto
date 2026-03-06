@@ -100,6 +100,7 @@ class CardPlaySpecialActions:
                     "select_option",
                     "select_targets",
                     "cancel_action",
+                    "buff",
                 )
                 for o in ops
             )
@@ -122,12 +123,18 @@ class CardPlaySpecialActions:
                 self._default_card_play(center_x, center_y, target_x)
                 time.sleep(0.2)
 
+                source_pos = self._tag_played_follower_origin(
+                    card_name=str(card_name or ""),
+                    cfg_key=str(cfg_key or ""),
+                )
+
                 ctx = HandCardContext(
                     device_state=self.device_state,
                     card_name=str(card_name),
                     cfg_key=str(cfg_key),
                     card_center=(int(center_x), int(center_y)),
                     play_target=(int(target_x), 400),
+                    follower_pos=source_pos,
                     card=dict(card or {}),
                 )
                 ops_to_run = [
@@ -196,6 +203,33 @@ class CardPlaySpecialActions:
         
         time.sleep(0.5)
         return True
+
+    def _tag_played_follower_origin(self, *, card_name: str, cfg_key: str):
+        """Try to tag the just-played follower with its cfg key."""
+
+        runtime = getattr(self.device_state, "battle_runtime_state", None)
+        game_manager = getattr(self.device_state, "game_manager", None)
+        if runtime is None or game_manager is None:
+            return None
+
+        try:
+            screenshot = self.device_state.take_screenshot()
+            if screenshot is None:
+                return None
+
+            followers = game_manager.scan_our_followers(
+                screenshot,
+                extra_shots=1,
+                sort_desc=True,
+                shot_delay_range=(0.05, 0.10),
+                with_names=True,
+            )
+            if followers:
+                runtime.sync_ours(followers)
+            pos = runtime.mark_latest_play_origin(card_name=str(card_name or ""), cfg_key=str(cfg_key or ""))
+            return pos
+        except Exception:
+            return None
 
     def _dispatch_play_target_type(self, target_type, card_name, center_x, center_y, target_x):
         """Dispatch legacy target_type handlers.

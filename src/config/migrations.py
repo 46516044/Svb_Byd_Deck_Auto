@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import copy
 from typing import Any, Dict
+
+from src.utils.card_filename import normalize_card_base_name, normalize_config_key, split_enhance_key
 
 
 def migrate_high_priority_cards_priority_fields(config: Dict[str, Any]) -> bool:
@@ -265,6 +268,28 @@ def migrate_strategy_effects_to_ops(config: Dict[str, Any]) -> bool:
                     except Exception:
                         pass
 
+                    # Deprecation: buff_others(amount) -> buff(target=others, atk_delta, hp_delta)
+                    try:
+                        if str(step.get("op")) == "buff_others":
+                            amount_raw = step.get("amount", 0)
+                            try:
+                                amount_i = int(amount_raw)
+                            except Exception:
+                                amount_i = 0
+                            converted = {
+                                "op": "buff",
+                                "target": "others",
+                                "atk_delta": int(amount_i),
+                                "hp_delta": int(amount_i),
+                            }
+                            if step.get("on_error"):
+                                converted["on_error"] = step.get("on_error")
+                            new_steps.append(converted)
+                            changed = True
+                            continue
+                    except Exception:
+                        pass
+
                     new_steps.append(step)
                     continue
 
@@ -324,5 +349,109 @@ def migrate_strategy_effects_to_ops(config: Dict[str, Any]) -> bool:
         if not card_eff:
             del effects[card_name]
             changed = True
+
+    return changed
+
+
+def migrate_strategy_name_keys(config: Dict[str, Any]) -> bool:
+    """Normalize strategy-related card keys to suffix-free base naming.
+
+    Targets:
+    - high_priority_cards
+    - evolve_priority_cards
+    - strategy.effects
+
+    Normalization rules:
+    - Remove follower stat suffix ``_<atk>_<hp>`` from base names.
+    - Preserve enhance tier format ``name@cost`` where applicable.
+    - `evolve_priority_cards` is always stored by base name (no `@cost`).
+    """
+
+    changed = False
+
+    def _merge_dict(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+        out = copy.deepcopy(dst)
+        for k, v in src.items():
+            out[k] = copy.deepcopy(v)
+        return out
+
+    def _normalize_mapping(
+        mapping: Any,
+        *,
+        force_base_key: bool = False,
+        merge_effects: bool = False,
+    ) -> tuple[Dict[str, Any], bool]:
+        if not isinstance(mapping, dict):
+            return {}, False
+
+        out: Dict[str, Any] = {}
+        local_changed = False
+
+        for raw_k, raw_v in mapping.items():
+            if not isinstance(raw_k, str):
+                continue
+
+            nk = normalize_config_key(raw_k)
+            if force_base_key:
+                base, _enh = split_enhance_key(nk)
+                nk = normalize_card_base_name(str(base or ""))
+
+            if not nk:
+                local_changed = True
+                continue
+
+            if nk != raw_k:
+                local_changed = True
+
+            if nk not in out:
+                out[nk] = copy.deepcopy(raw_v)
+                continue
+
+            # Key collision after normalization.
+            local_changed = True
+            existing = out[nk]
+            if merge_effects and isinstance(existing, dict) and isinstance(raw_v, dict):
+                merged_eff = copy.deepcopy(existing)
+                for trig, steps in raw_v.items():
+                    if trig not in merged_eff:
+                        merged_eff[trig] = copy.deepcopy(steps)
+                        continue
+                    if isinstance(merged_eff.get(trig), list) and isinstance(steps, list):
+                        cur = list(merged_eff.get(trig) or [])
+                        for s in steps:
+                            if s in cur:
+                                continue
+                            cur.append(copy.deepcopy(s))
+                        merged_eff[trig] = cur
+                out[nk] = merged_eff
+            elif isinstance(existing, dict) and isinstance(raw_v, dict):
+                out[nk] = _merge_dict(existing, raw_v)
+            else:
+                out[nk] = copy.deepcopy(raw_v)
+
+        return out, local_changed
+
+    hp = config.get("high_priority_cards")
+    if isinstance(hp, dict):
+        hp_new, hp_changed = _normalize_mapping(hp, force_base_key=False, merge_effects=False)
+        if hp_changed:
+            config["high_priority_cards"] = hp_new
+            changed = True
+
+    ep = config.get("evolve_priority_cards")
+    if isinstance(ep, dict):
+        ep_new, ep_changed = _normalize_mapping(ep, force_base_key=True, merge_effects=False)
+        if ep_changed:
+            config["evolve_priority_cards"] = ep_new
+            changed = True
+
+    strategy = config.get("strategy")
+    if isinstance(strategy, dict):
+        effects = strategy.get("effects")
+        if isinstance(effects, dict):
+            eff_new, eff_changed = _normalize_mapping(effects, force_base_key=False, merge_effects=True)
+            if eff_changed:
+                strategy["effects"] = eff_new
+                changed = True
 
     return changed

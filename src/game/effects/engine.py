@@ -106,6 +106,15 @@ class EffectEngine:
             )
         if op_id == "cancel_action":
             return OperationExecutor.cancel_action(ctx)
+        if op_id == "buff":
+            return OperationExecutor.buff(
+                ctx,
+                target=step.get("target", "others"),
+                atk_delta=step.get("atk_delta", 1),
+                hp_delta=step.get("hp_delta", 1),
+            )
+        if op_id == "buff_others":
+            return OperationExecutor.buff_others(ctx, amount=step.get("amount", 1))
         if op_id == "legacy_action":
             return OperationExecutor.legacy_action(ctx, action=step.get("action"))
 

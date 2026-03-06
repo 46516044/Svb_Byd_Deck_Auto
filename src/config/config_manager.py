@@ -17,6 +17,7 @@ from src.config.persisted_config import prune_config_for_save
 from src.core.json_io import write_json_atomic
 from src.config.migrations import (
     migrate_high_priority_cards_priority_fields,
+    migrate_strategy_name_keys,
     migrate_strategy_effects_schema,
     migrate_strategy_effects_to_ops,
 )
@@ -48,6 +49,10 @@ class ConfigManager:
             except Exception:
                 pass
             try:
+                migrate_strategy_name_keys(config)
+            except Exception:
+                pass
+            try:
                 migrate_strategy_effects_schema(config)
             except Exception:
                 pass
@@ -67,6 +72,8 @@ class ConfigManager:
                 # 自动迁移旧字段（一次性写回磁盘）
                 migrated = False
                 if migrate_high_priority_cards_priority_fields(merged_config):
+                    migrated = True
+                if migrate_strategy_name_keys(merged_config):
                     migrated = True
                 if migrate_strategy_effects_schema(merged_config):
                     migrated = True

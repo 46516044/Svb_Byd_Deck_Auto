@@ -6,7 +6,148 @@ It should not import cv/u2/game modules.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional, Sequence
+
+from src.utils.card_filename import (
+    make_enhance_key,
+    parse_follower_stat_suffix,
+    split_enhance_key,
+)
+
+
+def _effect_key_candidates(card_name: str) -> List[str]:
+    raw = str(card_name or "")
+    if not raw:
+        return []
+
+    out: List[str] = [raw]
+    base = raw
+    enhance_cost = None
+
+    if "@" in raw:
+        b, c = split_enhance_key(raw)
+        base = str(b or "")
+        enhance_cost = c
+        if base and base not in out:
+            out.append(base)
+
+    stripped, _atk, _hp = parse_follower_stat_suffix(base)
+    if stripped and stripped != base:
+        if enhance_cost is not None:
+            enh_key = make_enhance_key(stripped, int(enhance_cost))
+            if enh_key not in out:
+                out.append(enh_key)
+        if stripped not in out:
+            out.append(stripped)
+
+    return out
+
+
+def _base_name_no_suffix(name: str) -> str:
+    raw = str(name or "")
+    if not raw:
+        return ""
+    stripped, _atk, _hp = parse_follower_stat_suffix(raw)
+    return str(stripped or raw)
+
+
+def _first_effect_steps(
+    effects: Dict[str, Any],
+    *,
+    candidate_keys: Sequence[str],
+    trigger: str,
+) -> List[Dict[str, Any]]:
+    trig = str(trigger or "")
+    for key in list(candidate_keys or []):
+        k = str(key or "")
+        if not k:
+            continue
+        card_eff = effects.get(k, {})
+        if not isinstance(card_eff, dict):
+            continue
+        steps = card_eff.get(trig, [])
+        if not isinstance(steps, list):
+            continue
+        normalized = [s for s in steps if isinstance(s, dict)]
+        if normalized:
+            return normalized
+    return []
+
+
+def _step_effect_signature(step: Dict[str, Any]) -> Optional[tuple]:
+    if not isinstance(step, dict):
+        return None
+
+    op = str(step.get("op") or "")
+    if not op:
+        if "select_option" in step:
+            op = "select_option"
+        elif "target_type" in step:
+            op = "legacy_target_type"
+        elif "action" in step:
+            op = "legacy_action"
+
+    if op == "buff_others":
+        return ("buff", "others")
+    if op == "buff":
+        return ("buff", str(step.get("target") or "others"))
+    if op == "select_option":
+        return ("select_option",)
+    if op == "cancel_action":
+        return ("cancel_action",)
+    if op == "legacy_target_type":
+        return ("legacy_target_type", str(step.get("target_type") or ""))
+    if op == "legacy_action":
+        return ("legacy_action", str(step.get("action") or ""))
+    if op == "select_targets":
+        target = step.get("target")
+        if isinstance(target, dict):
+            kind = str(target.get("kind") or "")
+            selector = str(target.get("selector") or "")
+            return ("select_targets", kind, selector)
+        return ("select_targets", "", "")
+    if op:
+        return ("op", op)
+    return None
+
+
+def _merge_steps_with_enhance_override(
+    base_steps: Sequence[Dict[str, Any]],
+    enhance_steps: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    out = [dict(s) for s in list(base_steps or []) if isinstance(s, dict)]
+
+    if not enhance_steps:
+        return out
+
+    for es in list(enhance_steps or []):
+        if not isinstance(es, dict):
+            continue
+
+        sig = _step_effect_signature(es)
+        if sig is not None:
+            out = [bs for bs in out if _step_effect_signature(bs) != sig]
+
+        try:
+            es_key = json.dumps(es, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            es_key = ""
+        if es_key:
+            duplicated = False
+            for bs in out:
+                try:
+                    if json.dumps(bs, ensure_ascii=False, sort_keys=True) == es_key:
+                        duplicated = True
+                        break
+                except Exception:
+                    continue
+            if duplicated:
+                continue
+
+        out.append(dict(es))
+
+    return out
 
 
 def get_card_effect_steps(
@@ -20,13 +161,68 @@ def get_card_effect_steps(
     effects = config.get("strategy", {}).get("effects", {})
     if not isinstance(effects, dict):
         return []
-    card_eff = effects.get(card_name, {})
-    if not isinstance(card_eff, dict):
+
+    raw = str(card_name or "")
+    trig = str(trigger or "")
+    if not raw:
         return []
-    steps = card_eff.get(trigger, [])
-    if not isinstance(steps, list):
-        return []
-    return [s for s in steps if isinstance(s, dict)]
+
+    # Enhance key behavior:
+    # - inherit base trigger effects
+    # - if enhance defines the same effect kind, enhance overrides that effect
+    # - different effects are merged (base first, enhance appended)
+    if "@" in raw:
+        base_raw, enhance_cost = split_enhance_key(raw)
+        base_name = _base_name_no_suffix(str(base_raw or ""))
+
+        enhance_key_candidates: List[str] = []
+        if enhance_cost is not None and base_name:
+            enhance_key_candidates.append(make_enhance_key(base_name, int(enhance_cost)))
+        enhance_key_candidates.extend(_effect_key_candidates(raw))
+
+        base_key_candidates: List[str] = []
+        if base_name:
+            base_key_candidates.append(base_name)
+        base_key_candidates.extend(_effect_key_candidates(str(base_raw or "")))
+
+        # de-dup while preserving order
+        def _dedup(seq: Sequence[str]) -> List[str]:
+            seen = set()
+            out: List[str] = []
+            for it in list(seq or []):
+                k = str(it or "")
+                if not k or k in seen:
+                    continue
+                seen.add(k)
+                out.append(k)
+            return out
+
+        enhance_steps = _first_effect_steps(
+            effects,
+            candidate_keys=_dedup(enhance_key_candidates),
+            trigger=trig,
+        )
+        base_steps = _first_effect_steps(
+            effects,
+            candidate_keys=_dedup(base_key_candidates),
+            trigger=trig,
+        )
+
+        if enhance_steps:
+            return _merge_steps_with_enhance_override(base_steps, enhance_steps)
+        return base_steps
+
+    for key in _effect_key_candidates(raw):
+        card_eff = effects.get(key, {})
+        if not isinstance(card_eff, dict):
+            continue
+        steps = card_eff.get(trig, [])
+        if not isinstance(steps, list):
+            continue
+        normalized = [s for s in steps if isinstance(s, dict)]
+        if normalized:
+            return normalized
+    return []
 
 
 def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:

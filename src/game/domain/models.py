@@ -103,3 +103,50 @@ class ObservedGameState:
         if self.note:
             parts.append(f"note={self.note}")
         return " ".join(parts)
+
+
+@dataclass
+class FollowerRuntimeState:
+    """Runtime follower model used by battle selection/settlement."""
+
+    side: str = "ours"
+    x: int = 0
+    y: int = 0
+    follower_type: str = "normal"
+
+    raw_name: str = ""
+    base_name: str = ""
+    source_cfg_key: str = ""
+
+    atk0: Optional[int] = None
+    hp0: Optional[int] = None
+    observed_hp: Optional[int] = None
+
+    buff_atk: int = 0
+    buff_hp: int = 0
+    damage_taken: int = 0
+    is_ward: bool = False
+    evolved_type: str = "none"
+
+    def evolution_bonus(self) -> int:
+        if self.evolved_type == "super":
+            return 3
+        if self.evolved_type == "normal":
+            return 2
+        return 0
+
+    def effective_atk(self) -> Optional[int]:
+        if self.atk0 is None:
+            return None
+        return int(self.atk0) + int(self.evolution_bonus()) + int(self.buff_atk)
+
+    def effective_hp(self) -> Optional[int]:
+        if self.hp0 is None:
+            return None
+        total = int(self.hp0) + int(self.evolution_bonus()) + int(self.buff_hp)
+        return total - int(self.damage_taken)
+
+    def current_hp(self) -> Optional[int]:
+        if self.observed_hp is not None:
+            return int(self.observed_hp)
+        return self.effective_hp()

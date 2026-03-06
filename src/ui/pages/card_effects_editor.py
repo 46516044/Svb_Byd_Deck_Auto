@@ -606,10 +606,17 @@ class CardEffectsDialog(QDialog):
 
         hint = QLabel(
             "选择触发时机，并为每个触发时机配置操作序列。\n"
-            "提示：爆能档位行仅支持出牌时(on_play)；进化/攻击等按基础卡(随从名)配置。"
+            "提示：基础卡可配置通用触发；爆能档位可配置仅该档位生效的触发。\n"
+            "提示：爆能档位默认继承本体同触发效果；若配置了同类效果（如同一BUFF类型）则以爆能档位覆盖。\n"
+            "提示：BUFF请先选操作“BUFF”，再在第二个下拉选择“其他友方/自身”，并分别填写攻击变化X与生命变化Y。"
         )
         hint.setStyleSheet("color: #AACCFF;")
         main.addWidget(hint)
+
+        if self.is_enhance:
+            enhance_notice = QLabel("当前为爆能档位配置：可设置该爆能档位专属的出牌/攻击/进化触发效果。")
+            enhance_notice.setStyleSheet("color: #FFCC88;")
+            main.addWidget(enhance_notice)
 
         # Trigger multi-select
         trig_bar = QHBoxLayout()
@@ -623,10 +630,7 @@ class CardEffectsDialog(QDialog):
             if not isinstance(t, dict):
                 continue
             tid = str(t.get("id") or "")
-            ck = str(t.get("context_kind") or "")
             if not tid:
-                continue
-            if self.is_enhance and ck != CONTEXT_HAND_CARD:
                 continue
             allowed.append(t)
 
@@ -671,6 +675,9 @@ class CardEffectsDialog(QDialog):
         self._load_existing()
 
     def _key_for_trigger(self, trigger_id: str) -> str:
+        if self.is_enhance:
+            return self.config_key
+
         t = None
         for d in get_triggers():
             if str(d.get("id") or "") == str(trigger_id or ""):

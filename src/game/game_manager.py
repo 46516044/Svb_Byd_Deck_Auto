@@ -1273,6 +1273,14 @@ class GameManager:
                 for (x, y, t, name) in merged
             ]
             merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
+        if len(merged) > 5:
+            merged = sorted(
+                merged,
+                key=lambda it: (1 if (len(it) > 3 and it[3]) else 0, _type_priority(it[2]), int(it[0])),
+                reverse=True,
+            )[:5]
+            merged = sorted(merged, key=lambda pos: pos[0], reverse=sort_desc)
+
         try:
             debug_mode = bool(
                 isinstance(getattr(self.device_state, "config", None), dict)

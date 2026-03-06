@@ -13,6 +13,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
+from src.utils.card_filename import (
+    make_enhance_key,
+    parse_follower_stat_suffix,
+    split_enhance_key,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,34 @@ def _get_mapping(config: Optional[Dict[str, Any]], key: str) -> Dict[str, Any]:
     return val if isinstance(val, dict) else {}
 
 
+def _name_candidates(card_name: str) -> list[str]:
+    raw = str(card_name or "")
+    if not raw:
+        return []
+
+    out: list[str] = [raw]
+    base = raw
+    enhance_cost = None
+
+    if "@" in raw:
+        b, c = split_enhance_key(raw)
+        base = str(b or "")
+        enhance_cost = c
+        if base and base not in out:
+            out.append(base)
+
+    stripped, _atk, _hp = parse_follower_stat_suffix(base)
+    if stripped and stripped != base:
+        if enhance_cost is not None:
+            enh_key = make_enhance_key(stripped, int(enhance_cost))
+            if enh_key not in out:
+                out.append(enh_key)
+        if stripped not in out:
+            out.append(stripped)
+
+    return out
+
+
 def get_high_priority_cards(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Return mapping: card_name -> config dict."""
 
@@ -62,7 +96,8 @@ def get_high_priority_cards(config: Optional[Dict[str, Any]] = None) -> Dict[str
 
 
 def is_high_priority_card(card_name: str, config: Optional[Dict[str, Any]] = None) -> bool:
-    return str(card_name) in get_high_priority_cards(config)
+    mapping = get_high_priority_cards(config)
+    return any(name in mapping for name in _name_candidates(str(card_name)))
 
 
 def get_evolve_priority_cards(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -72,30 +107,49 @@ def get_evolve_priority_cards(config: Optional[Dict[str, Any]] = None) -> Dict[s
 
 
 def is_evolve_priority_card(card_name: str, config: Optional[Dict[str, Any]] = None) -> bool:
-    return str(card_name) in get_evolve_priority_cards(config)
+    mapping = get_evolve_priority_cards(config)
+    return any(name in mapping for name in _name_candidates(str(card_name)))
 
 
 def get_card_priority_pre_evolution(card_name: str, config: Optional[Dict[str, Any]] = None) -> int:
     """Get play priority for pre-evolution stage (smaller is higher priority)."""
 
-    cfg = get_high_priority_cards(config).get(str(card_name))
-    if isinstance(cfg, dict) and "priority_pre_evolution" in cfg:
-        try:
-            return int(cfg["priority_pre_evolution"])
-        except Exception:
-            return 999
+    mapping = get_high_priority_cards(config)
+    for key in _name_candidates(str(card_name)):
+        cfg = mapping.get(key)
+        if isinstance(cfg, dict) and "priority_pre_evolution" in cfg:
+            try:
+                return int(cfg["priority_pre_evolution"])
+            except Exception:
+                return 999
     return 999
 
 
 def get_card_priority_post_evolution(card_name: str, config: Optional[Dict[str, Any]] = None) -> int:
     """Get play priority for post-evolution stage (smaller is higher priority)."""
 
-    cfg = get_high_priority_cards(config).get(str(card_name))
-    if isinstance(cfg, dict) and "priority_post_evolution" in cfg:
-        try:
-            return int(cfg["priority_post_evolution"])
-        except Exception:
-            return 999
+    mapping = get_high_priority_cards(config)
+    for key in _name_candidates(str(card_name)):
+        cfg = mapping.get(key)
+        if isinstance(cfg, dict) and "priority_post_evolution" in cfg:
+            try:
+                return int(cfg["priority_post_evolution"])
+            except Exception:
+                return 999
+    return 999
+
+
+def get_evolve_priority(card_name: str, config: Optional[Dict[str, Any]] = None) -> int:
+    """Get evolve priority (smaller is higher priority)."""
+
+    mapping = get_evolve_priority_cards(config)
+    for key in _name_candidates(str(card_name)):
+        cfg = mapping.get(key)
+        if isinstance(cfg, dict) and "priority" in cfg:
+            try:
+                return int(cfg["priority"])
+            except Exception:
+                return 999
     return 999
 
 

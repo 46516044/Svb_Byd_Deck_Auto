@@ -30,7 +30,7 @@ from src.config.paths import get_config_path
 from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
 from src.ui.deck_io import apply_strategy_config, extract_strategy_config, save_deck_snapshot
-from src.utils.card_filename import parse_card_filename
+from src.utils.card_filename import normalize_card_base_name, parse_card_filename
 
 
 class CardSelectPage(QWidget):
@@ -420,7 +420,9 @@ class CardSelectPage(QWidget):
 
             try:
                 _, _, base_name = parse_card_filename(card_data["file"])
-                card_name = " ".join(str(base_name or "").split("_"))
+                card_name = " ".join(
+                    normalize_card_base_name(str(base_name or "")).split("_")
+                )
             except Exception:
                 card_name = " ".join(
                     card_data["file"].split("_", 1)[-1].rsplit(".", 1)[0].split("_")

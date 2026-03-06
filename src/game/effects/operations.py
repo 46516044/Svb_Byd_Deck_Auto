@@ -59,6 +59,70 @@ class OperationExecutor:
         return True
 
     @staticmethod
+    def buff(ctx: Any, *, target: Any, atk_delta: Any, hp_delta: Any) -> bool:
+        ds = getattr(ctx, "device_state", None)
+        if ds is None:
+            return False
+
+        target_mode = str(target or "others")
+        if target_mode not in ("others", "self"):
+            target_mode = "others"
+
+        atk_val = _safe_int(atk_delta, 0)
+        hp_val = _safe_int(hp_delta, 0)
+
+        runtime = getattr(ds, "battle_runtime_state", None)
+        if runtime is None or not hasattr(runtime, "apply_buff"):
+            try:
+                ds.logger.warning("[Effect] buff skipped: runtime unavailable")
+            except Exception:
+                pass
+            return True
+
+        source_pos = getattr(ctx, "follower_pos", None) or getattr(ctx, "attack_source_pos", None)
+        if source_pos is None and runtime is not None and hasattr(runtime, "find_ours_pos_by_cfg_key"):
+            try:
+                source_pos = runtime.find_ours_pos_by_cfg_key(
+                    cfg_key=str(getattr(ctx, "cfg_key", "") or ""),
+                    fallback_name=str(
+                        getattr(ctx, "card_name", "")
+                        or getattr(ctx, "follower_name", "")
+                        or ""
+                    ),
+                )
+            except Exception:
+                source_pos = None
+        try:
+            changed = int(
+                runtime.apply_buff(
+                    source_pos=source_pos,
+                    target_mode=target_mode,
+                    atk_delta=atk_val,
+                    hp_delta=hp_val,
+                )
+            )
+        except Exception:
+            changed = 0
+
+        try:
+            ds.logger.info(
+                f"[Effect] buff mode={target_mode} atk_delta={atk_val} hp_delta={hp_val} affected={changed}"
+            )
+        except Exception:
+            pass
+        return True
+
+    @staticmethod
+    def buff_others(ctx: Any, *, amount: Any) -> bool:
+        value = _safe_int(amount, 0)
+        return OperationExecutor.buff(
+            ctx,
+            target="others",
+            atk_delta=value,
+            hp_delta=value,
+        )
+
+    @staticmethod
     def select_targets(
         ctx: Any,
         *,

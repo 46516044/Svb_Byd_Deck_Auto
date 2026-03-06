@@ -31,7 +31,7 @@ from src.config.paths import get_config_path
 from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
 from src.ui.deck_io import apply_strategy_config, extract_strategy_config
-from src.utils.card_filename import parse_card_filename
+from src.utils.card_filename import normalize_card_base_name, parse_card_filename
 
 
 class SharePage(QWidget):
@@ -339,6 +339,7 @@ class SharePage(QWidget):
                 _, _, card_name = parse_card_filename(card_file)
             except Exception:
                 card_name = card_file.split("_", 1)[-1].rsplit(".", 1)[0]
+            card_name = " ".join(normalize_card_base_name(str(card_name or "")).split("_"))
             name_label = QLabel(card_name)
             name_label.setStyleSheet(
                 """

@@ -22,6 +22,7 @@ class HandCardContext:
     # Play geometry (used by caller; engine doesn't drag by default)
     card_center: Tuple[int, int] = (0, 0)
     play_target: Tuple[int, int] = (0, 0)
+    follower_pos: Optional[Tuple[int, int]] = None
 
     # Full recognized card payload (optional)
     card: Dict[str, Any] = field(default_factory=dict)

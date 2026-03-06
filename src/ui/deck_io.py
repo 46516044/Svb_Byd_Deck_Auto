@@ -13,7 +13,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.core.json_io import write_json_atomic
-from src.utils.card_filename import parse_card_filename, split_enhance_key
+from src.utils.card_filename import (
+    normalize_card_base_name,
+    normalize_config_key,
+    parse_card_filename,
+    split_enhance_key,
+)
 
 
 def _deck_base_names(cards: List[str]) -> List[str]:
@@ -23,7 +28,7 @@ def _deck_base_names(cards: List[str]) -> List[str]:
             _base_cost, _enh, name = parse_card_filename(fn)
         except Exception:
             name = ""
-        name = str(name or "").strip()
+        name = normalize_card_base_name(str(name or "").strip())
         if name and name not in names:
             names.append(name)
     return names
@@ -53,8 +58,16 @@ def extract_strategy_config(
             if not isinstance(k, str):
                 continue
             base, _enh = split_enhance_key(k)
-            if str(base) in base_names:
-                out[k] = copy.deepcopy(v)
+            base_norm = normalize_card_base_name(str(base or ""))
+            if str(base_norm) in base_names:
+                nk = normalize_config_key(k)
+                if nk in out and isinstance(out.get(nk), dict) and isinstance(v, dict):
+                    merged = copy.deepcopy(out[nk])
+                    for mk, mv in v.items():
+                        merged[mk] = copy.deepcopy(mv)
+                    out[nk] = merged
+                else:
+                    out[nk] = copy.deepcopy(v)
         return out
 
     high_priority = _filter_by_base_name(cfg.get("high_priority_cards"))
@@ -95,10 +108,27 @@ def apply_strategy_config(
     cfg = copy.deepcopy(base_config) if isinstance(base_config, dict) else {}
     sc = strategy_config if isinstance(strategy_config, dict) else {}
 
+    def _normalize_mapping_keys(d: Any) -> Dict[str, Any]:
+        if not isinstance(d, dict):
+            return {}
+        out: Dict[str, Any] = {}
+        for k, v in d.items():
+            nk = normalize_config_key(str(k or ""))
+            if not nk:
+                continue
+            if nk in out and isinstance(out.get(nk), dict) and isinstance(v, dict):
+                merged = copy.deepcopy(out[nk])
+                for mk, mv in v.items():
+                    merged[mk] = copy.deepcopy(mv)
+                out[nk] = merged
+            else:
+                out[nk] = copy.deepcopy(v)
+        return out
+
     if isinstance(sc.get("high_priority_cards"), dict):
-        cfg["high_priority_cards"] = copy.deepcopy(sc["high_priority_cards"])
+        cfg["high_priority_cards"] = _normalize_mapping_keys(sc["high_priority_cards"])
     if isinstance(sc.get("evolve_priority_cards"), dict):
-        cfg["evolve_priority_cards"] = copy.deepcopy(sc["evolve_priority_cards"])
+        cfg["evolve_priority_cards"] = _normalize_mapping_keys(sc["evolve_priority_cards"])
 
     # Allow both shapes:
     # - {"strategy": {"effects": {...}}}
@@ -112,7 +142,7 @@ def apply_strategy_config(
     if effects is not None:
         if not isinstance(cfg.get("strategy"), dict):
             cfg["strategy"] = {}
-        cfg["strategy"]["effects"] = copy.deepcopy(effects)
+        cfg["strategy"]["effects"] = _normalize_mapping_keys(effects)
 
     if isinstance(sc.get("game"), dict):
         if not isinstance(cfg.get("game"), dict):

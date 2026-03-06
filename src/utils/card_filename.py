@@ -16,6 +16,72 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 
+def parse_follower_stat_suffix(card_name: str) -> Tuple[str, Optional[int], Optional[int]]:
+    """Parse follower stat suffix from a card name.
+
+    Expected suffix format: ``..._<atk>_<hp>``.
+    Parsing is done from the rightmost two underscore segments.
+
+    Returns:
+        (base_name, base_atk, base_hp)
+        - On success: base_name excludes the trailing ``_<atk>_<hp>``.
+        - On failure: base_name is the original name, atk/hp are None.
+    """
+
+    raw = str(card_name or "").strip()
+    if not raw:
+        return "", None, None
+
+    parts = raw.split("_")
+    if len(parts) < 3:
+        return raw, None, None
+
+    atk_s = parts[-2]
+    hp_s = parts[-1]
+    if not (atk_s.isdigit() and hp_s.isdigit()):
+        return raw, None, None
+
+    base_name = "_".join(parts[:-2]).strip()
+    if not base_name:
+        return raw, None, None
+
+    try:
+        return base_name, int(atk_s), int(hp_s)
+    except Exception:
+        return raw, None, None
+
+
+def normalize_card_base_name(card_name: str) -> str:
+    """Return a stable card base name used by UI/config keys.
+
+    - Removes follower stat suffix ``_<atk>_<hp>`` when present.
+    - Keeps original text when suffix is absent.
+    """
+
+    raw = str(card_name or "").strip()
+    if not raw:
+        return ""
+    base, _atk, _hp = parse_follower_stat_suffix(raw)
+    return str(base or raw)
+
+
+def normalize_config_key(key: str) -> str:
+    """Normalize a strategy/config key to suffix-free base naming.
+
+    Supports both plain keys and enhance keys (``name@cost``).
+    """
+
+    raw = str(key or "").strip()
+    if not raw:
+        return ""
+
+    base, enhance = split_enhance_key(raw)
+    normalized_base = normalize_card_base_name(str(base or ""))
+    if enhance is None:
+        return normalized_base
+    return make_enhance_key(normalized_base, int(enhance))
+
+
 def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
     """Parse a card filename stem.
 
