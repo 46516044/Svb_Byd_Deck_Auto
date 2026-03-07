@@ -41,7 +41,11 @@ from src.config.effects_registry import (
     get_triggers,
 )
 from src.config.paths import get_config_path
-from src.config.strategy_effects import get_card_effect_steps
+from src.config.strategy_effects import (
+    convert_legacy_action_to_ops,
+    convert_legacy_target_type_to_ops,
+    get_card_effect_steps,
+)
 
 
 # PyQt5 stubs vary across environments; keep Qt attribute access flexible.
@@ -543,6 +547,14 @@ class TriggerEditor(QWidget):
                 continue
             op_id = step.get("op")
             if isinstance(op_id, str) and op_id:
+                if op_id == "legacy_target_type":
+                    for c in convert_legacy_target_type_to_ops(step.get("target_type")):
+                        self.add_step(c)
+                    continue
+                if op_id == "legacy_action":
+                    for c in convert_legacy_action_to_ops(step.get("action")):
+                        self.add_step(c)
+                    continue
                 op_def = get_operation(op_id)
                 if isinstance(op_def, dict):
                     self.add_step(step)
@@ -558,14 +570,14 @@ class TriggerEditor(QWidget):
                     self.add_step({"op": "select_option", "index": int(opt)})
                     used_any = True
             if "target_type" in step:
-                tt = step.get("target_type")
-                if isinstance(tt, str) and tt:
-                    self.add_step({"op": "legacy_target_type", "target_type": str(tt)})
+                converted = convert_legacy_target_type_to_ops(step.get("target_type"))
+                for c in converted:
+                    self.add_step(c)
                     used_any = True
             if "action" in step:
-                act = step.get("action")
-                if isinstance(act, str) and act:
-                    self.add_step({"op": "legacy_action", "action": str(act)})
+                converted = convert_legacy_action_to_ops(step.get("action"))
+                for c in converted:
+                    self.add_step(c)
                     used_any = True
 
             if not used_any:

@@ -19,6 +19,8 @@ _DROP_TOP_LEVEL_KEYS = {
     "adb_port",  # unused (device serials are stored under devices[*].serial)
     "templates",  # currently unused (template thresholds are hard-coded per-template)
     "profiles",  # internal placeholder; runtime defaults fill it
+    "card_mode_options",  # migrated to strategy.effects at load-time
+    "card_evolve_mode_options",  # migrated to strategy.effects at load-time
 }
 
 _DROP_GAME_KEYS = {
@@ -27,6 +29,7 @@ _DROP_GAME_KEYS = {
     "evolution_rounds_with_extra_cost",  # currently hard-coded in state machine
     "max_follower_count",  # currently hard-coded as HP_MAX_FOLLOWERS
     "cost_recognition",  # currently unused (cost comes from SIFT templates)
+    "use_enhanced_mulligan",  # runtime now uses canonical enhanced path only
 }
 
 _DROP_AUTO_RESTART_KEYS = {

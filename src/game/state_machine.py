@@ -152,35 +152,22 @@ class GameStateMachine:
                     if not bool(getattr(device_state, "mulligan_done_this_match", False)):
                         config = device_state.config
 
-                        # 读取配置：是否使用增强策略（默认False，使用旧策略）
-                        use_enhanced = config.get("game", {}).get(
-                            "use_enhanced_mulligan", False
-                        )
                         strategy_setting = config.get("game", {}).get(
                             "card_replacement_strategy", "4费档次"
                         )
 
                         device_state.logger.info(
-                            f"执行换牌策略: {strategy_setting} ({'增强规则' if use_enhanced else '旧规则'})"
+                            f"执行换牌策略: {strategy_setting} (canonical增强规则)"
                         )
 
                         # 等待换牌界面卡牌动画完成
                         device_state.sleep(0.4)
 
-                        # 根据配置选择策略
-                        if use_enhanced:
-                            # 使用SIFT + 增强策略（默认）
-                            success = game_manager.game_actions._detect_change_card_sift()
-                        else:
-                            # 使用SIFT + 旧策略规则
-                            success = game_manager.game_actions._detect_change_card()
+                        # Step3D: runtime keeps a single canonical mulligan path.
+                        success = game_manager.game_actions._detect_change_card_sift()
 
                         if not success:
                             device_state.logger.warning("换牌执行失败")
-                            # 如果增强策略失败，尝试fallback到旧规则
-                            if use_enhanced:
-                                device_state.logger.info("回退到旧策略规则")
-                                game_manager.game_actions._detect_change_card()
 
                         device_state.mulligan_done_this_match = True
                     else:

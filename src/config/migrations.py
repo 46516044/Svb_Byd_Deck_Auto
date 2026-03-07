@@ -7,6 +7,7 @@ import copy
 from typing import Any, Dict
 
 from src.utils.card_filename import normalize_card_base_name, normalize_config_key, split_enhance_key
+from src.config.strategy_effects import normalize_effect_steps_to_ops
 
 
 def migrate_high_priority_cards_priority_fields(config: Dict[str, Any]) -> bool:
@@ -215,8 +216,7 @@ def migrate_strategy_effects_to_ops(config: Dict[str, Any]) -> bool:
     """Upgrade `strategy.effects[*][trigger]` steps to the Step3A op schema.
 
     - Idempotent
-    - Keeps unknown dict steps as-is
-    - Best-effort upgrade for legacy keys: select_option/target_type/action
+    - Canonical runtime schema only (no runtime legacy wrappers)
     """
 
     strategy = config.get("strategy")
@@ -225,13 +225,6 @@ def migrate_strategy_effects_to_ops(config: Dict[str, Any]) -> bool:
     effects = strategy.get("effects")
     if not isinstance(effects, dict):
         return False
-
-    def _norm_select_option(v: Any) -> int | None:
-        if v in (1, "1", "选项1", "Option1", "option1"):
-            return 1
-        if v in (2, "2", "选项2", "Option2", "option2"):
-            return 2
-        return None
 
     def _is_op(step: Any, op_id: str) -> bool:
         return isinstance(step, dict) and str(step.get("op") or "") == str(op_id)
@@ -246,76 +239,10 @@ def migrate_strategy_effects_to_ops(config: Dict[str, Any]) -> bool:
             if not isinstance(steps, list):
                 continue
 
-            new_steps = []
-            for step in steps:
-                if isinstance(step, dict) and isinstance(step.get("op"), str) and step.get("op"):
-                    # Deprecation: select_targets(target.kind=option) -> select_option
-                    try:
-                        if str(step.get("op")) == "select_targets":
-                            tgt = step.get("target")
-                            if isinstance(tgt, dict) and str(tgt.get("kind") or "") == "option":
-                                params = tgt.get("params")
-                                if not isinstance(params, dict):
-                                    params = {}
-                                idx = _norm_select_option(params.get("index"))
-                                if idx is not None:
-                                    converted = {"op": "select_option", "index": int(idx)}
-                                    if step.get("on_error"):
-                                        converted["on_error"] = step.get("on_error")
-                                    new_steps.append(converted)
-                                    changed = True
-                                    continue
-                    except Exception:
-                        pass
-
-                    # Deprecation: buff_others(amount) -> buff(target=others, atk_delta, hp_delta)
-                    try:
-                        if str(step.get("op")) == "buff_others":
-                            amount_raw = step.get("amount", 0)
-                            try:
-                                amount_i = int(amount_raw)
-                            except Exception:
-                                amount_i = 0
-                            converted = {
-                                "op": "buff",
-                                "target": "others",
-                                "atk_delta": int(amount_i),
-                                "hp_delta": int(amount_i),
-                            }
-                            if step.get("on_error"):
-                                converted["on_error"] = step.get("on_error")
-                            new_steps.append(converted)
-                            changed = True
-                            continue
-                    except Exception:
-                        pass
-
-                    new_steps.append(step)
-                    continue
-
-                if not isinstance(step, dict):
-                    continue
-
-                expanded = []
-                if "select_option" in step:
-                    opt = _norm_select_option(step.get("select_option"))
-                    if opt is not None:
-                        expanded.append({"op": "select_option", "index": int(opt)})
-                if "target_type" in step:
-                    tt = step.get("target_type")
-                    if isinstance(tt, str) and tt:
-                        expanded.append({"op": "legacy_target_type", "target_type": str(tt)})
-                if "action" in step:
-                    act = step.get("action")
-                    if isinstance(act, str) and act:
-                        expanded.append({"op": "legacy_action", "action": str(act)})
-
-                if expanded:
-                    new_steps.extend(expanded)
-                    changed = True
-                else:
-                    # Unknown legacy dict step: preserve as-is.
-                    new_steps.append(step)
+            try:
+                new_steps = normalize_effect_steps_to_ops(steps)
+            except Exception:
+                new_steps = [dict(s) for s in steps if isinstance(s, dict)]
 
             # Preserve legacy runtime semantics for evolve: do action/targets before select_option.
             if str(trigger) in ("on_evolve", "on_super_evolve"):
@@ -344,6 +271,24 @@ def migrate_strategy_effects_to_ops(config: Dict[str, Any]) -> bool:
                 else:
                     del card_eff[trigger]
                 changed = True
+
+        # Remove runtime fallback: super evolve no longer falls back to on_evolve.
+        # Keep compatibility at migration boundary by cloning missing trigger.
+        try:
+            on_evolve_steps = card_eff.get("on_evolve")
+            on_super_steps = card_eff.get("on_super_evolve")
+            if (
+                isinstance(on_evolve_steps, list)
+                and on_evolve_steps
+                and (
+                    not isinstance(on_super_steps, list)
+                    or not on_super_steps
+                )
+            ):
+                card_eff["on_super_evolve"] = copy.deepcopy(on_evolve_steps)
+                changed = True
+        except Exception:
+            pass
 
         # Cleanup empty card entries.
         if not card_eff:
@@ -453,5 +398,30 @@ def migrate_strategy_name_keys(config: Dict[str, Any]) -> bool:
             if eff_changed:
                 strategy["effects"] = eff_new
                 changed = True
+
+    return changed
+
+
+def migrate_runtime_legacy_fields(config: Dict[str, Any]) -> bool:
+    """Drop runtime legacy fields after one-time migration seeding.
+
+    Compatibility is kept at startup/load boundary by migration functions.
+    Runtime should consume only canonical schema/paths.
+    """
+
+    if not isinstance(config, dict):
+        return False
+
+    changed = False
+
+    for key in ("card_mode_options", "card_evolve_mode_options"):
+        if key in config:
+            del config[key]
+            changed = True
+
+    game = config.get("game")
+    if isinstance(game, dict) and "use_enhanced_mulligan" in game:
+        del game["use_enhanced_mulligan"]
+        changed = True
 
     return changed

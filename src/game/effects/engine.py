@@ -96,6 +96,13 @@ class EffectEngine:
     def _execute_one(op_id: str, step: Dict[str, Any], ctx: Any) -> bool:
         if op_id == "select_option":
             return OperationExecutor.select_option(ctx, index=step.get("index", 1))
+        if op_id == "select_option_by_our_followers":
+            return OperationExecutor.select_option_by_our_followers(
+                ctx,
+                threshold=step.get("threshold", 3),
+                le_option=step.get("le_option", 1),
+                gt_option=step.get("gt_option", 2),
+            )
         if op_id == "select_targets":
             return OperationExecutor.select_targets(
                 ctx,
@@ -113,14 +120,5 @@ class EffectEngine:
                 atk_delta=step.get("atk_delta", 1),
                 hp_delta=step.get("hp_delta", 1),
             )
-        if op_id == "buff_others":
-            return OperationExecutor.buff_others(ctx, amount=step.get("amount", 1))
-        if op_id == "legacy_action":
-            return OperationExecutor.legacy_action(ctx, action=step.get("action"))
-
-        # legacy_target_type is intentionally handled by the legacy dispatcher
-        # in CardPlaySpecialActions (it may include drag/pre-check semantics).
-        if op_id == "legacy_target_type":
-            return False
 
         return False

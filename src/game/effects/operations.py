@@ -43,6 +43,46 @@ class OperationExecutor:
         return True
 
     @staticmethod
+    def select_option_by_our_followers(
+        ctx: Any,
+        *,
+        threshold: Any = 3,
+        le_option: Any = 1,
+        gt_option: Any = 2,
+    ) -> bool:
+        ds = getattr(ctx, "device_state", None)
+        if ds is None:
+            return False
+
+        threshold_i = _safe_int(threshold, 3)
+        le_option_i = _safe_int(le_option, 1)
+        gt_option_i = _safe_int(gt_option, 2)
+
+        follower_count = 0
+        try:
+            screenshot = ds.take_screenshot()
+            if screenshot is not None and ds.game_manager is not None:
+                followers = ds.game_manager.scan_our_followers(
+                    screenshot,
+                    extra_shots=0,
+                    with_names=False,
+                )
+                follower_count = len(list(followers or []))
+        except Exception:
+            follower_count = 0
+
+        selected_option = le_option_i if follower_count <= threshold_i else gt_option_i
+        try:
+            ds.logger.info(
+                "[Effect] select_option_by_our_followers "
+                f"count={follower_count} threshold={threshold_i} -> option={selected_option}"
+            )
+        except Exception:
+            pass
+
+        return OperationExecutor.select_option(ctx, index=selected_option)
+
+    @staticmethod
     def cancel_action(ctx: Any) -> bool:
         ds = getattr(ctx, "device_state", None)
         if ds is None:
@@ -113,16 +153,6 @@ class OperationExecutor:
         return True
 
     @staticmethod
-    def buff_others(ctx: Any, *, amount: Any) -> bool:
-        value = _safe_int(amount, 0)
-        return OperationExecutor.buff(
-            ctx,
-            target="others",
-            atk_delta=value,
-            hp_delta=value,
-        )
-
-    @staticmethod
     def select_targets(
         ctx: Any,
         *,
@@ -170,6 +200,25 @@ class OperationExecutor:
             return False
 
         try:
+            success_kinds = getattr(ctx, "select_targets_success_kinds", None)
+            if isinstance(success_kinds, list):
+                if target_kind and target_kind not in success_kinds:
+                    success_kinds.append(target_kind)
+            else:
+                setattr(
+                    ctx,
+                    "select_targets_success_kinds",
+                    [target_kind] if target_kind else [],
+                )
+
+            fail_kinds = getattr(ctx, "select_targets_fail_kinds", None)
+            if isinstance(fail_kinds, list) and target_kind:
+                while target_kind in fail_kinds:
+                    fail_kinds.remove(target_kind)
+        except Exception:
+            pass
+
+        try:
             ds.logger.info(f"[Effect] select_targets count={len(positions)}/{n}")
         except Exception:
             pass
@@ -182,47 +231,3 @@ class OperationExecutor:
                 pass
             time.sleep(0.35)
         return True
-
-    @staticmethod
-    def legacy_action(ctx: Any, *, action: Any) -> bool:
-        """Compatibility op for Step2B `action` strings."""
-
-        act = str(action or "")
-        if act == "attack_enemy_follower_hp_less_than_4":
-            return OperationExecutor.select_targets(
-                ctx,
-                target={"kind": "enemy_follower", "selector": "hp_leq", "params": {"max_hp": 3}},
-                count=1,
-                distinct_xy=True,
-                is_select_ui=True,
-            )
-        if act == "attack_two_enemy_followers_hp_less_than_4":
-            return OperationExecutor.select_targets(
-                ctx,
-                target={"kind": "enemy_follower", "selector": "hp_leq", "params": {"max_hp": 3}},
-                count=2,
-                distinct_xy=True,
-                is_select_ui=True,
-            )
-        if act == "attack_two_enemy_followers_hp_highest":
-            return OperationExecutor.select_targets(
-                ctx,
-                target={"kind": "enemy_follower", "selector": "highest_hp", "params": {}},
-                # Keep legacy runtime behavior (was implemented as 1 click).
-                count=1,
-                distinct_xy=True,
-                is_select_ui=True,
-            )
-        if act == "our_followers_with_evolution":
-            return OperationExecutor.select_targets(
-                ctx,
-                target={
-                    "kind": "friendly_follower",
-                    "selector": "by_evolve_priority",
-                    "params": {"exclude_self": True},
-                },
-                count=1,
-                distinct_xy=True,
-                is_select_ui=False,
-            )
-        return False

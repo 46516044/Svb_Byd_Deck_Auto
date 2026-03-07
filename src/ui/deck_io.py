@@ -87,8 +87,6 @@ def extract_strategy_config(
             game_subset["card_replacement_strategy"] = str(
                 game.get("card_replacement_strategy")
             )
-        if isinstance(game.get("use_enhanced_mulligan"), bool):
-            game_subset["use_enhanced_mulligan"] = bool(game.get("use_enhanced_mulligan"))
 
     out: Dict[str, Any] = {
         "high_priority_cards": high_priority,
@@ -147,7 +145,7 @@ def apply_strategy_config(
     if isinstance(sc.get("game"), dict):
         if not isinstance(cfg.get("game"), dict):
             cfg["game"] = {}
-        for k in ("card_replacement_strategy", "use_enhanced_mulligan"):
+        for k in ("card_replacement_strategy",):
             if k in sc["game"]:
                 cfg["game"][k] = copy.deepcopy(sc["game"][k])
 

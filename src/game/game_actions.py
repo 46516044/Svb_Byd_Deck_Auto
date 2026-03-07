@@ -516,12 +516,7 @@ class GameActions:
                 follower_pos=pos_xy,
                 attack_source_pos=pos_xy,
             )
-            ops_to_run = [
-                o
-                for o in ops
-                if isinstance(o, dict) and str(o.get("op") or "") != "legacy_target_type"
-            ]
-            _EffectEngine.run_ops(ops_to_run, ctx=ctx, trigger_id="on_attack")
+            _EffectEngine.run_ops(ops, ctx=ctx, trigger_id="on_attack")
 
         shield_targets = []
         shield_detected = False
@@ -2076,29 +2071,21 @@ class GameActions:
         if not ops:
             return False
 
-        enemy_legacy_types = {
-            "enemy_player",
-            "shield_or_highest_hp",
-            "double_enemy",
-            "enemy_followers_hp_less_than_6",
-            "shield_or_highest_hp_no_enemy_retrun_point",
-        }
-
         for op in ops:
             if not isinstance(op, dict):
                 continue
             op_name = str(op.get("op") or "")
-            if op_name == "legacy_target_type":
-                tt = str(op.get("target_type") or "")
-                if tt in enemy_legacy_types:
-                    return True
-
             if op_name == "select_targets":
-                kind = str(op.get("kind") or "")
-                if "enemy" in kind or "ward" in kind:
-                    return True
+                target = op.get("target")
+                if isinstance(target, dict):
+                    target_kind = str(target.get("kind") or "")
+                    target_selector = str(target.get("selector") or "")
+                    if "enemy" in target_kind or "ward" in target_kind:
+                        return True
+                    if "enemy" in target_selector or "ward" in target_selector:
+                        return True
 
-            for key in ("kind", "target", "target_kind", "target_type"):
+            for key in ("kind", "target", "target_kind"):
                 value = str(op.get(key) or "")
                 if "enemy" in value or "ward" in value:
                     return True
@@ -2143,140 +2130,6 @@ class GameActions:
         except Exception as e:
             self.device_state.logger.error(f"检测额外费用点时出错: {str(e)}")
             return None
-
-    def _detect_change_card(self, debug_flag=False):
-        """
-        简化的fallback换牌方法（使用SIFT识别 + 旧策略规则）
-
-        当主要的SIFT增强策略失败时使用此方法作为后备方案。
-        使用相同的SIFT识别，但应用旧版简单策略规则（无优先级、无曲线检查）。
-        """
-        try:
-            from src.utils.card_swap_strategy_enhanced import determine_card_swaps_unified
-
-            self.device_state.logger.info("[Fallback] 使用SIFT识别 + 旧策略规则")
-
-            # 1. 获取截图
-            screenshot = self.device_state.take_screenshot()
-            if screenshot is None:
-                self.device_state.logger.warning("[Fallback] 无法获取截图")
-                return False
-
-            # 2. 复用单例SIFT识别器（避免重复加载模板）
-            mulligan_region = (182, 402, 971, 633)
-            sift_recognizer = self.hand_manager.sift_recognition
-
-            # 3. 识别手牌（带重试机制）
-            max_retries = 3
-            cards = None
-
-            for attempt in range(max_retries):
-                # 执行识别（显式传入区域，避免跨线程污染）
-                recognized_cards = sift_recognizer.recognize_hand_cards(
-                    screenshot, hand_area=mulligan_region
-                )
-
-                if not recognized_cards:
-                    self.device_state.logger.warning(
-                        f"[Fallback] 第{attempt+1}次识别: 未检测到卡牌"
-                    )
-                    if attempt < max_retries - 1:
-                        time.sleep(0.5)
-                        screenshot = self.device_state.take_screenshot()
-                        if screenshot is None:
-                            continue
-                    continue
-
-                # 确保最多4张牌
-                recognized_cards = recognized_cards[:4]
-
-                # 验证识别结果
-                is_valid, reason = self._validate_mulligan_cards(recognized_cards)
-
-                if is_valid:
-                    self.device_state.logger.info(
-                        f"[Fallback] 第{attempt+1}次识别成功，验证通过"
-                    )
-                    cards = recognized_cards
-                    break
-
-                self.device_state.logger.warning(
-                    f"[Fallback] 第{attempt+1}次识别失败: {reason}"
-                )
-                if attempt < max_retries - 1:
-                    time.sleep(0.5)
-                    screenshot = self.device_state.take_screenshot()
-                    if screenshot is None:
-                        continue
-
-            # 重试后仍失败
-            if cards is None:
-                self.device_state.logger.error(
-                    f"[Fallback] {max_retries}次重试均失败，放弃识别"
-                )
-                return False
-
-            # 4. 获取配置的策略
-            strategy = self.device_state.config.get("game", {}).get(
-                "card_replacement_strategy", "4费档次"
-            )
-
-            # 5. 调用统一接口，使用旧策略规则（use_enhanced=False）
-            keep_indices, swap_indices, reasons = determine_card_swaps_unified(
-                cards,
-                strategy,
-                priority_cards=None,  # 旧策略不使用优先级
-                use_enhanced=False,  # 使用旧规则
-            )
-
-            self.device_state.logger.info(f"[Fallback] 策略: {strategy} (旧规则)")
-            self.device_state.logger.info(
-                f"[Fallback] 保留: {keep_indices}, 换掉: {swap_indices}"
-            )
-
-            # 6. 执行换牌拖拽操作
-            if swap_indices:
-                for idx in swap_indices:
-                    card = cards[idx]
-                    center_x, center_y = card["center"]
-
-                    self.device_state.logger.info(
-                        f"[Fallback] 换掉 {card['name']} ({card['cost']}费)"
-                    )
-
-                    # 执行拖拽
-                    start_x = center_x + random.randint(-5, 5)
-                    start_y = 516
-                    end_x = center_x + random.randint(-5, 5)
-                    end_y = 208
-
-                    human_like_drag(
-                        self.device_state.u2_device,
-                        start_x,
-                        start_y,
-                        end_x,
-                        end_y,
-                        duration=random.uniform(
-                            *settings.get_human_like_drag_duration_range()
-                        ),
-                    )
-
-                    time.sleep(random.uniform(0.05, 0.1))
-
-                self.device_state.logger.info(
-                    f"[Fallback] 换牌完成，共换掉 {len(swap_indices)} 张"
-                )
-            else:
-                self.device_state.logger.info("[Fallback] 无需换牌")
-
-            return True
-
-        except Exception as e:
-            self.device_state.logger.error(f"[Fallback] 换牌失败: {str(e)}")
-            import traceback
-            self.device_state.logger.error(f"[Fallback] 错误详情:\n{traceback.format_exc()}")
-            return False
-
 
     def _validate_mulligan_cards(self, cards: List[Dict]) -> Tuple[bool, str]:
         """

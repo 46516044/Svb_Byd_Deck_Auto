@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional
 from src.config.io_guard import is_in_battle
 from src.config.migrations import (
     migrate_high_priority_cards_priority_fields,
+    migrate_runtime_legacy_fields,
     migrate_strategy_name_keys,
     migrate_strategy_effects_schema,
     migrate_strategy_effects_to_ops,
@@ -75,6 +76,10 @@ def _normalize_and_migrate(user_config: Dict[str, Any]) -> Dict[str, Any]:
         pass
     try:
         migrate_strategy_effects_to_ops(cfg)
+    except Exception:
+        pass
+    try:
+        migrate_runtime_legacy_fields(cfg)
     except Exception:
         pass
     return cfg

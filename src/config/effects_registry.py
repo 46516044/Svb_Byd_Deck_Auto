@@ -41,36 +41,6 @@ TRIGGERS: List[Dict[str, Any]] = [
 ]
 
 
-LEGACY_TARGET_TYPE_OPTIONS: List[Dict[str, Any]] = [
-    {"label": "打脸", "value": "enemy_player"},
-    {"label": "双破坏", "value": "double_enemy"},
-    {"label": "护盾/最高血", "value": "shield_or_highest_hp"},
-    {"label": "敌随从HP<=5", "value": "enemy_followers_hp_less_than_6"},
-    {
-        "label": "护盾/最高血(不消耗)",
-        "value": "shield_or_highest_hp_no_enemy_retrun_point",
-    },
-    {"label": "扫我方随从选项", "value": "scan_our_follower_to_choose"},
-]
-
-
-LEGACY_ACTION_OPTIONS: List[Dict[str, Any]] = [
-    {"label": "点敌随从HP<=3", "value": "attack_enemy_follower_hp_less_than_4"},
-    {
-        "label": "点2个敌随从HP<=3",
-        "value": "attack_two_enemy_followers_hp_less_than_4",
-    },
-    {
-        "label": "点2个敌随从HP最高",
-        "value": "attack_two_enemy_followers_hp_highest",
-    },
-    {
-        "label": "选我方随从(按进化优先)",
-        "value": "our_followers_with_evolution",
-    },
-]
-
-
 TARGET_KINDS: List[Dict[str, Any]] = [
     {
         "kind": "enemy_leader",
@@ -99,9 +69,42 @@ TARGET_KINDS: List[Dict[str, Any]] = [
                 ],
             },
             {
+                "id": "hp_leq_or_highest_hp",
+                "label": "HP<=X否则最高",
+                "params_schema": [
+                    {
+                        "name": "max_hp",
+                        "label": "最大HP",
+                        "type": "int",
+                        "default": 5,
+                        "min": 0,
+                        "max": 99,
+                    },
+                    {
+                        "name": "allow_amulet_fallback",
+                        "label": "无随从时允许护符",
+                        "type": "bool",
+                        "default": False,
+                    },
+                    {
+                        "name": "fallback_to_enemy_leader",
+                        "label": "无随从时改为打脸",
+                        "type": "bool",
+                        "default": False,
+                    },
+                ],
+            },
+            {
                 "id": "ward_or_highest_hp",
                 "label": "护盾优先/血量最高",
-                "params_schema": [],
+                "params_schema": [
+                    {
+                        "name": "allow_amulet_fallback",
+                        "label": "无随从时允许护符",
+                        "type": "bool",
+                        "default": True,
+                    }
+                ],
             },
         ],
     },
@@ -178,6 +181,41 @@ OPERATIONS: List[Dict[str, Any]] = [
         ],
     },
     {
+        "op_id": "select_option_by_our_followers",
+        "label": "按我方随从数选项",
+        "supported_context_kinds": [CONTEXT_HAND_CARD],
+        "params_schema": [
+            {
+                "name": "threshold",
+                "label": "阈值(<=)",
+                "type": "int",
+                "default": 3,
+                "min": 0,
+                "max": 10,
+            },
+            {
+                "name": "le_option",
+                "label": "<=阈值选项",
+                "type": "enum",
+                "default": 1,
+                "options": [
+                    {"label": "选项1", "value": 1},
+                    {"label": "选项2", "value": 2},
+                ],
+            },
+            {
+                "name": "gt_option",
+                "label": ">阈值选项",
+                "type": "enum",
+                "default": 2,
+                "options": [
+                    {"label": "选项1", "value": 1},
+                    {"label": "选项2", "value": 2},
+                ],
+            },
+        ],
+    },
+    {
         "op_id": "cancel_action",
         "label": "取消/点空白",
         "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
@@ -214,34 +252,6 @@ OPERATIONS: List[Dict[str, Any]] = [
                 "min": -20,
                 "max": 20,
             },
-        ],
-    },
-    {
-        "op_id": "legacy_target_type",
-        "label": "旧: 特殊目标(target_type)",
-        "supported_context_kinds": [CONTEXT_HAND_CARD],
-        "params_schema": [
-            {
-                "name": "target_type",
-                "label": "类型",
-                "type": "enum",
-                "default": "enemy_player",
-                "options": list(LEGACY_TARGET_TYPE_OPTIONS),
-            }
-        ],
-    },
-    {
-        "op_id": "legacy_action",
-        "label": "旧: 进化特殊动作(action)",
-        "supported_context_kinds": [CONTEXT_FOLLOWER],
-        "params_schema": [
-            {
-                "name": "action",
-                "label": "动作",
-                "type": "enum",
-                "default": "attack_enemy_follower_hp_less_than_4",
-                "options": list(LEGACY_ACTION_OPTIONS),
-            }
         ],
     },
 ]

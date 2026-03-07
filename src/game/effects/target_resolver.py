@@ -62,6 +62,20 @@ def resolve_targets(
             except Exception:
                 wards = []
 
+        allow_amulet_fallback = False
+        fallback_to_enemy_leader = False
+        try:
+            if selector == "ward_or_highest_hp":
+                allow_amulet_fallback = bool(params.get("allow_amulet_fallback", True))
+            elif selector == "hp_leq_or_highest_hp":
+                allow_amulet_fallback = bool(params.get("allow_amulet_fallback", False))
+            else:
+                allow_amulet_fallback = bool(params.get("allow_amulet_fallback", False))
+            fallback_to_enemy_leader = bool(params.get("fallback_to_enemy_leader", False))
+        except Exception:
+            allow_amulet_fallback = False
+            fallback_to_enemy_leader = False
+
         screenshot = None
         try:
             screenshot = ds.take_screenshot()
@@ -79,7 +93,7 @@ def resolve_targets(
         except Exception:
             enemy_followers = []
 
-        if not enemy_followers:
+        if not enemy_followers and allow_amulet_fallback:
             # Fallback: when there is no enemy follower but selectable amulet-like targets exist,
             # return those positions so the card can still be cast.
             try:
@@ -98,6 +112,14 @@ def resolve_targets(
             for x, y in list(amulet_targets)[:n]:
                 out.append((_safe_int(x, 0), _safe_int(y, 0)))
             return out
+
+        if not enemy_followers and fallback_to_enemy_leader:
+            x = int(DEFAULT_ATTACK_TARGET[0]) + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
+            y = int(DEFAULT_ATTACK_TARGET[1]) + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
+            return [(x, y)]
+
+        if not enemy_followers:
+            return []
 
         picked: List[Any] = []
         if selector in ("", "highest_hp"):
@@ -120,6 +142,27 @@ def resolve_targets(
                 picked = TargetSelector.enemy_followers_hp_leq(
                     enemy_followers, max_hp=max_hp, n=n
                 )
+
+        elif selector == "hp_leq_or_highest_hp":
+            max_hp = _safe_int(params.get("max_hp", 0), 0)
+            if n <= 1:
+                one = TargetSelector.enemy_follower_hp_leq(enemy_followers, max_hp=max_hp)
+                if one is None:
+                    one = TargetSelector.enemy_follower_highest_hp(enemy_followers)
+                if one is not None:
+                    picked = [one]
+            else:
+                picked = TargetSelector.enemy_followers_hp_leq(
+                    enemy_followers,
+                    max_hp=max_hp,
+                    n=n,
+                )
+                if not picked:
+                    picked = TargetSelector.enemy_followers_highest_hp(
+                        enemy_followers,
+                        n=n,
+                        distinct_xy=bool(distinct_xy),
+                    )
 
         elif selector == "ward_or_highest_hp":
             if n <= 1:

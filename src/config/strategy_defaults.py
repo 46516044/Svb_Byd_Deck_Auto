@@ -8,6 +8,11 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from src.config.strategy_effects import (
+    convert_legacy_action_to_ops,
+    convert_legacy_target_type_to_ops,
+)
+
 
 # Default on_play target selection (legacy `SPECIAL_CARDS` mapping).
 DEFAULT_SPECIAL_CARD_TARGET_TYPES: Dict[str, str] = {
@@ -47,18 +52,18 @@ def build_default_effects() -> Dict[str, Any]:
     effects: Dict[str, Any] = {}
 
     for card_name, target_type in DEFAULT_SPECIAL_CARD_TARGET_TYPES.items():
-        effects.setdefault(card_name, {}).setdefault("on_play", []).append(
-            {"op": "legacy_target_type", "target_type": target_type}
-        )
+        converted = convert_legacy_target_type_to_ops(target_type)
+        if converted:
+            effects.setdefault(card_name, {}).setdefault("on_play", []).extend(converted)
 
     for card_name, actions in DEFAULT_EVOLVE_SPECIAL_ACTIONS.items():
         if "on_evolve" in actions:
-            effects.setdefault(card_name, {}).setdefault("on_evolve", []).append(
-                {"op": "legacy_action", "action": actions["on_evolve"]}
-            )
+            converted = convert_legacy_action_to_ops(actions["on_evolve"])
+            if converted:
+                effects.setdefault(card_name, {}).setdefault("on_evolve", []).extend(converted)
         if "on_super_evolve" in actions:
-            effects.setdefault(card_name, {}).setdefault("on_super_evolve", []).append(
-                {"op": "legacy_action", "action": actions["on_super_evolve"]}
-            )
+            converted = convert_legacy_action_to_ops(actions["on_super_evolve"])
+            if converted:
+                effects.setdefault(card_name, {}).setdefault("on_super_evolve", []).extend(converted)
 
     return effects

@@ -17,6 +17,7 @@ from src.config.persisted_config import prune_config_for_save
 from src.core.json_io import write_json_atomic
 from src.config.migrations import (
     migrate_high_priority_cards_priority_fields,
+    migrate_runtime_legacy_fields,
     migrate_strategy_name_keys,
     migrate_strategy_effects_schema,
     migrate_strategy_effects_to_ops,
@@ -60,6 +61,10 @@ class ConfigManager:
                 migrate_strategy_effects_to_ops(config)
             except Exception:
                 pass
+            try:
+                migrate_runtime_legacy_fields(config)
+            except Exception:
+                pass
             self._save_config(config)
             return config
         
@@ -78,6 +83,8 @@ class ConfigManager:
                 if migrate_strategy_effects_schema(merged_config):
                     migrated = True
                 if migrate_strategy_effects_to_ops(merged_config):
+                    migrated = True
+                if migrate_runtime_legacy_fields(merged_config):
                     migrated = True
                 if migrated:
                     self._save_config(merged_config)

@@ -16,6 +16,168 @@ from src.utils.card_filename import (
 )
 
 
+def convert_legacy_target_type_to_ops(target_type: Any) -> List[Dict[str, Any]]:
+    """Convert legacy ``target_type`` string to canonical Step3A ops."""
+
+    tt = str(target_type or "")
+    if not tt:
+        return []
+
+    if tt == "enemy_player":
+        return [
+            {
+                "op": "select_targets",
+                "target": {"kind": "enemy_leader", "selector": "", "params": {}},
+                "count": 1,
+                "distinct_xy": True,
+                "is_select_ui": True,
+            }
+        ]
+
+    if tt == "shield_or_highest_hp":
+        return [
+            {
+                "op": "select_targets",
+                "target": {
+                    "kind": "enemy_follower",
+                    "selector": "ward_or_highest_hp",
+                    "params": {"allow_amulet_fallback": True},
+                },
+                "count": 1,
+                "distinct_xy": True,
+                "is_select_ui": True,
+            }
+        ]
+
+    if tt == "double_enemy":
+        return [
+            {
+                "op": "select_targets",
+                "target": {
+                    "kind": "enemy_follower",
+                    "selector": "highest_hp",
+                    "params": {},
+                },
+                "count": 2,
+                "distinct_xy": True,
+                "is_select_ui": True,
+            }
+        ]
+
+    if tt == "enemy_followers_hp_less_than_6":
+        return [
+            {
+                "op": "select_targets",
+                "target": {
+                    "kind": "enemy_follower",
+                    "selector": "hp_leq_or_highest_hp",
+                    "params": {"max_hp": 5, "fallback_to_enemy_leader": True},
+                },
+                "count": 1,
+                "distinct_xy": True,
+                "is_select_ui": True,
+            }
+        ]
+
+    if tt == "shield_or_highest_hp_no_enemy_retrun_point":
+        return [
+            {
+                "op": "select_targets",
+                "target": {
+                    "kind": "enemy_follower",
+                    "selector": "ward_or_highest_hp",
+                    "params": {"allow_amulet_fallback": False},
+                },
+                "count": 1,
+                "distinct_xy": True,
+                "is_select_ui": True,
+            }
+        ]
+
+    if tt == "scan_our_follower_to_choose":
+        return [
+            {
+                "op": "select_option_by_our_followers",
+                "threshold": 3,
+                "le_option": 1,
+                "gt_option": 2,
+            }
+        ]
+
+    return []
+
+
+def convert_legacy_action_to_ops(action: Any) -> List[Dict[str, Any]]:
+    """Convert legacy ``action`` string to canonical Step3A ops."""
+
+    act = str(action or "")
+    if not act:
+        return []
+
+    if act == "attack_enemy_follower_hp_less_than_4":
+        return [
+            {
+                "op": "select_targets",
+                "target": {
+                    "kind": "enemy_follower",
+                    "selector": "hp_leq",
+                    "params": {"max_hp": 3},
+                },
+                "count": 1,
+                "distinct_xy": True,
+                "is_select_ui": True,
+            }
+        ]
+
+    if act == "attack_two_enemy_followers_hp_less_than_4":
+        return [
+            {
+                "op": "select_targets",
+                "target": {
+                    "kind": "enemy_follower",
+                    "selector": "hp_leq",
+                    "params": {"max_hp": 3},
+                },
+                "count": 2,
+                "distinct_xy": True,
+                "is_select_ui": True,
+            }
+        ]
+
+    if act == "attack_two_enemy_followers_hp_highest":
+        # Preserve legacy runtime behavior: this action historically clicked 1 target.
+        return [
+            {
+                "op": "select_targets",
+                "target": {
+                    "kind": "enemy_follower",
+                    "selector": "highest_hp",
+                    "params": {},
+                },
+                "count": 1,
+                "distinct_xy": True,
+                "is_select_ui": True,
+            }
+        ]
+
+    if act == "our_followers_with_evolution":
+        return [
+            {
+                "op": "select_targets",
+                "target": {
+                    "kind": "friendly_follower",
+                    "selector": "by_evolve_priority",
+                    "params": {"exclude_self": True},
+                },
+                "count": 1,
+                "distinct_xy": True,
+                "is_select_ui": False,
+            }
+        ]
+
+    return []
+
+
 def _effect_key_candidates(card_name: str) -> List[str]:
     raw = str(card_name or "")
     if not raw:
@@ -94,6 +256,8 @@ def _step_effect_signature(step: Dict[str, Any]) -> Optional[tuple]:
         return ("buff", str(step.get("target") or "others"))
     if op == "select_option":
         return ("select_option",)
+    if op == "select_option_by_our_followers":
+        return ("select_option_by_our_followers",)
     if op == "cancel_action":
         return ("cancel_action",)
     if op == "legacy_target_type":
@@ -230,8 +394,12 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
 
     Supported legacy keys:
     - {"select_option": 1/2} -> {"op": "select_option", "index": 1/2}
-    - {"target_type": "..."} -> {"op": "legacy_target_type", "target_type": "..."}
-    - {"action": "..."} -> {"op": "legacy_action", "action": "..."}
+    - {"target_type": "..."} -> canonical ops (select_targets / select_option_by_our_followers)
+    - {"action": "..."} -> canonical ops (select_targets)
+
+    Legacy op wrappers are also canonicalized:
+    - {"op":"legacy_target_type", ...}
+    - {"op":"legacy_action", ...}
     """
 
     def _norm_select_option(v: Any) -> int | None:
@@ -241,6 +409,21 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
             return 2
         return None
 
+    def _attach_on_error(items: Sequence[Dict[str, Any]], src_step: Dict[str, Any]) -> List[Dict[str, Any]]:
+        on_error = src_step.get("on_error") if isinstance(src_step, dict) else None
+        if on_error in (None, ""):
+            return [dict(it) for it in list(items or []) if isinstance(it, dict)]
+
+        out: List[Dict[str, Any]] = []
+        for it in list(items or []):
+            if not isinstance(it, dict):
+                continue
+            row = dict(it)
+            if "on_error" not in row:
+                row["on_error"] = on_error
+            out.append(row)
+        return out
+
     ops: List[Dict[str, Any]] = []
     for step in steps:
         if not isinstance(step, dict):
@@ -248,7 +431,57 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
 
         op_id = step.get("op")
         if isinstance(op_id, str) and op_id:
-            ops.append(step)
+            if op_id == "select_option":
+                idx = _norm_select_option(step.get("index"))
+                if idx is None:
+                    idx = _norm_select_option(step.get("select_option"))
+                if idx is not None:
+                    normalized = {"op": "select_option", "index": int(idx)}
+                    if step.get("on_error"):
+                        normalized["on_error"] = step.get("on_error")
+                    ops.append(normalized)
+                else:
+                    ops.append(dict(step))
+                continue
+            if op_id == "select_targets":
+                target = step.get("target")
+                if isinstance(target, dict) and str(target.get("kind") or "") == "option":
+                    params_obj = target.get("params")
+                    idx = (
+                        _norm_select_option(params_obj.get("index"))
+                        if isinstance(params_obj, dict)
+                        else None
+                    )
+                    if idx is not None:
+                        normalized = {"op": "select_option", "index": int(idx)}
+                        if step.get("on_error"):
+                            normalized["on_error"] = step.get("on_error")
+                        ops.append(normalized)
+                        continue
+            if op_id == "legacy_target_type":
+                ops.extend(_attach_on_error(convert_legacy_target_type_to_ops(step.get("target_type")), step))
+                continue
+            if op_id == "legacy_action":
+                ops.extend(_attach_on_error(convert_legacy_action_to_ops(step.get("action")), step))
+                continue
+            if op_id == "buff_others":
+                amount = step.get("amount", 0)
+                try:
+                    amount_i = int(amount)
+                except Exception:
+                    amount_i = 0
+                ops.append(
+                    {
+                        "op": "buff",
+                        "target": "others",
+                        "atk_delta": int(amount_i),
+                        "hp_delta": int(amount_i),
+                    }
+                )
+                if step.get("on_error"):
+                    ops[-1]["on_error"] = step.get("on_error")
+                continue
+            ops.append(dict(step))
             continue
 
         if "select_option" in step:
@@ -257,14 +490,10 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                 ops.append({"op": "select_option", "index": int(opt)})
 
         if "target_type" in step:
-            tt = step.get("target_type")
-            if isinstance(tt, str) and tt:
-                ops.append({"op": "legacy_target_type", "target_type": str(tt)})
+            ops.extend(_attach_on_error(convert_legacy_target_type_to_ops(step.get("target_type")), step))
 
         if "action" in step:
-            act = step.get("action")
-            if isinstance(act, str) and act:
-                ops.append({"op": "legacy_action", "action": str(act)})
+            ops.extend(_attach_on_error(convert_legacy_action_to_ops(step.get("action")), step))
 
     return ops
 
