@@ -9,7 +9,7 @@ import random
 import time
 import logging
 import os
-import onnxruntime as ort
+import onnxruntime
 from src.game.follower_manager import FollowerManager
 from src.game.template_manager import TemplateManager
 from src.game.game_actions import GameActions
@@ -24,6 +24,7 @@ from src.utils.hp_detection import (
     recognize_hp_with_fallback,
 )
 from src.utils.mnist_preprocessor import MNISTPreprocessor
+from src.config.paths import get_card_cost_dir
 from src.config.game_constants import (
     ENEMY_HP_REGION,
     ENEMY_HP_REGION_UP,
@@ -75,7 +76,7 @@ class GameManager:
             mnist_path = resource_path(mnist_path)
         if os.path.exists(mnist_path):
             try:
-                self.mnist_session = ort.InferenceSession(mnist_path, providers=["CPUExecutionProvider"])
+                self.mnist_session = onnxruntime.InferenceSession(mnist_path, providers=["CPUExecutionProvider"])
                 logger.info(f"MNIST模型已加载: {mnist_path}")
             except Exception as e:
                 logger.warning(f"加载MNIST模型失败: {e}，将仅使用EasyOCR")
@@ -923,6 +924,8 @@ class GameManager:
             import os
             from PIL import Image
 
+            supported_exts = (".png", ".jpg", ".jpeg", ".webp")
+
             # 准备截图数据
             if hasattr(base_screenshot, "shape"):
                 cv_img = base_screenshot
@@ -933,11 +936,11 @@ class GameManager:
             # 加载模板图片
             def load_template_features(filename):
                 """加载单个模板的特征"""
-                if not filename.endswith(".png"):
+                if not str(filename or "").lower().endswith(supported_exts):
                     return None
-                template_path = os.path.join("shadowverse_cards_cost", filename)
+                template_path = os.path.join(get_card_cost_dir(ensure=True), filename)
                 if not os.path.exists(template_path):
-                    template_path = resource_path(template_path)
+                    return None
                 tname = os.path.splitext(filename)[0]
                 try:
                     # 使用PIL读取图片（处理P/LA/L等模式，避免OpenCV通道数异常）
@@ -1008,10 +1011,12 @@ class GameManager:
 
             # 加载所有模板（缓存，避免每次扫描重复读取磁盘）
             if getattr(self, "_board_sift_templates", None) is None:
-                template_dir = "shadowverse_cards_cost"
-                if not os.path.exists(template_dir):
-                    template_dir = resource_path(template_dir)
-                template_files = [f for f in os.listdir(template_dir) if f.endswith(".png")]
+                template_dir = get_card_cost_dir(ensure=True)
+                template_files = [
+                    f
+                    for f in os.listdir(template_dir)
+                    if str(f or "").lower().endswith(supported_exts)
+                ]
                 card_templates = {}
 
                 with ThreadPoolExecutor(max_workers=min(8, len(template_files) or 1)) as executor:

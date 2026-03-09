@@ -768,6 +768,31 @@ class ShadowverseUI(QMainWindow):
             except Exception:
                 pass
 
+            # 避免“已发停止命令但线程长时间不退出”导致看起来无法停止。
+            self._force_stop_script_thread(timeout_ms=8000)
+
+    def _force_stop_script_thread(self, timeout_ms: int = 8000) -> bool:
+        """等待脚本线程退出；超时后执行一次强制终止兜底。"""
+
+        if not (self.script_thread and self.script_thread.isRunning()):
+            return True
+
+        if self.script_thread.wait(max(200, int(timeout_ms))):
+            return True
+
+        self.append_log("[控制] 停止超时，尝试强制结束脚本线程...")
+        try:
+            self.script_thread.terminate()
+        except Exception:
+            pass
+
+        if self.script_thread.wait(1500):
+            self.append_log("[控制] 已强制结束脚本线程")
+            return True
+
+        self.append_log("[控制] 强制结束失败，请关闭程序后重试")
+        return False
+
     def calculate_avg_turns(self):
         battle_count = int(self.battle_count_label.text()) if self.battle_count_label.text() else 0
         turn_count = int(self.turn_count_label.text()) if self.turn_count_label.text() else 0
@@ -838,8 +863,10 @@ class ShadowverseUI(QMainWindow):
         # 停止脚本线程
         if self.script_thread and self.script_thread.isRunning():
             # 发送退出命令
-            self._command_queue.put("e")
-            self.script_thread.quit()
-            self.script_thread.wait(2000)  # 等待2秒
+            try:
+                self._command_queue.put("e")
+            except Exception:
+                pass
+            self._force_stop_script_thread(timeout_ms=5000)
 
         event.accept()

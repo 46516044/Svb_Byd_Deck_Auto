@@ -1,0 +1,12 @@
+# Reproducible runtime dependency lock (Python 3.11)
+# Use this file for stable packaging builds.
+PyQt5==5.15.11
+adbutils==2.9.3
+easyocr==1.7.2
+numpy==2.1.2
+onnxruntime==1.23.2
+opencv-python==4.12.0.88
+Pillow==11.0.0
+torch==2.7.1
+torchvision==0.22.1
+uiautomator2==3.3.3

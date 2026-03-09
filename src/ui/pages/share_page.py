@@ -27,10 +27,16 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from src.config.paths import get_config_path
+from src.config.paths import get_card_cost_dir, get_config_path
 from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
-from src.ui.deck_io import apply_strategy_config, extract_strategy_config
+from src.ui.deck_io import (
+    apply_strategy_config,
+    build_card_source_index,
+    extract_strategy_config,
+    normalize_deck_cards,
+    resolve_source_card_path,
+)
 from src.utils.card_filename import normalize_card_base_name, parse_card_filename
 
 
@@ -146,13 +152,14 @@ class SharePage(QWidget):
         """生成分享码"""
         try:
             card_files = []
-            card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+            card_dir = get_card_cost_dir(ensure=True)
             if os.path.exists(card_dir):
                 card_files = [
                     f
                     for f in os.listdir(card_dir)
-                    if f.lower().endswith((".png", ".jpg", ".jpeg"))
+                    if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
                 ]
+            card_refs = normalize_deck_cards(card_files)
 
             config_path = get_config_path()
             config_data = {}
@@ -164,14 +171,14 @@ class SharePage(QWidget):
                     config_data = {}
 
             strategy_config = (
-                extract_strategy_config(config_data, cards=list(card_files or []))
+                extract_strategy_config(config_data, cards=list(card_refs or []))
                 if isinstance(config_data, dict)
                 else {}
             )
 
             share_data = {
                 "version": 3,
-                "cards": card_files,
+                "cards": card_refs,
                 "strategy_config": strategy_config,
                 "timestamp": int(time.time()),
             }
@@ -223,27 +230,24 @@ class SharePage(QWidget):
             if version not in [1, 2, 3]:
                 raise ValueError("不支持的分享码版本")
 
-            card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+            card_dir = get_card_cost_dir(ensure=True)
             os.makedirs(card_dir, exist_ok=True)
 
             for f in os.listdir(card_dir):
                 os.remove(os.path.join(card_dir, f))
 
             source_dir = os.path.join(get_exe_dir(), "quanka")
+            exact_index, stem_index = build_card_source_index(source_dir)
             for card_file in share_data["cards"]:
-                src = None
-
-                root_path = os.path.join(source_dir, card_file)
-                if os.path.exists(root_path):
-                    src = root_path
-                else:
-                    for root, dirs, files in os.walk(source_dir):
-                        if card_file in files:
-                            src = os.path.join(root, card_file)
-                            break
+                src = resolve_source_card_path(
+                    source_dir,
+                    card_file,
+                    exact_index=exact_index,
+                    stem_index=stem_index,
+                )
 
                 if src and os.path.exists(src):
-                    dst = os.path.join(card_dir, card_file)
+                    dst = os.path.join(card_dir, os.path.basename(src))
                     shutil.copy2(src, dst)
                 else:
                     self.parent.log_output.append(f"[分享] 未找到卡片: {card_file}")
@@ -288,7 +292,7 @@ class SharePage(QWidget):
             if widget := self.preview_grid_layout.itemAt(i).widget():
                 widget.deleteLater()
 
-        card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+        card_dir = get_card_cost_dir(ensure=True)
         if not os.path.exists(card_dir):
             no_card_label = QLabel("卡组为空")
             no_card_label.setStyleSheet("color: #FF8888; font-size: 14px;")
@@ -299,7 +303,7 @@ class SharePage(QWidget):
         card_files = [
             f
             for f in os.listdir(card_dir)
-            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
         if not card_files:

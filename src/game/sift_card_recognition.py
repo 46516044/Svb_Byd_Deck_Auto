@@ -16,6 +16,8 @@ from src.utils.card_filename import parse_card_stem
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_CARD_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+
 # Shared template cache (read-only) across instances/devices.
 _TEMPLATE_CACHE: Dict[Tuple[str, float], Dict[str, Dict[str, Any]]] = {}
 _TEMPLATE_CACHE_LOCK = threading.Lock()
@@ -37,10 +39,10 @@ def _build_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[
 
     card_files: List[str] = []
     for filename in os.listdir(card_images_dir):
-        if filename.endswith(".png"):
+        if filename.lower().endswith(SUPPORTED_CARD_IMAGE_EXTENSIONS):
             card_files.append(os.path.join(card_images_dir, filename))
 
-    logger.info(f"找到 {len(card_files)} 个PNG文件")
+    logger.info(f"找到 {len(card_files)} 个卡牌模板文件")
 
     for card_file in card_files:
         try:
@@ -133,7 +135,7 @@ def _get_shared_card_templates(*, card_images_dir: str, scale_factor: float) -> 
 class SiftCardRecognition:
     """SIFT卡牌识别类"""
     
-    def __init__(self, card_images_dir: str = "shadowverse_cards_cost"):
+    def __init__(self, card_images_dir: str = "card_cost"):
         """
         初始化SIFT卡牌识别器
         
@@ -149,6 +151,11 @@ class SiftCardRecognition:
             and not os.path.exists(self.card_images_dir)
         ):
             self.card_images_dir = resource_path(self.card_images_dir)
+        try:
+            if self.card_images_dir:
+                os.makedirs(self.card_images_dir, exist_ok=True)
+        except Exception:
+            pass
         self.card_templates = {}  # 缓存卡牌模板
         self.sift = cv2.SIFT_create()
         # 恢复到 d5d10c5 的识别参数（更稳，减少误识别/漏识别）
@@ -256,16 +263,24 @@ class SiftCardRecognition:
                             if inlier_count < self.min_matches:
                                 continue
                             h, w = template_info['template'].shape[:2]
-                            template_center = np.array([[w/2, h/2, 1]], dtype=np.float32)
-                            target_center = M.dot(template_center.T)
-                            # 检查除零和无效值
-                            if target_center[2] == 0 or np.isnan(target_center[0]) or np.isnan(target_center[1]) or np.isnan(target_center[2]):
-                                continue  # 跳过异常结果
-                            target_center = target_center / target_center[2]
-                            if np.isnan(target_center[0]) or np.isnan(target_center[1]):
-                                 continue  # 跳过异常结果
-                            global_x = int(target_center[0]) + x1
-                            global_y = int(target_center[1]) + y1
+                            template_center = np.array([w / 2.0, h / 2.0, 1.0], dtype=np.float64)
+                            proj = np.dot(M, template_center)
+
+                            # 检查除零和无效值（兼容 NumPy 2.x，避免数组直接转 int）
+                            if proj.shape[0] < 3 or not np.isfinite(proj).all():
+                                continue
+
+                            z = float(proj[2])
+                            if abs(z) < 1e-8:
+                                continue
+
+                            tx = float(proj[0]) / z
+                            ty = float(proj[1]) / z
+                            if (not np.isfinite(tx)) or (not np.isfinite(ty)):
+                                continue
+
+                            global_x = int(round(tx)) + x1
+                            global_y = int(round(ty)) + y1
                             avg_distance = np.mean([m.distance for m in cluster_good_matches])
                             if avg_distance <= 100:
                                 distance_score = 1.0

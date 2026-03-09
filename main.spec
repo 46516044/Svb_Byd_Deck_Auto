@@ -5,7 +5,6 @@
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_submodules
 
 # 获取项目根目录
 try:
@@ -28,22 +27,48 @@ if os.path.exists(venv_path):
 # 特别注意：排除quanka、Image、templates、templates_global等配置文件目录
 datas = []
 
-# 包含核心资源目录
-core_dirs = ['models']
-for d in core_dirs:
-    src = os.path.join(project_root, d)
+# 包含核心模型（仅打包当前运行需要的文件）
+model_files = [
+    os.path.join('models', 'craft_mlt_25k.pth'),
+    os.path.join('models', 'english_g2.pth'),
+    os.path.join('models', 'mnist_adv.onnx'),
+]
+for rel_path in model_files:
+    src = os.path.join(project_root, rel_path)
     if os.path.exists(src):
-        datas.append((src, d))
+        datas.append((src, os.path.dirname(rel_path)))
 
 # 包含内部遮罩资源（不属于用户可自定义模板）
 hp_mask_file = os.path.join(project_root, 'src', 'masks', 'hp_mask.png')
 if os.path.exists(hp_mask_file):
     datas.append((hp_mask_file, 'src/masks'))
 
-# 包含uiautomator2的assets资源文件
-uiautomator2_assets = os.path.join(venv_path, 'Lib', 'site-packages', 'uiautomator2', 'assets')
-if os.path.exists(uiautomator2_assets):
-    datas.append((uiautomator2_assets, 'uiautomator2/assets'))
+# 包含uiautomator2的assets资源文件（兼容venv/conda）
+uiautomator2_assets_candidates = []
+uiautomator2_assets_candidates.extend(
+    [
+        os.path.join(venv_path, 'Lib', 'site-packages', 'uiautomator2', 'assets'),
+        os.path.join(sys.prefix, 'Lib', 'site-packages', 'uiautomator2', 'assets'),
+        os.path.join(sys.prefix, 'Library', 'Lib', 'site-packages', 'uiautomator2', 'assets'),
+    ]
+)
+try:
+    import uiautomator2 as _u2
+
+    u2_assets = os.path.join(os.path.dirname(_u2.__file__), 'assets')
+    uiautomator2_assets_candidates.insert(0, u2_assets)
+except Exception:
+    pass
+
+_seen_assets = set()
+for u2_assets_dir in uiautomator2_assets_candidates:
+    norm = os.path.normcase(os.path.abspath(u2_assets_dir))
+    if norm in _seen_assets:
+        continue
+    _seen_assets.add(norm)
+    if os.path.isdir(u2_assets_dir):
+        datas.append((u2_assets_dir, 'uiautomator2/assets'))
+        break
 
 # 包含必要的配置文件
 config_files = ['LICENSE', 'README.md', 'PACKAGING.md']
@@ -58,7 +83,8 @@ excluded_dirs = [
     'Image', 
     'templates',
     'templates_global',
-    'shadowverse_cards_cost'
+    'card_cost',
+    'shadowverse_cards_cost',
 ]
 
 # 排除的配置文件（用户可自定义的配置文件，不打包进程序）
@@ -66,17 +92,39 @@ excluded_files = [
     'config.json'
 ]
 
-# 隐藏导入
-hiddenimports = collect_submodules('PyQt5') + [
-    'numpy', 'pandas', 'cv2', 'PIL', 'torch', 'torchvision',
-    'requests', 'scipy', 'sklearn', 'shapely', 'easyocr',
-    'adbutils', 'uiautomator2', 'flask', 'colorama', 'click',
+# 隐藏导入（仅保留运行时动态导入链路所需）
+hiddenimports = [
+    'adbutils',
+    'uiautomator2',
+    'easyocr',
+    'torch',
+    'torchvision',
+    'onnxruntime',
     'src.utils.card_swap_strategy_enhanced',
-    'src.config.card_priorities'
+    'src.config.card_priorities',
 ]
 
 binaries = []
 excludes = []
+
+# Prefer build-environment VC runtime DLLs for ORT stability.
+preferred_vc_dlls = [
+    'msvcp140.dll',
+    'vcruntime140.dll',
+    'vcruntime140_1.dll',
+]
+for dll_name in preferred_vc_dlls:
+    for cand in (
+        os.path.join(sys.prefix, dll_name),
+        os.path.join(sys.prefix, 'Library', 'bin', dll_name),
+    ):
+        if os.path.exists(cand):
+            binaries.append((cand, '.'))
+            break
+
+runtime_hooks = [
+    os.path.join(project_root, 'pyi_rth_onnxruntime_dll.py'),
+]
 
 # 添加PyQt5插件
 pyqt5_plugin_dirs = []
@@ -115,7 +163,7 @@ a = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    runtime_hooks=[],
+    runtime_hooks=runtime_hooks,
     excludes=excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -129,9 +177,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
+    [],
+    exclude_binaries=True,
     name='shadowverse_auto_ui',
     debug=False,
     bootloader_ignore_signals=False,
@@ -149,14 +196,18 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=[
+        'onnxruntime.dll',
+        'onnxruntime_providers_shared.dll',
+        'onnxruntime_pybind11_state.pyd',
+    ],
     name='shadowverse_auto_ui',
 )
 
 print("打包配置说明:")
 print("1. 使用虚拟环境路径: {}".format(venv_path if os.path.exists(venv_path) else "未找到虚拟环境"))
 print("2. 已排除的配置文件目录: {}".format(", ".join(excluded_dirs)))
-print("3. 包含的核心资源: {}".format(", ".join(core_dirs)))
+print("3. 包含的核心模型文件: {}".format(", ".join(model_files)))
 print("4. 打包完成后，请确保以下目录与可执行文件在同一目录下:")
 for dir_name in excluded_dirs:
     print("   - {}".format(dir_name))

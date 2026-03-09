@@ -6,6 +6,7 @@
 import logging
 import time
 from typing import List, Dict, Optional
+from src.config.paths import get_card_cost_dir
 from .sift_card_recognition import SiftCardRecognition
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class HandCardManager:
         self.hand_area = (229, 539, 1130, 710)  # 手牌区域坐标
 
         # Per-device/per-instance recognizer (templates are shared internally).
-        self.sift_recognition = SiftCardRecognition("shadowverse_cards_cost")
+        self.sift_recognition = SiftCardRecognition(get_card_cost_dir(ensure=True))
 
     def recognize_hand_cards(self, screenshot, silent=False) -> List[Dict]:
         """

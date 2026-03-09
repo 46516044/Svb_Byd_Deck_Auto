@@ -26,10 +26,16 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from src.config.paths import get_config_path
+from src.config.paths import get_card_cost_dir, get_config_path
 from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
-from src.ui.deck_io import apply_strategy_config, extract_strategy_config, save_deck_snapshot
+from src.ui.deck_io import (
+    apply_strategy_config,
+    build_card_source_index,
+    extract_strategy_config,
+    resolve_source_card_path,
+    save_deck_snapshot,
+)
 from src.utils.card_filename import normalize_card_base_name, parse_card_filename
 
 
@@ -168,7 +174,7 @@ class MyDeckPage(QWidget):
             return
 
         # 获取当前卡组中的卡片
-        card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+        card_dir = get_card_cost_dir(ensure=True)
         if not os.path.exists(card_dir):
             QMessageBox.warning(self, "警告", "当前卡组为空！")
             return
@@ -176,7 +182,7 @@ class MyDeckPage(QWidget):
         card_files = [
             f
             for f in os.listdir(card_dir)
-            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
         if not card_files:
             QMessageBox.warning(self, "警告", "当前卡组为空！")
@@ -287,7 +293,7 @@ class MyDeckPage(QWidget):
                 deck_data = json.load(f)
 
             # 清空当前卡组
-            card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+            card_dir = get_card_cost_dir(ensure=True)
             for file in os.listdir(card_dir):
                 file_path = os.path.join(card_dir, file)
                 try:
@@ -298,17 +304,18 @@ class MyDeckPage(QWidget):
 
             # 复制卡片到当前卡组
             source_dir = os.path.join(get_exe_dir(), "quanka")
+            exact_index, stem_index = build_card_source_index(source_dir)
             success_count = 0
             for card_file in deck_data.get("cards", []):
-                # 查找卡片在quanka目录中的路径
-                src = None
-                for root, _, files in os.walk(source_dir):
-                    if card_file in files:
-                        src = os.path.join(root, card_file)
-                        break
+                src = resolve_source_card_path(
+                    source_dir,
+                    card_file,
+                    exact_index=exact_index,
+                    stem_index=stem_index,
+                )
 
                 if src and os.path.exists(src):
-                    dst = os.path.join(card_dir, card_file)
+                    dst = os.path.join(card_dir, os.path.basename(src))
                     try:
                         shutil.copy2(src, dst)
                         success_count += 1
@@ -402,7 +409,7 @@ class MyDeckPage(QWidget):
                 widget.deleteLater()
 
         # 获取卡组目录
-        card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+        card_dir = get_card_cost_dir(ensure=True)
         if not os.path.exists(card_dir):
             no_card_label = QLabel("卡组为空，请添加卡片")
             no_card_label.setStyleSheet("color: #FF8888; font-size: 14px;")
@@ -414,7 +421,7 @@ class MyDeckPage(QWidget):
         card_files = [
             f
             for f in os.listdir(card_dir)
-            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
         if not card_files:
@@ -503,7 +510,7 @@ class MyDeckPage(QWidget):
 
     def remove_card(self, card_file):
         """移除指定卡片"""
-        card_path = os.path.join(get_exe_dir(), "shadowverse_cards_cost", card_file)
+        card_path = os.path.join(get_card_cost_dir(ensure=True), card_file)
         if os.path.exists(card_path):
             try:
                 os.remove(card_path)

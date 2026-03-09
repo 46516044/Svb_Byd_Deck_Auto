@@ -289,11 +289,44 @@ class DeviceManager:
         device_state.logger.info(f"完成对战次数: {summary['matches_completed']}")
         device_state.logger.info("===== 脚本结束运行 =====")
         
-    def wait_for_completion(self):
-        """等待所有设备完成"""
-        for serial, thread in self.device_threads.items():
-            thread.join()
-            logger.info(f"设备线程已结束: {serial}")
+    def wait_for_completion(self, *, poll_interval: float = 0.2, stop_grace_seconds: float = 8.0):
+        """等待所有设备完成。
+
+        正常运行时持续阻塞直到线程结束；
+        若已收到停止请求但个别线程长时间未退出，则在宽限期后结束等待，
+        避免 GUI 无法停止。
+        """
+
+        pending = dict(self.device_threads)
+        stop_wait_start = None
+
+        while pending:
+            for serial, thread in list(pending.items()):
+                thread.join(timeout=max(0.05, float(poll_interval)))
+                if not thread.is_alive():
+                    logger.info(f"设备线程已结束: {serial}")
+                    pending.pop(serial, None)
+
+            if not pending:
+                break
+
+            all_stop_requested = bool(self.device_states) and all(
+                not bool(getattr(ds, "script_running", True))
+                for ds in self.device_states.values()
+            )
+
+            if all_stop_requested:
+                if stop_wait_start is None:
+                    stop_wait_start = time.time()
+                elif (time.time() - stop_wait_start) >= max(0.5, float(stop_grace_seconds)):
+                    remain = ", ".join(sorted(pending.keys()))
+                    logger.warning(
+                        "停止请求后设备线程仍未退出，跳过继续等待: %s",
+                        remain,
+                    )
+                    break
+            else:
+                stop_wait_start = None
     
     def show_run_summary(self):
         """显示运行总结"""

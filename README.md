@@ -92,7 +92,7 @@ Svb_Byd_Deck_Auto/
 │   └── utils/           # 工具函数
 ├── templates/           # 国服模板图片
 ├── templates_global/    # 国际服模板图片
-├── shadowverse_cards_cost/  # 卡牌费用模板
+├── card_cost/              # 卡牌费用模板
 ├── saved_decks/         # 保存的卡组配置
 ├── models/              # OCR和MNIST模型
 └── quanka/              # 全卡库图片
@@ -107,12 +107,23 @@ Svb_Byd_Deck_Auto/
 - `docs/effects_developer_manual.md`
 
 ### 打包与发布
-1. 使用PyInstaller打包：
+1. 安装运行与构建依赖（推荐可复现打包）：
+   ```bash
+   pip install -r requirements-py311.lock
+   pip install -r requirements-build.in
+   ```
+
+   开发场景可使用范围依赖：
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. 使用PyInstaller打包：
    ```bash
    pyinstaller main.spec
    ```
 
-2. 打包产物将生成在`dist`目录中
+3. 打包产物将生成在`dist`目录中
 
 ## KNOWN ISSUE
 

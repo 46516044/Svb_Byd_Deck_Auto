@@ -1,0 +1,3 @@
+# Build-only dependencies
+pyinstaller
+pyinstaller-hooks-contrib

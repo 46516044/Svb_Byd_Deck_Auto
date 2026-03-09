@@ -10,7 +10,7 @@ import copy
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.json_io import write_json_atomic
 from src.utils.card_filename import (
@@ -19,6 +19,97 @@ from src.utils.card_filename import (
     parse_card_filename,
     split_enhance_key,
 )
+
+
+SUPPORTED_CARD_IMAGE_EXTENSIONS: Tuple[str, ...] = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+)
+
+
+def _card_ref_from_value(value: Any) -> str:
+    """Convert card filename/path to a stable deck card reference (stem only)."""
+
+    raw = os.path.basename(str(value or "").strip())
+    if not raw:
+        return ""
+
+    stem, _ext = os.path.splitext(raw)
+    return str(stem or raw)
+
+
+def normalize_deck_cards(cards: List[str]) -> List[str]:
+    """Normalize persisted deck cards to extension-free references."""
+
+    out: List[str] = []
+    seen = set()
+    for item in list(cards or []):
+        ref = _card_ref_from_value(item)
+        if not ref:
+            continue
+        key = ref.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ref)
+    return out
+
+
+def build_card_source_index(source_dir: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Build exact/stem lookup indices for cards under a source directory."""
+
+    exact: Dict[str, str] = {}
+    stem: Dict[str, str] = {}
+    if not os.path.isdir(source_dir):
+        return exact, stem
+
+    for root, _dirs, files in os.walk(source_dir):
+        for fn in files:
+            base = os.path.basename(str(fn or ""))
+            if not base.lower().endswith(SUPPORTED_CARD_IMAGE_EXTENSIONS):
+                continue
+
+            full = os.path.join(root, base)
+            exact.setdefault(base.lower(), full)
+
+            name_key = _card_ref_from_value(base).lower()
+            if name_key:
+                stem.setdefault(name_key, full)
+
+    return exact, stem
+
+
+def resolve_source_card_path(
+    source_dir: str,
+    card_ref: str,
+    *,
+    exact_index: Optional[Dict[str, str]] = None,
+    stem_index: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Resolve a card reference to a concrete source image path.
+
+    Supports both legacy filename refs (with extension) and new stem refs.
+    """
+
+    raw = os.path.basename(str(card_ref or "").strip())
+    if not raw:
+        return None
+
+    exact_map = exact_index
+    stem_map = stem_index
+    if exact_map is None or stem_map is None:
+        exact_map, stem_map = build_card_source_index(source_dir)
+
+    exact_hit = exact_map.get(raw.lower())
+    if exact_hit:
+        return exact_hit
+
+    stem_key = _card_ref_from_value(raw).lower()
+    if not stem_key:
+        return None
+    return stem_map.get(stem_key)
 
 
 def _deck_base_names(cards: List[str]) -> List[str]:
@@ -167,10 +258,12 @@ def save_deck_snapshot(
 
     os.makedirs(decks_dir, exist_ok=True)
 
+    normalized_cards = normalize_deck_cards(list(cards or []))
+
     deck_data: Dict[str, Any] = {
-        "version": 2,
+        "version": 3,
         "name": name,
-        "cards": list(cards or []),
+        "cards": list(normalized_cards or []),
         "timestamp": int(time.time()),
     }
 
@@ -178,7 +271,7 @@ def save_deck_snapshot(
         with open(config_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
         if isinstance(cfg, dict):
-            sc = extract_strategy_config(cfg, cards=list(cards or []))
+            sc = extract_strategy_config(cfg, cards=list(normalized_cards or []))
             if sc:
                 deck_data["strategy_config"] = sc
 

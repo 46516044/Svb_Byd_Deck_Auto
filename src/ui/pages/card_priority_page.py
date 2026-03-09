@@ -24,9 +24,9 @@ from PyQt5.QtWidgets import (
 )
 
 from src.config.paths import get_config_path
+from src.config.paths import get_card_cost_dir
 from src.config.config_repository import ConfigRepository
 from src.config.effects_registry import get_triggers
-from src.ui.common import get_exe_dir
 from src.utils.card_filename import (
     make_enhance_key,
     normalize_card_base_name,
@@ -249,7 +249,7 @@ class CardPriorityPage(QWidget):
         self._base_evolve_priority_inputs = {}
         self._enhance_evolve_priority_views = {}
 
-        card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+        card_dir = get_card_cost_dir(ensure=True)
         if not os.path.exists(card_dir):
             no_card_label = QLabel("未找到卡组卡片，请先在'卡组选择'页面选择卡片")
             no_card_label.setStyleSheet("color: #FF8888; font-size: 14px;")
@@ -260,7 +260,7 @@ class CardPriorityPage(QWidget):
         card_files = [
             f
             for f in os.listdir(card_dir)
-            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
         if not card_files:
             no_card_label = QLabel("没有找到卡片，请先在'卡组选择'页面选择卡片")
@@ -330,7 +330,7 @@ class CardPriorityPage(QWidget):
             row_layout.setContentsMargins(10, 5, 10, 5)
 
             card_label = QLabel()
-            card_path = os.path.join(get_exe_dir(), "shadowverse_cards_cost", card_file)
+            card_path = os.path.join(card_dir, card_file)
             pixmap = QPixmap(card_path)
             if not pixmap.isNull():
                 pixmap = pixmap.scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)

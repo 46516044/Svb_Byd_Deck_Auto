@@ -26,10 +26,16 @@ from PyQt5.QtWidgets import (
     QInputDialog,
 )
 
-from src.config.paths import get_config_path
+from src.config.paths import get_card_cost_dir, get_config_path
 from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
-from src.ui.deck_io import apply_strategy_config, extract_strategy_config, save_deck_snapshot
+from src.ui.deck_io import (
+    apply_strategy_config,
+    build_card_source_index,
+    extract_strategy_config,
+    resolve_source_card_path,
+    save_deck_snapshot,
+)
 from src.utils.card_filename import normalize_card_base_name, parse_card_filename
 
 
@@ -281,7 +287,7 @@ class CardSelectPage(QWidget):
             # 加载所有卡片
             for root, _, files in os.walk(card_dir):
                 for file in files:
-                    if file.lower().endswith((".png", ".jpg", ".jpeg")):
+                    if file.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
                         rel_path = os.path.relpath(os.path.join(root, file), card_dir)
                         self.all_cards.append(
                             {
@@ -526,7 +532,7 @@ class CardSelectPage(QWidget):
             QMessageBox.warning(self, "警告", "请至少选择一张卡片！")
             return
 
-        target_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+        target_dir = get_card_cost_dir(ensure=True)
         os.makedirs(target_dir, exist_ok=True)
 
         for file in os.listdir(target_dir):
@@ -588,7 +594,7 @@ class CardSelectPage(QWidget):
             with open(deck_path, "r", encoding="utf-8") as f:
                 deck_data = json.load(f)
 
-            card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+            card_dir = get_card_cost_dir(ensure=True)
             for file in os.listdir(card_dir):
                 file_path = os.path.join(card_dir, file)
                 try:
@@ -598,16 +604,18 @@ class CardSelectPage(QWidget):
                     print(f"删除文件失败: {file_path} - {e}")
 
             source_dir = os.path.join(get_exe_dir(), "quanka")
+            exact_index, stem_index = build_card_source_index(source_dir)
             success_count = 0
             for card_file in deck_data.get("cards", []):
-                src = None
-                for root, _, files in os.walk(source_dir):
-                    if card_file in files:
-                        src = os.path.join(root, card_file)
-                        break
+                src = resolve_source_card_path(
+                    source_dir,
+                    card_file,
+                    exact_index=exact_index,
+                    stem_index=stem_index,
+                )
 
                 if src and os.path.exists(src):
-                    dst = os.path.join(card_dir, card_file)
+                    dst = os.path.join(card_dir, os.path.basename(src))
                     try:
                         shutil.copy2(src, dst)
                         success_count += 1
@@ -812,8 +820,18 @@ class CardSelectPage(QWidget):
                 deck_data = json.load(f)
 
             self.selected_cards = []
+            source_dir = os.path.join(get_exe_dir(), "quanka")
+            exact_index, stem_index = build_card_source_index(source_dir)
+
             for card_file in deck_data.get("cards", []):
-                self.selected_cards.append(card_file)
+                src = resolve_source_card_path(
+                    source_dir,
+                    card_file,
+                    exact_index=exact_index,
+                    stem_index=stem_index,
+                )
+                if src and os.path.exists(src):
+                    self.selected_cards.append(os.path.basename(src))
 
             self.display_page(self.current_page)
 
