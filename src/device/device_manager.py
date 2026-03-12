@@ -129,6 +129,12 @@ class DeviceManager:
     def _run_device_loop(self, device_state: DeviceState, game_manager: GameManager):
         """运行设备主循环"""
         device_state.logger.info("设备主循环开始")
+
+        # 启动脚本时若游戏未运行，自动拉起 Shadowverse 应用。
+        try:
+            device_state.ensure_shadowverse_apps_running(launch_delay_seconds=3.0)
+        except Exception as e:
+            device_state.logger.warning(f"自动启动游戏应用失败，继续执行: {e}")
         
         # 检测脚本启动时是否已经在对战中
         device_state.logger.info("检测当前游戏状态...")

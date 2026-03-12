@@ -321,6 +321,14 @@ class DeviceState:
         """Request script stop without forcing app shutdown by default."""
 
         self.stop_reason = str(reason or "manual")
+
+        # Runtime-limit stop should also close game app(s) on device.
+        if self.stop_reason == "runtime_limit":
+            try:
+                self.stop_shadowverse_apps(trigger=self.stop_reason)
+            except Exception:
+                pass
+
         self.script_running = False
 
         # Ensure paused loops can unwind quickly.
@@ -333,6 +341,175 @@ class DeviceState:
             )
         except Exception:
             pass
+
+    def _find_shadowverse_packages(self) -> List[str]:
+        """Find installed package names related to Shadowverse/Byd."""
+
+        if self.adb_device is None:
+            return []
+
+        try:
+            packages = self.adb_device.shell("pm list packages").splitlines()
+        except Exception:
+            return []
+
+        out: List[str] = []
+        seen = set()
+        for item in packages:
+            pkg = str(item or "").split(":")[-1].strip()
+            if not pkg:
+                continue
+            low = pkg.lower()
+            if "shadowverse" not in low and "com.netease.yzs" not in low:
+                continue
+            if pkg in seen:
+                continue
+            seen.add(pkg)
+            out.append(pkg)
+        return out
+
+    def _is_package_running(self, pkg: str) -> bool:
+        if self.adb_device is None or not pkg:
+            return False
+
+        try:
+            result = str(self.adb_device.shell(f"pidof {pkg}") or "").strip()
+        except Exception:
+            return False
+
+        if not result:
+            return False
+        low = result.lower()
+        if "not found" in low or "unknown" in low or "error" in low:
+            return False
+
+        tokens = [t.strip() for t in result.replace("\n", " ").split(" ") if t.strip()]
+        if not tokens:
+            return False
+        return all(tok.isdigit() for tok in tokens)
+
+    def _get_foreground_package(self) -> str:
+        """Get current foreground package name (best effort)."""
+
+        for dev in (self.u2_device_raw, self.u2_device):
+            if dev is None:
+                continue
+            try:
+                current = dev.app_current()
+                if isinstance(current, dict):
+                    pkg = str(current.get("package") or "").strip()
+                    if pkg:
+                        return pkg
+            except Exception:
+                pass
+
+        if self.adb_device is None:
+            return ""
+
+        try:
+            top = str(self.adb_device.shell("dumpsys activity top") or "")
+        except Exception:
+            return ""
+
+        import re
+
+        for line in top.splitlines():
+            if "ACTIVITY" not in line and "topResumedActivity" not in line:
+                continue
+            m = re.search(r"\b([A-Za-z0-9_\.]+)/[A-Za-z0-9_.$]+", line)
+            if m:
+                return str(m.group(1) or "").strip()
+
+        return ""
+
+    def ensure_shadowverse_apps_running(self, *, launch_delay_seconds: float = 3.0) -> bool:
+        """Ensure Shadowverse app is running; auto-start when not running."""
+
+        target_pkgs = self._find_shadowverse_packages()
+        if not target_pkgs:
+            self.logger.warning("未找到Shadowverse相关包名，无法自动启动应用")
+            return False
+
+        foreground_pkg = self._get_foreground_package()
+        if foreground_pkg in target_pkgs:
+            self.logger.info(f"检测到Shadowverse应用已在前台: {foreground_pkg}")
+            return True
+
+        running_pkgs = [pkg for pkg in target_pkgs if self._is_package_running(pkg)]
+        if running_pkgs:
+            self.logger.info(
+                f"检测到Shadowverse应用进程在后台，尝试拉起前台: {running_pkgs}"
+            )
+        else:
+            self.logger.info(f"未检测到运行中的Shadowverse应用，尝试自动启动: {target_pkgs}")
+
+        preferred = sorted(
+            running_pkgs or target_pkgs,
+            key=lambda p: (
+                0 if "worldsbeyond" in p.lower() else 1,
+                0 if "beyond" in p.lower() else 1,
+                p,
+            ),
+        )
+
+        started = False
+        for pkg in preferred:
+            try:
+                if self.adb_device is not None:
+                    self.adb_device.shell(
+                        f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1"
+                    )
+                elif self.u2_device_raw is not None:
+                    self.u2_device_raw.app_start(pkg)
+                elif self.u2_device is not None:
+                    self.u2_device.app_start(pkg)
+                self.logger.info(f"已发送应用启动命令: {pkg}")
+                started = True
+                break
+            except Exception as e:
+                self.logger.warning(f"启动应用 {pkg} 失败: {e}")
+
+        if started and launch_delay_seconds > 0:
+            try:
+                self.sleep(float(launch_delay_seconds))
+            except Exception:
+                time.sleep(float(launch_delay_seconds))
+
+        if started:
+            now_foreground = self._get_foreground_package()
+            if now_foreground:
+                self.logger.info(f"应用当前前台包名: {now_foreground}")
+
+        return started
+
+    def stop_shadowverse_apps(self, *, trigger: str = "") -> bool:
+        """Stop Shadowverse-related app(s) on device via adb/u2."""
+
+        target_pkgs = self._find_shadowverse_packages()
+        if not target_pkgs:
+            self.logger.warning("未找到可关闭的Shadowverse相关包名")
+            return False
+
+        self.logger.info(
+            "停止脚本触发应用关闭%s: %s",
+            f"({trigger})" if trigger else "",
+            target_pkgs,
+        )
+
+        stopped_any = False
+        for pkg in target_pkgs:
+            try:
+                if self.adb_device is not None:
+                    self.adb_device.shell(f"am force-stop {pkg}")
+                elif self.u2_device_raw is not None:
+                    self.u2_device_raw.app_stop(pkg)
+                elif self.u2_device is not None:
+                    self.u2_device.app_stop(pkg)
+                stopped_any = True
+            except Exception as e:
+                self.logger.warning(f"关闭应用 {pkg} 失败: {e}")
+
+        return stopped_any
 
     def check_interrupt(self) -> None:
         """Raise if paused/stopped so callers can unwind quickly."""

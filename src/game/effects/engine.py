@@ -119,6 +119,7 @@ class EffectEngine:
                 target=step.get("target", "others"),
                 atk_delta=step.get("atk_delta", 1),
                 hp_delta=step.get("hp_delta", 1),
+                attack_times=step.get("attack_times", None),
             )
 
         return False

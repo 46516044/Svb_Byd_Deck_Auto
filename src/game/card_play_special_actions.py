@@ -27,6 +27,8 @@ class CardPlaySpecialActions:
         self._extra_cost_bonus = 0
         self._should_not_consume_cost = False
         self._should_remove_from_hand = False
+        self._preplay_origin_tag_attempted = False
+        self._preplay_origin_tag_succeeded = False
 
         center_x, center_y = card['center']
         target_x = center_x + 40
@@ -49,10 +51,15 @@ class CardPlaySpecialActions:
             self._default_card_play(center_x, center_y, target_x)
             time.sleep(0.2)
 
-            source_pos = self._tag_played_follower_origin(
-                card_name=str(card_name or ""),
-                cfg_key=str(cfg_key or ""),
-            )
+            source_pos = None
+            if self._ops_require_source_origin(ops):
+                self._preplay_origin_tag_attempted = True
+                source_pos = self._tag_played_follower_origin(
+                    card_name=str(card_name or ""),
+                    cfg_key=str(cfg_key or ""),
+                )
+                if source_pos is not None:
+                    self._preplay_origin_tag_succeeded = True
 
             ctx = HandCardContext(
                 device_state=self.device_state,
@@ -125,6 +132,17 @@ class CardPlaySpecialActions:
         
         time.sleep(0.5)
         return True
+
+    @staticmethod
+    def _ops_require_source_origin(ops) -> bool:
+        """Whether on_play ops need precise source follower position."""
+
+        for step in list(ops or []):
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("op") or "") == "buff":
+                return True
+        return False
 
     def _tag_played_follower_origin(self, *, card_name: str, cfg_key: str):
         """Try to tag the just-played follower with its cfg key."""

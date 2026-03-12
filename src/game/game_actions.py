@@ -152,26 +152,33 @@ class GameActions:
         *,
         sort_desc: bool,
     ) -> List[Tuple[int, int, str, Optional[str]]]:
-        """Aggregate multiple single-frame scans by board slot (max 5)."""
+        """Aggregate multi-shot scans using best-shot anchor + constrained assignment.
 
-        shots = [list(s or []) for s in list(shot_followers or []) if s]
-        if not shots:
-            return []
-        if len(shots) == 1:
-            one = []
-            for it in shots[0]:
-                if not isinstance(it, (list, tuple)) or len(it) < 3:
-                    continue
-                try:
-                    one.append((int(it[0]), int(it[1]), str(it[2] or "normal"), it[3] if len(it) > 3 else None))
-                except Exception:
-                    continue
-            return sorted(one, key=lambda f: int(f[0]), reverse=bool(sort_desc))[:5]
+        Priority to pick anchor frame:
+        1) total follower count
+        2) attackable count (green/yellow)
+        3) named count
 
-        slot_items: Dict[int, List[Tuple[int, int, str, Optional[str]]]] = {}
-        for shot in shots:
-            used_slots: set[int] = set()
-            for it in sorted(shot, key=lambda f: int(f[0]), reverse=True):
+        Then assign type evidence from other frames to anchor followers:
+        - first by exact name
+        - then (for remaining) by x/y-nearest fallback
+        """
+
+        def _norm_type(v: Any) -> str:
+            t = str(v or "normal")
+            if t not in ("green", "yellow", "normal"):
+                return "normal"
+            return t
+
+        def _norm_name(v: Any) -> Optional[str]:
+            if not isinstance(v, str):
+                return None
+            s = str(v or "").strip()
+            return s or None
+
+        def _normalize_shot(raw_shot: Sequence[Tuple[Any, Any, Any, Any]]) -> List[Tuple[int, int, str, Optional[str]]]:
+            one: List[Tuple[int, int, str, Optional[str]]] = []
+            for it in list(raw_shot or []):
                 if not isinstance(it, (list, tuple)) or len(it) < 3:
                     continue
                 try:
@@ -179,40 +186,155 @@ class GameActions:
                     y_i = int(it[1])
                 except Exception:
                     continue
-                t_s = str(it[2] or "normal")
-                n_s = it[3] if len(it) > 3 else None
-                slot = int(self._slot_id_for_x(x_i))
-                if slot in used_slots:
-                    continue
-                used_slots.add(slot)
-                slot_items.setdefault(slot, []).append((x_i, y_i, t_s, n_s))
+                t_s = _norm_type(it[2] if len(it) > 2 else "normal")
+                n_s = _norm_name(it[3] if len(it) > 3 else None)
+                one.append((x_i, y_i, t_s, n_s))
+            return sorted(one, key=lambda f: int(f[0]), reverse=True)[:5]
 
-        out: List[Tuple[int, int, str, Optional[str]]] = []
-        for slot, items in list(slot_items.items()):
-            if not items:
+        shots = [_normalize_shot(s) for s in list(shot_followers or [])]
+        shots = [s for s in shots if s]
+        if not shots:
+            return []
+        if len(shots) == 1:
+            return sorted(shots[0], key=lambda f: int(f[0]), reverse=bool(sort_desc))[:5]
+
+        def _shot_score(shot: Sequence[Tuple[int, int, str, Optional[str]]]) -> Tuple[int, int, int]:
+            total = len(list(shot or []))
+            attackable = sum(1 for it in list(shot or []) if str(it[2]) in ("green", "yellow"))
+            named = sum(1 for it in list(shot or []) if bool(it[3]))
+            return (int(total), int(attackable), int(named))
+
+        best_idx = max(range(len(shots)), key=lambda i: (_shot_score(shots[i]), i))
+        best_shot = list(shots[best_idx])
+
+        type_rank = {"normal": 1, "yellow": 2, "green": 3}
+
+        anchors: List[Dict[str, Any]] = []
+        for x_i, y_i, t_s, n_s in best_shot:
+            anchors.append(
+                {
+                    "x": int(x_i),
+                    "y": int(y_i),
+                    "base_name": n_s,
+                    "types": [str(t_s or "normal")],
+                    "names": [n_s] if n_s else [],
+                }
+            )
+
+        def _pick_by_name(
+            shot: Sequence[Tuple[int, int, str, Optional[str]]],
+            *,
+            target_name: str,
+            ax: int,
+            ay: int,
+            used: set[int],
+        ) -> Optional[int]:
+            best = None
+            best_score = 10**9
+            for i, item in enumerate(list(shot or [])):
+                if i in used:
+                    continue
+                if str(item[3] or "") != str(target_name):
+                    continue
+                dx = abs(int(item[0]) - int(ax))
+                dy = abs(int(item[1]) - int(ay))
+                score = dx * 2 + dy
+                if score < best_score:
+                    best_score = score
+                    best = i
+            return best
+
+        def _pick_by_coord(
+            shot: Sequence[Tuple[int, int, str, Optional[str]]],
+            *,
+            ax: int,
+            ay: int,
+            used: set[int],
+            x_thresh: int = 50,
+            y_thresh: int = 90,
+        ) -> Optional[int]:
+            best = None
+            best_score = 10**9
+            for i, item in enumerate(list(shot or [])):
+                if i in used:
+                    continue
+                dx = abs(int(item[0]) - int(ax))
+                dy = abs(int(item[1]) - int(ay))
+                if dx > int(x_thresh) or dy > int(y_thresh):
+                    continue
+                score = dx * 2 + dy
+                if score < best_score:
+                    best_score = score
+                    best = i
+            return best
+
+        for si, shot in enumerate(shots):
+            if si == best_idx:
                 continue
 
-            xs = sorted([int(it[0]) for it in items])
-            ys = sorted([int(it[1]) for it in items])
-            x_mid = int(xs[len(xs) // 2])
-            y_mid = int(ys[len(ys) // 2])
+            used: set[int] = set()
+            matched_anchor: set[int] = set()
 
-            types = [str(it[2] or "normal") for it in items]
-            if "green" in types:
-                t_sel = "green"
-            elif "yellow" in types:
-                t_sel = "yellow"
-            else:
-                t_sel = "normal"
+            # Pass 1: name-based assignment first.
+            for ai, anchor in enumerate(anchors):
+                name = str(anchor.get("base_name") or "")
+                if not name:
+                    continue
+                pick = _pick_by_name(
+                    shot,
+                    target_name=name,
+                    ax=int(anchor.get("x", 0)),
+                    ay=int(anchor.get("y", 0)),
+                    used=used,
+                )
+                if pick is None:
+                    continue
+                used.add(int(pick))
+                matched_anchor.add(int(ai))
+                item = shot[pick]
+                anchor["types"].append(str(item[2] or "normal"))
+                if item[3]:
+                    anchor["names"].append(item[3])
 
-            names = [it[3] for it in items if len(it) > 3 and it[3]]
-            name_sel = None
-            if names:
-                from collections import Counter
+            # Pass 2: coord-based assignment for remaining anchors.
+            for ai, anchor in enumerate(anchors):
+                if ai in matched_anchor:
+                    continue
+                pick = _pick_by_coord(
+                    shot,
+                    ax=int(anchor.get("x", 0)),
+                    ay=int(anchor.get("y", 0)),
+                    used=used,
+                )
+                if pick is None:
+                    continue
+                used.add(int(pick))
+                item = shot[pick]
+                anchor["types"].append(str(item[2] or "normal"))
+                if item[3]:
+                    anchor["names"].append(item[3])
 
-                name_sel = Counter(names).most_common(1)[0][0]
+        out: List[Tuple[int, int, str, Optional[str]]] = []
+        for anchor in anchors:
+            t_list = [str(t or "normal") for t in list(anchor.get("types") or [])]
+            t_sel = max(t_list, key=lambda t: type_rank.get(str(t), 0)) if t_list else "normal"
 
-            out.append((x_mid, y_mid, t_sel, name_sel))
+            name_sel = anchor.get("base_name")
+            if not name_sel:
+                names = [n for n in list(anchor.get("names") or []) if n]
+                if names:
+                    from collections import Counter
+
+                    name_sel = Counter(names).most_common(1)[0][0]
+
+            out.append(
+                (
+                    int(anchor.get("x", 0)),
+                    int(anchor.get("y", 0)),
+                    str(t_sel),
+                    name_sel if isinstance(name_sel, str) else None,
+                )
+            )
 
         out = sorted(out, key=lambda f: int(f[0]), reverse=bool(sort_desc))
         return out[:5]
@@ -370,6 +492,30 @@ class GameActions:
             )
         except Exception:
             return str(fallback_name or "")
+
+    def _runtime_attack_times_for_ours(self, source_pos) -> int:
+        runtime = getattr(self, "battle_runtime", None)
+        if runtime is None or not hasattr(runtime, "get_ours_attack_times"):
+            return 1
+
+        try:
+            round_idx = int(getattr(self.device_state, "current_round_count", 1) or 1)
+        except Exception:
+            round_idx = 1
+
+        try:
+            return max(
+                1,
+                int(
+                    runtime.get_ours_attack_times(
+                        source_pos,
+                        round_index=round_idx,
+                    )
+                    or 1
+                ),
+            )
+        except Exception:
+            return 1
 
     def _tag_recent_played_follower(self, *, card_name: str, cfg_key: str) -> None:
         runtime = getattr(self, "battle_runtime", None)
@@ -716,14 +862,92 @@ class GameActions:
 
             return None
 
-        def _is_slot_forced_normal_local(x_val: Any) -> bool:
+        attacker_attack_caps: Dict[int, int] = {}
+        attacker_attack_used: Dict[int, int] = {}
+        attacker_key_meta: Dict[int, Dict[str, Any]] = {}
+        next_attacker_key = 1
+
+        def _norm_name(v: Any) -> Optional[str]:
+            if not isinstance(v, str):
+                return None
+            s = str(v or "").strip()
+            return s or None
+
+        def _resolve_attacker_key(pos_xy: Sequence[Any], *, name_hint: Any = None) -> int:
+            nonlocal next_attacker_key
+
+            if not isinstance(pos_xy, (list, tuple)) or len(pos_xy) < 2:
+                return 0
             try:
-                slot = int(self._slot_id_for_x(x_val))
-                round_idx = int(self._current_round_key()[1])
-                forced_round = int((self._forced_normal_slots or {}).get(slot, -1))
-                return forced_round == round_idx
+                x_i = int(pos_xy[0])
+                y_i = int(pos_xy[1])
             except Exception:
-                return False
+                return 0
+
+            name = _norm_name(name_hint)
+            by_name_tol = 70
+            by_pos_tol = 45
+
+            best_key = None
+            best_score = 10**9
+
+            if name:
+                for key_i, meta in list(attacker_key_meta.items()):
+                    meta_name = _norm_name(meta.get("name"))
+                    if meta_name != name:
+                        continue
+                    dx = abs(int(meta.get("x", x_i)) - x_i)
+                    if dx > by_name_tol:
+                        continue
+                    if dx < best_score:
+                        best_score = dx
+                        best_key = int(key_i)
+
+            if best_key is None:
+                for key_i, meta in list(attacker_key_meta.items()):
+                    dx = abs(int(meta.get("x", x_i)) - x_i)
+                    if dx > by_pos_tol:
+                        continue
+                    if dx < best_score:
+                        best_score = dx
+                        best_key = int(key_i)
+
+            if best_key is None:
+                best_key = int(next_attacker_key)
+                next_attacker_key += 1
+
+            meta = attacker_key_meta.get(best_key, {})
+            if not isinstance(meta, dict):
+                meta = {}
+            old_x = int(meta.get("x", x_i))
+            meta["x"] = int(round((old_x + x_i) / 2.0))
+            meta["y"] = int(y_i)
+            if name:
+                meta["name"] = name
+            attacker_key_meta[best_key] = meta
+            return int(best_key)
+
+        def _attack_cap_for_attacker(pos_xy: Sequence[Any], *, name_hint: Any = None) -> int:
+            key_i = _resolve_attacker_key(pos_xy, name_hint=name_hint)
+            if key_i <= 0:
+                return 1
+
+            cached_cap = max(1, int(attacker_attack_caps.get(key_i, 1) or 1))
+            runtime_cap = self._runtime_attack_times_for_ours((int(pos_xy[0]), int(pos_xy[1])))
+            cap = max(cached_cap, max(1, int(runtime_cap or 1)))
+            attacker_attack_caps[key_i] = int(cap)
+            return int(cap)
+
+        def _consume_attack_use(pos_xy: Sequence[Any], *, name_hint: Any = None) -> Tuple[int, int, int]:
+            key_i = _resolve_attacker_key(pos_xy, name_hint=name_hint)
+            if key_i <= 0:
+                return (0, 1, 0)
+
+            cap = _attack_cap_for_attacker(pos_xy, name_hint=name_hint)
+            used = int(attacker_attack_used.get(key_i, 0) or 0) + 1
+            attacker_attack_used[key_i] = int(used)
+            remain = max(0, int(cap) - int(used))
+            return (int(used), int(cap), int(remain))
 
         def _iter_unspent_attackers(
             followers: Any,
@@ -737,7 +961,11 @@ class GameActions:
                 t_s = str(item[2] or "")
                 if t_s not in allowed:
                     continue
-                if _is_slot_forced_normal_local(item[0]):
+                name_hint = item[3] if len(item) > 3 else None
+                key_i = _resolve_attacker_key((item[0], item[1]), name_hint=name_hint)
+                cap = _attack_cap_for_attacker((item[0], item[1]), name_hint=name_hint)
+                used = int(attacker_attack_used.get(key_i, 0) or 0)
+                if used >= cap:
                     continue
                 yield item
 
@@ -754,16 +982,72 @@ class GameActions:
         def _local_consume_attacker_slot(
             followers: Any,
             attacker_pos: Sequence[Any],
+            *,
+            force_normal: bool = True,
+            attacker_name: Any = None,
         ) -> List[Tuple[Any, Any, Any, Any]]:
-            if not isinstance(attacker_pos, (list, tuple)) or len(attacker_pos) < 1:
+            if not isinstance(attacker_pos, (list, tuple)) or len(attacker_pos) < 2:
                 return list(followers or [])
             try:
-                target_slot = int(self._slot_id_for_x(attacker_pos[0]))
+                target_x = int(attacker_pos[0])
+                target_y = int(attacker_pos[1])
             except Exception:
                 return list(followers or [])
 
+            name_hint = _norm_name(attacker_name)
+            match_idx = None
+            best_score = 10**9
+            items = list(followers or [])
+
+            for idx, item in enumerate(items):
+                if not isinstance(item, (list, tuple)) or len(item) < 3:
+                    continue
+                try:
+                    x_i = int(item[0])
+                    y_i = int(item[1])
+                except Exception:
+                    continue
+                n_s = _norm_name(item[3] if len(item) > 3 else None)
+
+                if name_hint and n_s == name_hint:
+                    score = abs(x_i - target_x) * 2 + abs(y_i - target_y)
+                    if score < best_score:
+                        best_score = score
+                        match_idx = idx
+
+            if match_idx is None:
+                for idx, item in enumerate(items):
+                    if not isinstance(item, (list, tuple)) or len(item) < 3:
+                        continue
+                    try:
+                        x_i = int(item[0])
+                        y_i = int(item[1])
+                    except Exception:
+                        continue
+                    dx = abs(x_i - target_x)
+                    if dx > 45:
+                        continue
+                    score = dx * 2 + abs(y_i - target_y)
+                    if score < best_score:
+                        best_score = score
+                        match_idx = idx
+
+            if match_idx is None:
+                for idx, item in enumerate(items):
+                    if not isinstance(item, (list, tuple)) or len(item) < 3:
+                        continue
+                    try:
+                        x_i = int(item[0])
+                        y_i = int(item[1])
+                    except Exception:
+                        continue
+                    score = abs(x_i - target_x) * 2 + abs(y_i - target_y)
+                    if score < best_score:
+                        best_score = score
+                        match_idx = idx
+
             consumed: List[Tuple[Any, Any, Any, Any]] = []
-            for item in list(followers or []):
+            for idx, item in enumerate(items):
                 if not isinstance(item, (list, tuple)) or len(item) < 3:
                     continue
                 try:
@@ -773,11 +1057,7 @@ class GameActions:
                     continue
                 t_s = str(item[2] or "normal")
                 n_s = item[3] if len(item) > 3 else None
-                try:
-                    slot = int(self._slot_id_for_x(x_i))
-                except Exception:
-                    slot = -1
-                if slot == target_slot:
+                if force_normal and match_idx is not None and idx == int(match_idx):
                     t_s = "normal"
                 consumed.append((x_i, y_i, t_s, n_s))
 
@@ -918,8 +1198,18 @@ class GameActions:
                 )
                 self.device_state.sleep(1)
                 _run_on_attack_effects(selected_follower_name, selected_follower)
-                self._mark_recent_attack_slot(selected_follower)
-                all_followers = _local_consume_attacker_slot(all_followers, selected_follower)
+                used_cnt, cap_cnt, remain_cnt = _consume_attack_use(
+                    selected_follower,
+                    name_hint=selected_follower_name,
+                )
+                if remain_cnt <= 0:
+                    self._mark_recent_attack_slot(selected_follower)
+                all_followers = _local_consume_attacker_slot(
+                    all_followers,
+                    selected_follower,
+                    force_normal=bool(remain_cnt <= 0),
+                    attacker_name=selected_follower_name,
+                )
 
                 combat = self._runtime_apply_local_combat(selected_follower, (shield_x, shield_y))
                 if combat.get("applied"):
@@ -1038,8 +1328,18 @@ class GameActions:
             yellow_attack_count += 1
             self.device_state.sleep(1.5)
             _run_on_attack_effects(selected_follower_name, selected_follower)
-            self._mark_recent_attack_slot(selected_follower)
-            all_followers = _local_consume_attacker_slot(all_followers, selected_follower)
+            used_cnt, cap_cnt, remain_cnt = _consume_attack_use(
+                selected_follower,
+                name_hint=selected_follower_name,
+            )
+            if remain_cnt <= 0:
+                self._mark_recent_attack_slot(selected_follower)
+            all_followers = _local_consume_attacker_slot(
+                all_followers,
+                selected_follower,
+                force_normal=bool(remain_cnt <= 0),
+                attacker_name=selected_follower_name,
+            )
 
             combat = self._runtime_apply_local_combat(selected_follower, (enemy_x, enemy_y))
             if combat.get("applied"):
@@ -1063,7 +1363,6 @@ class GameActions:
         # 黄色处理完后，疾驰再打脸。
         max_green_attacks = 10
         green_attack_count = 0
-        green_refresh_with_names = True
         while green_attack_count < max_green_attacks:
             green_followers = list(
                 _iter_unspent_attackers(all_followers, allowed_types=("green",))
@@ -1096,21 +1395,29 @@ class GameActions:
                 duration=random.uniform(*settings.get_human_like_drag_duration_range()),
             )
             green_attack_count += 1
-            self.device_state.sleep(0.45)
+            self.device_state.sleep(0.50)
 
             _run_on_attack_effects(name, (x, y))
-            self._mark_recent_attack_slot((x, y))
-            all_followers = _local_consume_attacker_slot(all_followers, (x, y))
+            used_cnt, cap_cnt, remain_cnt = _consume_attack_use(
+                (x, y),
+                name_hint=name,
+            )
+            if remain_cnt <= 0:
+                self._mark_recent_attack_slot((x, y))
+            all_followers = _local_consume_attacker_slot(
+                all_followers,
+                (x, y),
+                force_normal=bool(remain_cnt <= 0),
+                attacker_name=name,
+            )
+            if cap_cnt > 1 and remain_cnt > 0:
+                self.device_state.logger.info(
+                    f"同一随从可继续攻击: {used_cnt}/{cap_cnt}"
+                )
 
             if not _has_attack_followers(all_followers, allowed_types=("green",)):
                 self.device_state.logger.info("疾驰随从已全部完成攻击")
                 break
-
-            all_followers = list(
-                _strict_refresh_attack_followers(with_names=green_refresh_with_names, retries=0) or []
-            )
-            _invalidate_named_scan_cache()
-            self._runtime_sync_ours(all_followers)
 
     def perform_evolution_actions(self):
         """执行进化/超进化操作"""
@@ -2006,6 +2313,7 @@ class GameActions:
 
         try:
             if result:
+                preplay_tag_ok = bool(getattr(card_play_actions, "_preplay_origin_tag_succeeded", False))
                 card_name = str(card.get("name", "") or "")
                 cfg_key = str(
                     card.get("_config_key")
@@ -2013,7 +2321,9 @@ class GameActions:
                     or card.get("config_key")
                     or card_name
                 )
-                self._tag_recent_played_follower(card_name=card_name, cfg_key=cfg_key)
+                # Avoid duplicate heavy scan when pre-play origin tagging already succeeded.
+                if not preplay_tag_ok:
+                    self._tag_recent_played_follower(card_name=card_name, cfg_key=cfg_key)
         except Exception:
             pass
         
@@ -2433,7 +2743,7 @@ class GameActions:
         *,
         sort_desc: bool = False,
         extra_shots: int = 2,
-        shot_delay_range=(0.08, 0.16),
+        shot_delay_range=(0.10, 0.15),
         retries: int = 1,
         debug_flag: bool = False,
         with_names: bool = True,
@@ -2533,7 +2843,7 @@ class GameActions:
                     try:
                         dmin, dmax = float(shot_delay_range[0]), float(shot_delay_range[1])
                     except Exception:
-                        dmin, dmax = 0.08, 0.16
+                        dmin, dmax = 0.10, 0.15
                     if dmax < dmin:
                         dmin, dmax = dmax, dmin
                     dmin = max(0.0, dmin)
@@ -2605,7 +2915,7 @@ class GameActions:
                             try:
                                 dmin, dmax = float(shot_delay_range[0]), float(shot_delay_range[1])
                             except Exception:
-                                dmin, dmax = 0.08, 0.16
+                                dmin, dmax = 0.10, 0.15
                             if dmax < dmin:
                                 dmin, dmax = dmax, dmin
                             dmin = max(0.0, dmin)

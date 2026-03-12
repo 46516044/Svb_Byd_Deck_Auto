@@ -1165,9 +1165,99 @@ class GameManager:
         return merged
 
     def scan_shield_targets(self, debug_flag=False):
-        """扫描护盾（单帧检测，不做跨帧合并）。"""
+        """扫描护盾（三帧检测，不做跨帧聚类合并）。"""
 
-        screenshot = self.device_state.take_screenshot()
+        shot_results = []
+        max_shots = 3
+
+        for idx in range(max_shots):
+            screenshot = self.device_state.take_screenshot()
+            if screenshot is None:
+                continue
+
+            targets = self._scan_shield_targets_single(screenshot, debug_flag)
+            if targets:
+                shot_results.append(targets)
+
+            if idx < max_shots - 1:
+                time.sleep(random.uniform(0.10, 0.15))
+
+        if not shot_results:
+            return []
+
+        # 不做跨帧点位聚类；直接取“检测到守护最多”的那一帧。
+        return max(shot_results, key=len)
+
+    def scan_shield_targets_for_enemy_followers(self, screenshot, enemy_followers, debug_flag=False):
+        """在同一帧内将守护图标映射到敌方随从坐标。
+
+        用于 target_resolver 的 `ward_or_highest_hp`：
+        - enemy_followers 来自同一张 screenshot 的 HP 扫描结果
+        - wards 直接按 x 轴映射到 enemy_followers，避免跨帧错配
+        """
+
+        if screenshot is None or not enemy_followers:
+            return []
+
+        detected_shields = self._extract_shield_points(screenshot, debug_flag=debug_flag)
+        if not detected_shields:
+            return []
+
+        shield_targets = self._match_positions_with_shields(
+            enemy_followers,
+            detected_shields,
+            x_tolerance=50,
+        )
+        shield_targets = sorted(shield_targets, key=lambda pos: int(pos[0]))
+        return shield_targets
+
+    def _extract_shield_points(self, screenshot, debug_flag=False):
+        """Extract raw shield icon centers (global coordinates) from screenshot."""
+
+        if screenshot is None:
+            return []
+        try:
+            region = screenshot.crop(ENEMY_SHIELD_REGION)
+            bgr_image = cv2.cvtColor(np.array(region), cv2.COLOR_RGB2BGR)
+            return self._process_shield_image(bgr_image, debug_flag)
+        except Exception as e:
+            import logging
+
+            logging.error(f"护盾检测异常: {str(e)}")
+            return []
+
+    def _match_positions_with_shields(self, positions, detected_shields, x_tolerance=50):
+        """Match arbitrary position list to shield centers by x-axis proximity."""
+
+        if not positions or not detected_shields:
+            return []
+
+        out = []
+        tol = max(1, int(x_tolerance))
+        shield_xs = []
+        for sp in list(detected_shields or []):
+            try:
+                shield_xs.append(int(sp[0]))
+            except Exception:
+                continue
+
+        if not shield_xs:
+            return []
+
+        for p in list(positions or []):
+            if not isinstance(p, (list, tuple)) or len(p) < 2:
+                continue
+            try:
+                px = int(p[0])
+                py = int(p[1])
+            except Exception:
+                continue
+            if any(abs(px - sx) < tol for sx in shield_xs):
+                out.append((px, py))
+
+        return out
+
+    def _scan_shield_targets_single(self, screenshot, debug_flag=False):
         if screenshot is None:
             return []
 
@@ -1181,36 +1271,22 @@ class GameManager:
             logging.error(f"敌方随从位置检测异常: {str(e)}")
             return []
 
-        try:
-            region = screenshot.crop(ENEMY_SHIELD_REGION)
-            bgr_image = cv2.cvtColor(np.array(region), cv2.COLOR_RGB2BGR)
-            detected_shields = self._process_shield_image(bgr_image, debug_flag)
-        except Exception as e:
-            import logging
-
-            logging.error(f"护盾检测异常: {str(e)}")
+        detected_shields = self._extract_shield_points(screenshot, debug_flag=debug_flag)
+        if not detected_shields:
             return []
 
-        shield_targets = []
-
-        # 过滤enemy_atk_positions，只保留与detected_shields中任意点x轴距离小于50像素的坐标
-        for shield_pos in enemy_atk_positions:
-            shield_x = shield_pos[0]
-            for pos in detected_shields:
-                px = pos[0]
-                if abs(shield_x - px) < 50:
-                    shield_targets.append(shield_pos)
-                    break
+        shield_targets = self._match_positions_with_shields(
+            enemy_atk_positions,
+            detected_shields,
+            x_tolerance=50,
+        )
 
         # 按x轴排序，校准y轴坐标
         if shield_targets:
-            shield_targets.sort(key=lambda pos: pos[0])  # 按x坐标排序
-            # 校准所有护盾的y轴坐标
+            shield_targets.sort(key=lambda pos: pos[0])
             shield_targets = [
                 (pos[0], 227 + random.randint(-3, 3)) for pos in shield_targets
             ]
-
-        # self.device_state.logger.info(f"护盾检测完成，检测到 {len(shield_targets)} 个护盾")
 
         return shield_targets
 

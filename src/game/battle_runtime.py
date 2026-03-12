@@ -190,10 +190,15 @@ class BattleRuntimeState:
         target_mode: str,
         atk_delta: int,
         hp_delta: int,
+        attack_times: Optional[int] = None,
+        round_index: Optional[int] = None,
     ) -> int:
         atk_v = _safe_int(atk_delta, 0)
         hp_v = _safe_int(hp_delta, 0)
-        if atk_v == 0 and hp_v == 0:
+        attack_times_v = None
+        if attack_times is not None:
+            attack_times_v = max(1, _safe_int(attack_times, 1))
+        if atk_v == 0 and hp_v == 0 and attack_times_v is None:
             return 0
 
         mode = str(target_mode or "others")
@@ -215,6 +220,21 @@ class BattleRuntimeState:
 
             st.buff_atk += atk_v
             st.buff_hp += hp_v
+
+            if attack_times_v is not None:
+                ri = _safe_int(round_index, -1) if round_index is not None else -1
+                prev_round = _safe_int(getattr(st, "attack_times_round", -1), -1)
+                prev_total = max(1, _safe_int(getattr(st, "attack_times_total", 1), 1))
+
+                if ri >= 0:
+                    if prev_round == ri:
+                        st.attack_times_total = max(prev_total, int(attack_times_v))
+                    else:
+                        st.attack_times_round = int(ri)
+                        st.attack_times_total = int(attack_times_v)
+                else:
+                    st.attack_times_total = max(prev_total, int(attack_times_v))
+
             changed += 1
 
         return changed
@@ -246,6 +266,25 @@ class BattleRuntimeState:
             atk_delta=value,
             hp_delta=value,
         )
+
+    def get_ours_attack_times(
+        self,
+        follower_pos: Sequence[Any],
+        *,
+        round_index: Optional[int] = None,
+    ) -> int:
+        """Return allowed attack count for the specified friendly follower in round."""
+
+        st = self._find_state(self.ours, follower_pos)
+        if st is None:
+            return 1
+
+        if round_index is not None:
+            st_round = _safe_int(getattr(st, "attack_times_round", -1), -1)
+            if st_round != _safe_int(round_index, -1):
+                return 1
+
+        return max(1, _safe_int(getattr(st, "attack_times_total", 1), 1))
 
     def pick_enemy_target(
         self,

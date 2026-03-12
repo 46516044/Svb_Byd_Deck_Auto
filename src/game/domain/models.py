@@ -129,6 +129,11 @@ class FollowerRuntimeState:
     evolved_type: str = "none"
     miss_count: int = 0
 
+    # Per-turn override: this follower can attack N times in the specified round.
+    # Default behavior remains once per turn.
+    attack_times_round: int = -1
+    attack_times_total: int = 1
+
     def evolution_bonus(self) -> int:
         if self.evolved_type == "super":
             return 3

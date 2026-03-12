@@ -252,6 +252,14 @@ OPERATIONS: List[Dict[str, Any]] = [
                 "min": -20,
                 "max": 20,
             },
+            {
+                "name": "attack_times",
+                "label": "本回合可攻击次数",
+                "type": "int",
+                "default": 1,
+                "min": 1,
+                "max": 5,
+            },
         ],
     },
 ]

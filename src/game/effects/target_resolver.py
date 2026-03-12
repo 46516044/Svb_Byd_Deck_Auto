@@ -54,13 +54,7 @@ def resolve_targets(
         return [(x, y)]
 
     if kind == "enemy_follower":
-        # ward_or_highest_hp can avoid a screenshot by scanning ward directly.
         wards: List[Tuple[int, int]] = []
-        if selector == "ward_or_highest_hp":
-            try:
-                wards = ds.game_manager.scan_shield_targets() if ds.game_manager else []
-            except Exception:
-                wards = []
 
         allow_amulet_fallback = False
         fallback_to_enemy_leader = False
@@ -92,6 +86,20 @@ def resolve_targets(
             )
         except Exception:
             enemy_followers = []
+
+        # Resolve ward on the same screenshot/frame as enemy followers to avoid
+        # cross-frame mismatch (ward missed -> fallback highest_hp).
+        if selector == "ward_or_highest_hp":
+            try:
+                if ds.game_manager and hasattr(ds.game_manager, "scan_shield_targets_for_enemy_followers"):
+                    wards = ds.game_manager.scan_shield_targets_for_enemy_followers(
+                        screenshot,
+                        enemy_followers,
+                    )
+                else:
+                    wards = ds.game_manager.scan_shield_targets() if ds.game_manager else []
+            except Exception:
+                wards = []
 
         if not enemy_followers and allow_amulet_fallback:
             # Fallback: when there is no enemy follower but selectable amulet-like targets exist,

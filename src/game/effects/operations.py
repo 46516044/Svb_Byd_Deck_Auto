@@ -99,7 +99,14 @@ class OperationExecutor:
         return True
 
     @staticmethod
-    def buff(ctx: Any, *, target: Any, atk_delta: Any, hp_delta: Any) -> bool:
+    def buff(
+        ctx: Any,
+        *,
+        target: Any,
+        atk_delta: Any,
+        hp_delta: Any,
+        attack_times: Any = None,
+    ) -> bool:
         ds = getattr(ctx, "device_state", None)
         if ds is None:
             return False
@@ -110,6 +117,9 @@ class OperationExecutor:
 
         atk_val = _safe_int(atk_delta, 0)
         hp_val = _safe_int(hp_delta, 0)
+        attack_times_val = None
+        if attack_times is not None:
+            attack_times_val = max(1, _safe_int(attack_times, 1))
 
         runtime = getattr(ds, "battle_runtime_state", None)
         if runtime is None or not hasattr(runtime, "apply_buff"):
@@ -139,6 +149,8 @@ class OperationExecutor:
                     target_mode=target_mode,
                     atk_delta=atk_val,
                     hp_delta=hp_val,
+                    attack_times=attack_times_val,
+                    round_index=getattr(ds, "current_round_count", None),
                 )
             )
         except Exception:
@@ -146,7 +158,10 @@ class OperationExecutor:
 
         try:
             ds.logger.info(
-                f"[Effect] buff mode={target_mode} atk_delta={atk_val} hp_delta={hp_val} affected={changed}"
+                "[Effect] buff "
+                f"mode={target_mode} atk_delta={atk_val} hp_delta={hp_val} "
+                f"attack_times={attack_times_val if attack_times_val is not None else '-'} "
+                f"affected={changed}"
             )
         except Exception:
             pass
