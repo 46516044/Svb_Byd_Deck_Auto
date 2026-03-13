@@ -16,6 +16,36 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 
+def _basename_stem(raw: str) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    s = s.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if "." in s:
+        s = s.rsplit(".", 1)[0]
+    return str(s or "")
+
+
+def is_evo_card_name(card_name: str) -> bool:
+    """Return True when name/stem/filename ends with ``_evo``."""
+
+    stem = _basename_stem(card_name)
+    if not stem:
+        return False
+    return stem.lower().endswith("_evo")
+
+
+def strip_evo_suffix(card_name: str) -> str:
+    """Strip a trailing ``_evo`` suffix from a card name/stem."""
+
+    raw = str(card_name or "").strip()
+    if not raw:
+        return ""
+    if raw.lower().endswith("_evo"):
+        return raw[:-4]
+    return raw
+
+
 def parse_follower_stat_suffix(card_name: str) -> Tuple[str, Optional[int], Optional[int]]:
     """Parse follower stat suffix from a card name.
 
@@ -55,14 +85,18 @@ def normalize_card_base_name(card_name: str) -> str:
     """Return a stable card base name used by UI/config keys.
 
     - Removes follower stat suffix ``_<atk>_<hp>`` when present.
+    - Removes evolve image suffix ``_evo`` when present.
     - Keeps original text when suffix is absent.
     """
 
     raw = str(card_name or "").strip()
     if not raw:
         return ""
-    base, _atk, _hp = parse_follower_stat_suffix(raw)
-    return str(base or raw)
+
+    no_evo = strip_evo_suffix(raw)
+    base, _atk, _hp = parse_follower_stat_suffix(no_evo)
+    normalized = str(base or no_evo)
+    return strip_evo_suffix(normalized)
 
 
 def normalize_config_key(key: str) -> str:

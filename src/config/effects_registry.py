@@ -222,6 +222,35 @@ OPERATIONS: List[Dict[str, Any]] = [
         "params_schema": [],
     },
     {
+        "op_id": "add_cost_bonus",
+        "label": "增加费用",
+        "supported_context_kinds": [CONTEXT_HAND_CARD],
+        "params_schema": [
+            {
+                "name": "amount",
+                "label": "费用+",
+                "type": "int",
+                "default": 1,
+                "min": -10,
+                "max": 10,
+                "compact": True,
+            }
+        ],
+    },
+    {
+        "op_id": "request_extra_hand_scan",
+        "label": "触发额外手牌扫描",
+        "supported_context_kinds": [CONTEXT_HAND_CARD],
+        "params_schema": [
+            {
+                "name": "only_when_cost_empty",
+                "label": "仅费用打空时",
+                "type": "bool",
+                "default": True,
+            }
+        ],
+    },
+    {
         "op_id": "buff",
         "label": "BUFF",
         "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
@@ -238,27 +267,47 @@ OPERATIONS: List[Dict[str, Any]] = [
             },
             {
                 "name": "atk_delta",
-                "label": "攻击变化X",
+                "label": "攻击+",
                 "type": "int",
                 "default": 1,
                 "min": -20,
                 "max": 20,
+                "compact": True,
             },
             {
                 "name": "hp_delta",
-                "label": "生命变化Y",
+                "label": "生命+",
                 "type": "int",
                 "default": 1,
                 "min": -20,
                 "max": 20,
+                "compact": True,
+            },
+        ],
+    },
+    {
+        "op_id": "buff_attack_times",
+        "label": "攻击次数BUFF",
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
+        "params_schema": [
+            {
+                "name": "target",
+                "label": "BUFF类型",
+                "type": "enum",
+                "default": "others",
+                "options": [
+                    {"label": "其他友方(攻击次数)", "value": "others"},
+                    {"label": "自身(攻击次数)", "value": "self"},
+                ],
             },
             {
                 "name": "attack_times",
-                "label": "本回合可攻击次数",
+                "label": "攻击次数",
                 "type": "int",
-                "default": 1,
+                "default": 2,
                 "min": 1,
                 "max": 5,
+                "compact": True,
             },
         ],
     },

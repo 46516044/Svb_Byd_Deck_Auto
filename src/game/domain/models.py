@@ -117,6 +117,7 @@ class FollowerRuntimeState:
     raw_name: str = ""
     base_name: str = ""
     source_cfg_key: str = ""
+    uid: int = 0
 
     atk0: Optional[int] = None
     hp0: Optional[int] = None

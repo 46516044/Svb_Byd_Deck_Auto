@@ -31,9 +31,11 @@ from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
 from src.ui.deck_io import (
     apply_strategy_config,
+    build_card_variant_index,
     build_card_source_index,
     extract_strategy_config,
-    resolve_source_card_path,
+    filter_non_evo_cards,
+    resolve_runtime_card_paths,
     save_deck_snapshot,
 )
 from src.utils.card_filename import normalize_card_base_name, parse_card_filename
@@ -184,6 +186,7 @@ class MyDeckPage(QWidget):
             for f in os.listdir(card_dir)
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
+        card_files = filter_non_evo_cards(card_files)
         if not card_files:
             QMessageBox.warning(self, "警告", "当前卡组为空！")
             return
@@ -305,16 +308,22 @@ class MyDeckPage(QWidget):
             # 复制卡片到当前卡组
             source_dir = os.path.join(get_exe_dir(), "quanka")
             exact_index, stem_index = build_card_source_index(source_dir)
+            variant_index = build_card_variant_index(source_dir)
             success_count = 0
-            for card_file in deck_data.get("cards", []):
-                src = resolve_source_card_path(
+            loaded_base_count = 0
+            for card_file in filter_non_evo_cards(list(deck_data.get("cards", []))):
+                runtime_paths = resolve_runtime_card_paths(
                     source_dir,
                     card_file,
                     exact_index=exact_index,
                     stem_index=stem_index,
+                    variant_index=variant_index,
                 )
-
-                if src and os.path.exists(src):
+                if runtime_paths:
+                    loaded_base_count += 1
+                for src in runtime_paths:
+                    if not os.path.exists(src):
+                        continue
                     dst = os.path.join(card_dir, os.path.basename(src))
                     try:
                         shutil.copy2(src, dst)
@@ -351,7 +360,7 @@ class MyDeckPage(QWidget):
                 QMessageBox.information(
                     self,
                     "成功",
-                    f"已加载卡组 '{deck_data.get('name')}'，共 {success_count} 张卡片",
+                    f"已加载卡组 '{deck_data.get('name')}'，共 {loaded_base_count} 张卡片",
                 )
                 self.parent.log_output.append(f"[卡组] 已加载卡组 '{deck_data.get('name')}'")
 
@@ -423,6 +432,7 @@ class MyDeckPage(QWidget):
             for f in os.listdir(card_dir)
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
+        card_files = filter_non_evo_cards(card_files)
 
         if not card_files:
             no_card_label = QLabel("卡组为空，请添加卡片")

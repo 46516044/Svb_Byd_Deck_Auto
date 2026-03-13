@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.json_io import write_json_atomic
 from src.utils.card_filename import (
+    is_evo_card_name,
     normalize_card_base_name,
     normalize_config_key,
     parse_card_filename,
@@ -49,11 +50,60 @@ def normalize_deck_cards(cards: List[str]) -> List[str]:
         ref = _card_ref_from_value(item)
         if not ref:
             continue
+        if is_evo_card_name(ref):
+            continue
         key = ref.lower()
         if key in seen:
             continue
         seen.add(key)
         out.append(ref)
+    return out
+
+
+def filter_non_evo_cards(cards: List[str]) -> List[str]:
+    """Return card refs/filenames with ``_evo`` variants removed."""
+
+    out: List[str] = []
+    for item in list(cards or []):
+        raw = os.path.basename(str(item or "").strip())
+        if not raw:
+            continue
+        if is_evo_card_name(raw):
+            continue
+        out.append(raw)
+    return out
+
+
+def build_card_variant_index(source_dir: str) -> Dict[Tuple[int, str], Dict[str, List[str]]]:
+    """Build an index for base/evo variant lookup under ``source_dir``."""
+
+    out: Dict[Tuple[int, str], Dict[str, List[str]]] = {}
+    if not os.path.isdir(source_dir):
+        return out
+
+    for root, _dirs, files in os.walk(source_dir):
+        for fn in files:
+            base = os.path.basename(str(fn or ""))
+            if not base.lower().endswith(SUPPORTED_CARD_IMAGE_EXTENSIONS):
+                continue
+
+            full = os.path.join(root, base)
+            try:
+                cost, _enhance, parsed_name = parse_card_filename(base)
+            except Exception:
+                continue
+
+            normalized_name = normalize_card_base_name(str(parsed_name or ""))
+            if not normalized_name:
+                continue
+
+            key = (int(cost or 0), str(normalized_name))
+            row = out.setdefault(key, {"base": [], "evo": []})
+            if is_evo_card_name(base):
+                row["evo"].append(full)
+            else:
+                row["base"].append(full)
+
     return out
 
 
@@ -110,6 +160,73 @@ def resolve_source_card_path(
     if not stem_key:
         return None
     return stem_map.get(stem_key)
+
+
+def resolve_runtime_card_paths(
+    source_dir: str,
+    card_ref: str,
+    *,
+    exact_index: Optional[Dict[str, str]] = None,
+    stem_index: Optional[Dict[str, str]] = None,
+    variant_index: Optional[Dict[Tuple[int, str], Dict[str, List[str]]]] = None,
+) -> List[str]:
+    """Resolve runtime templates: base image plus companion ``_evo`` images."""
+
+    resolved = resolve_source_card_path(
+        source_dir,
+        card_ref,
+        exact_index=exact_index,
+        stem_index=stem_index,
+    )
+    if not resolved:
+        return []
+
+    picked_base = resolved
+    try:
+        cost, _enhance, parsed_name = parse_card_filename(os.path.basename(resolved))
+        normalized_name = normalize_card_base_name(str(parsed_name or ""))
+    except Exception:
+        cost, normalized_name = 0, ""
+
+    out: List[str] = []
+    seen = set()
+
+    def _append(path: str) -> None:
+        p = str(path or "")
+        if not p:
+            return
+        key = os.path.normcase(os.path.abspath(p))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(p)
+
+    if normalized_name:
+        index = variant_index if isinstance(variant_index, dict) else build_card_variant_index(source_dir)
+        row = index.get((int(cost or 0), str(normalized_name)), {}) if isinstance(index, dict) else {}
+        base_candidates = [
+            p for p in list((row.get("base") if isinstance(row, dict) else []) or []) if isinstance(p, str)
+        ]
+        evo_candidates = [
+            p for p in list((row.get("evo") if isinstance(row, dict) else []) or []) if isinstance(p, str)
+        ]
+
+        if base_candidates:
+            normalized_resolved = os.path.normcase(os.path.abspath(resolved))
+            exact_base = None
+            for p in base_candidates:
+                if os.path.normcase(os.path.abspath(p)) == normalized_resolved:
+                    exact_base = p
+                    break
+            picked_base = exact_base or sorted(base_candidates)[0]
+
+        _append(picked_base)
+        for p in sorted(evo_candidates):
+            _append(p)
+        return out
+
+    _append(picked_base)
+    return out
 
 
 def _deck_base_names(cards: List[str]) -> List[str]:

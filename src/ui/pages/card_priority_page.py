@@ -28,6 +28,7 @@ from src.config.paths import get_card_cost_dir
 from src.config.config_repository import ConfigRepository
 from src.config.effects_registry import get_triggers
 from src.utils.card_filename import (
+    is_evo_card_name,
     make_enhance_key,
     normalize_card_base_name,
     normalize_config_key,
@@ -261,6 +262,7 @@ class CardPriorityPage(QWidget):
             f
             for f in os.listdir(card_dir)
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+            and not is_evo_card_name(f)
         ]
         if not card_files:
             no_card_label = QLabel("没有找到卡片，请先在'卡组选择'页面选择卡片")

@@ -32,10 +32,12 @@ from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
 from src.ui.deck_io import (
     apply_strategy_config,
+    build_card_variant_index,
     build_card_source_index,
     extract_strategy_config,
+    filter_non_evo_cards,
     normalize_deck_cards,
-    resolve_source_card_path,
+    resolve_runtime_card_paths,
 )
 from src.utils.card_filename import normalize_card_base_name, parse_card_filename
 
@@ -159,6 +161,7 @@ class SharePage(QWidget):
                     for f in os.listdir(card_dir)
                     if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
                 ]
+            card_files = filter_non_evo_cards(card_files)
             card_refs = normalize_deck_cards(card_files)
 
             config_path = get_config_path()
@@ -238,19 +241,25 @@ class SharePage(QWidget):
 
             source_dir = os.path.join(get_exe_dir(), "quanka")
             exact_index, stem_index = build_card_source_index(source_dir)
-            for card_file in share_data["cards"]:
-                src = resolve_source_card_path(
+            variant_index = build_card_variant_index(source_dir)
+            for card_file in filter_non_evo_cards(list(share_data.get("cards", []))):
+                runtime_paths = resolve_runtime_card_paths(
                     source_dir,
                     card_file,
                     exact_index=exact_index,
                     stem_index=stem_index,
+                    variant_index=variant_index,
                 )
 
-                if src and os.path.exists(src):
+                if not runtime_paths:
+                    self.parent.log_output.append(f"[分享] 未找到卡片: {card_file}")
+                    continue
+
+                for src in runtime_paths:
+                    if not os.path.exists(src):
+                        continue
                     dst = os.path.join(card_dir, os.path.basename(src))
                     shutil.copy2(src, dst)
-                else:
-                    self.parent.log_output.append(f"[分享] 未找到卡片: {card_file}")
 
             config_path = get_config_path()
             sc = share_data.get("strategy_config")
@@ -305,6 +314,7 @@ class SharePage(QWidget):
             for f in os.listdir(card_dir)
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
+        card_files = filter_non_evo_cards(card_files)
 
         if not card_files:
             no_card_label = QLabel("卡组为空")

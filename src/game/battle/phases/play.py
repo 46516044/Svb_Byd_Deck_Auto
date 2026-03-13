@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import time
-from typing import Optional
-
 
 class PlayPhase:
     def __init__(self, actions):
@@ -25,8 +22,8 @@ class PlayPhase:
             return False
 
         ok = self.actions._play_cards(image)
-        ds.sleep(1)
+        ds.sleep(0.5)
 
         # 点击空白处关闭面板
-        self.actions._click_blank_panel(sleep_seconds=1.5)
+        self.actions._click_blank_panel(sleep_seconds=0.5)
         return bool(ok)

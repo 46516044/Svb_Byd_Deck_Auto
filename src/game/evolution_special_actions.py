@@ -14,7 +14,14 @@ class EvolutionSpecialActions:
     def __init__(self, device_state):
         self.device_state = device_state
     
-    def handle_evolve_special_action(self, follower_name, pos=None, is_super_evolution=False, existing_followers=None):
+    def handle_evolve_special_action(
+        self,
+        follower_name,
+        pos=None,
+        is_super_evolution=False,
+        existing_followers=None,
+        follower_uid=None,
+    ):
         """
         处理进化/超进化后特殊action（如铁拳神父等），便于扩展
         follower_name: 卡牌名称
@@ -25,15 +32,36 @@ class EvolutionSpecialActions:
         trigger = "on_super_evolve" if is_super_evolution else "on_evolve"
 
         effect_key = str(follower_name or "")
+        source_uid = None
+        try:
+            if follower_uid is not None:
+                uid_i = int(follower_uid)
+                if uid_i > 0:
+                    source_uid = int(uid_i)
+        except Exception:
+            source_uid = None
+
         try:
             runtime = getattr(self.device_state, "battle_runtime_state", None)
             if runtime is not None and hasattr(runtime, "get_effect_key_for_ours"):
                 key = runtime.get_effect_key_for_ours(
                     follower_pos=pos,
+                    follower_uid=source_uid,
                     fallback_name=str(follower_name or ""),
                 )
                 if key:
                     effect_key = str(key)
+
+            if (
+                source_uid is None
+                and runtime is not None
+                and pos is not None
+                and hasattr(runtime, "get_ours_uid")
+            ):
+                source_uid = runtime.get_ours_uid(
+                    pos,
+                    fallback_name=str(follower_name or ""),
+                )
         except Exception:
             effect_key = str(follower_name or "")
 
@@ -53,7 +81,9 @@ class EvolutionSpecialActions:
         ctx = FollowerContext(
             device_state=self.device_state,
             follower_name=str(effect_key or follower_name or ""),
+            cfg_key=str(effect_key or ""),
             follower_pos=(int(pos[0]), int(pos[1])) if isinstance(pos, (list, tuple)) and len(pos) >= 2 else None,
+            follower_uid=int(source_uid) if source_uid is not None else None,
             is_super_evolution=bool(is_super_evolution),
             existing_followers=existing_followers,
         )

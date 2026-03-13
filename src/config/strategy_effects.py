@@ -11,9 +11,17 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from src.utils.card_filename import (
     make_enhance_key,
+    normalize_card_base_name,
     parse_follower_stat_suffix,
     split_enhance_key,
 )
+
+
+def _safe_int(v: Any, default: int = 0) -> int:
+    try:
+        return int(v)
+    except Exception:
+        return int(default)
 
 
 def convert_legacy_target_type_to_ops(target_type: Any) -> List[Dict[str, Any]]:
@@ -203,6 +211,15 @@ def _effect_key_candidates(card_name: str) -> List[str]:
         if stripped not in out:
             out.append(stripped)
 
+    normalized_base = normalize_card_base_name(base)
+    if normalized_base:
+        if enhance_cost is not None:
+            enh_key = make_enhance_key(normalized_base, int(enhance_cost))
+            if enh_key not in out:
+                out.append(enh_key)
+        if normalized_base not in out:
+            out.append(normalized_base)
+
     return out
 
 
@@ -254,6 +271,8 @@ def _step_effect_signature(step: Dict[str, Any]) -> Optional[tuple]:
         return ("buff", "others")
     if op == "buff":
         return ("buff", str(step.get("target") or "others"))
+    if op == "buff_attack_times":
+        return ("buff_attack_times", str(step.get("target") or "others"))
     if op == "select_option":
         return ("select_option",)
     if op == "select_option_by_our_followers":
@@ -480,6 +499,42 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                 )
                 if step.get("on_error"):
                     ops[-1]["on_error"] = step.get("on_error")
+                continue
+            if op_id == "buff":
+                target_mode = str(step.get("target") or "others")
+                atk_delta = step.get("atk_delta", 1)
+                hp_delta = step.get("hp_delta", 1)
+                has_stats = ("atk_delta" in step) or ("hp_delta" in step)
+                if has_stats or ("attack_times" not in step):
+                    buff_step = {
+                        "op": "buff",
+                        "target": target_mode,
+                        "atk_delta": _safe_int(atk_delta, 0),
+                        "hp_delta": _safe_int(hp_delta, 0),
+                    }
+                    if step.get("on_error"):
+                        buff_step["on_error"] = step.get("on_error")
+                    ops.append(buff_step)
+
+                if step.get("attack_times") is not None:
+                    times_step = {
+                        "op": "buff_attack_times",
+                        "target": target_mode,
+                        "attack_times": max(1, _safe_int(step.get("attack_times"), 1)),
+                    }
+                    if step.get("on_error"):
+                        times_step["on_error"] = step.get("on_error")
+                    ops.append(times_step)
+                continue
+            if op_id == "buff_attack_times":
+                normalized = {
+                    "op": "buff_attack_times",
+                    "target": str(step.get("target") or "others"),
+                    "attack_times": max(1, _safe_int(step.get("attack_times"), 1)),
+                }
+                if step.get("on_error"):
+                    normalized["on_error"] = step.get("on_error")
+                ops.append(normalized)
                 continue
             ops.append(dict(step))
             continue

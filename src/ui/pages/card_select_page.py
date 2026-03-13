@@ -31,12 +31,19 @@ from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
 from src.ui.deck_io import (
     apply_strategy_config,
+    build_card_variant_index,
     build_card_source_index,
     extract_strategy_config,
+    filter_non_evo_cards,
+    resolve_runtime_card_paths,
     resolve_source_card_path,
     save_deck_snapshot,
 )
-from src.utils.card_filename import normalize_card_base_name, parse_card_filename
+from src.utils.card_filename import (
+    is_evo_card_name,
+    normalize_card_base_name,
+    parse_card_filename,
+)
 
 
 class CardSelectPage(QWidget):
@@ -288,6 +295,8 @@ class CardSelectPage(QWidget):
             for root, _, files in os.walk(card_dir):
                 for file in files:
                     if file.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                        if is_evo_card_name(file):
+                            continue
                         rel_path = os.path.relpath(os.path.join(root, file), card_dir)
                         self.all_cards.append(
                             {
@@ -544,15 +553,24 @@ class CardSelectPage(QWidget):
                 print(f"删除文件失败: {file_path} - {e}")
 
         success_count = 0
+        selected_base_count = 0
+        source_dir = os.path.join(get_exe_dir(), "quanka")
+        exact_index, stem_index = build_card_source_index(source_dir)
+        variant_index = build_card_variant_index(source_dir)
         for card_file in self.selected_cards:
-            src = None
-            for card in self.all_cards:
-                if card["file"] == card_file:
-                    src = os.path.join(get_exe_dir(), "quanka", card["path"])
-                    break
-
-            if src and os.path.exists(src):
-                dst = os.path.join(target_dir, card_file)
+            runtime_paths = resolve_runtime_card_paths(
+                source_dir,
+                card_file,
+                exact_index=exact_index,
+                stem_index=stem_index,
+                variant_index=variant_index,
+            )
+            if runtime_paths:
+                selected_base_count += 1
+            for src in runtime_paths:
+                if not os.path.exists(src):
+                    continue
+                dst = os.path.join(target_dir, os.path.basename(src))
                 try:
                     shutil.copy2(src, dst)
                     success_count += 1
@@ -560,8 +578,8 @@ class CardSelectPage(QWidget):
                     print(f"复制文件失败: {src} -> {dst} - {e}")
 
         if success_count > 0:
-            QMessageBox.information(self, "成功", f"已保存 {success_count} 张卡片到卡组！")
-            self.parent.log_output.append(f"[卡组] 已保存 {success_count} 张卡片")
+            QMessageBox.information(self, "成功", f"已保存 {selected_base_count} 张卡片到卡组！")
+            self.parent.log_output.append(f"[卡组] 已保存 {selected_base_count} 张卡片")
 
             if hasattr(self.parent, "card_priority_page"):
                 self.parent.card_priority_page.refresh_card_priority()
@@ -605,16 +623,22 @@ class CardSelectPage(QWidget):
 
             source_dir = os.path.join(get_exe_dir(), "quanka")
             exact_index, stem_index = build_card_source_index(source_dir)
+            variant_index = build_card_variant_index(source_dir)
             success_count = 0
-            for card_file in deck_data.get("cards", []):
-                src = resolve_source_card_path(
+            loaded_base_count = 0
+            for card_file in filter_non_evo_cards(list(deck_data.get("cards", []))):
+                runtime_paths = resolve_runtime_card_paths(
                     source_dir,
                     card_file,
                     exact_index=exact_index,
                     stem_index=stem_index,
+                    variant_index=variant_index,
                 )
-
-                if src and os.path.exists(src):
+                if runtime_paths:
+                    loaded_base_count += 1
+                for src in runtime_paths:
+                    if not os.path.exists(src):
+                        continue
                     dst = os.path.join(card_dir, os.path.basename(src))
                     try:
                         shutil.copy2(src, dst)
@@ -648,7 +672,7 @@ class CardSelectPage(QWidget):
                 QMessageBox.information(
                     self,
                     "成功",
-                    f"已加载卡组 '{deck_data.get('name')}'，共 {success_count} 张卡片",
+                    f"已加载卡组 '{deck_data.get('name')}'，共 {loaded_base_count} 张卡片",
                 )
                 self.parent.log_output.append(f"[卡组] 已加载卡组 '{deck_data.get('name')}'")
 
@@ -823,7 +847,7 @@ class CardSelectPage(QWidget):
             source_dir = os.path.join(get_exe_dir(), "quanka")
             exact_index, stem_index = build_card_source_index(source_dir)
 
-            for card_file in deck_data.get("cards", []):
+            for card_file in filter_non_evo_cards(list(deck_data.get("cards", []))):
                 src = resolve_source_card_path(
                     source_dir,
                     card_file,

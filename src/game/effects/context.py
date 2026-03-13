@@ -23,6 +23,7 @@ class HandCardContext:
     card_center: Tuple[int, int] = (0, 0)
     play_target: Tuple[int, int] = (0, 0)
     follower_pos: Optional[Tuple[int, int]] = None
+    follower_uid: Optional[int] = None
 
     # Full recognized card payload (optional)
     card: Dict[str, Any] = field(default_factory=dict)
@@ -38,7 +39,9 @@ class FollowerContext:
     device_state: Any = None
 
     follower_name: str = ""
+    cfg_key: str = ""
     follower_pos: Optional[Tuple[int, int]] = None
+    follower_uid: Optional[int] = None
     is_super_evolution: bool = False
 
     # Optional: reuse already scanned followers to avoid extra CV work

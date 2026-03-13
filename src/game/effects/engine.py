@@ -113,13 +113,39 @@ class EffectEngine:
             )
         if op_id == "cancel_action":
             return OperationExecutor.cancel_action(ctx)
+        if op_id == "add_cost_bonus":
+            return OperationExecutor.add_cost_bonus(
+                ctx,
+                amount=step.get("amount", 0),
+            )
+        if op_id == "request_extra_hand_scan":
+            return OperationExecutor.request_extra_hand_scan(
+                ctx,
+                only_when_cost_empty=step.get("only_when_cost_empty", True),
+            )
         if op_id == "buff":
-            return OperationExecutor.buff(
+            stat_ok = OperationExecutor.buff(
                 ctx,
                 target=step.get("target", "others"),
                 atk_delta=step.get("atk_delta", 1),
                 hp_delta=step.get("hp_delta", 1),
-                attack_times=step.get("attack_times", None),
+            )
+            # Backward compatibility: legacy buff step may contain attack_times.
+            if step.get("attack_times") is not None:
+                return bool(
+                    stat_ok
+                    and OperationExecutor.buff_attack_times(
+                        ctx,
+                        target=step.get("target", "others"),
+                        attack_times=step.get("attack_times", 1),
+                    )
+                )
+            return bool(stat_ok)
+        if op_id == "buff_attack_times":
+            return OperationExecutor.buff_attack_times(
+                ctx,
+                target=step.get("target", "others"),
+                attack_times=step.get("attack_times", 1),
             )
 
         return False

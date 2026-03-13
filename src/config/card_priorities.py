@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 
 from src.utils.card_filename import (
     make_enhance_key,
+    normalize_card_base_name,
     parse_follower_stat_suffix,
     split_enhance_key,
 )
@@ -85,6 +86,15 @@ def _name_candidates(card_name: str) -> list[str]:
                 out.append(enh_key)
         if stripped not in out:
             out.append(stripped)
+
+    normalized_base = normalize_card_base_name(base)
+    if normalized_base:
+        if enhance_cost is not None:
+            enh_key = make_enhance_key(normalized_base, int(enhance_cost))
+            if enh_key not in out:
+                out.append(enh_key)
+        if normalized_base not in out:
+            out.append(normalized_base)
 
     return out
 

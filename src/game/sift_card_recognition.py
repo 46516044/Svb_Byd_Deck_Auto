@@ -12,15 +12,38 @@ from typing import Any, List, Tuple, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.utils.resource_utils import resource_path
-from src.utils.card_filename import parse_card_stem
+from src.utils.card_filename import normalize_card_base_name, parse_card_stem
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_CARD_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 
 # Shared template cache (read-only) across instances/devices.
-_TEMPLATE_CACHE: Dict[Tuple[str, float], Dict[str, Dict[str, Any]]] = {}
+_TEMPLATE_CACHE: Dict[Tuple[str, float, str], Dict[str, Dict[str, Any]]] = {}
 _TEMPLATE_CACHE_LOCK = threading.Lock()
+
+
+def _template_dir_signature(card_images_dir: str) -> str:
+    """Build a lightweight signature for cache invalidation."""
+
+    try:
+        if not os.path.isdir(card_images_dir):
+            return "missing"
+
+        parts: List[str] = []
+        for filename in sorted(os.listdir(card_images_dir)):
+            if not str(filename or "").lower().endswith(SUPPORTED_CARD_IMAGE_EXTENSIONS):
+                continue
+            path = os.path.join(card_images_dir, filename)
+            try:
+                st = os.stat(path)
+                parts.append(f"{filename.lower()}:{int(st.st_size)}:{int(st.st_mtime_ns)}")
+            except Exception:
+                parts.append(f"{filename.lower()}:na")
+
+        return "|".join(parts)
+    except Exception:
+        return "unknown"
 
 
 def _build_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[str, Dict[str, Any]]:
@@ -56,6 +79,10 @@ def _build_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[
             cost, enhance_costs, card_name = parse_card_stem(name_without_ext)
             if not card_name:
                 logger.warning(f"文件名解析失败(缺少卡名): {filename}")
+                continue
+            card_name = normalize_card_base_name(card_name)
+            if not card_name:
+                logger.warning(f"文件名解析失败(卡名归一化为空): {filename}")
                 continue
 
             from PIL import Image
@@ -121,7 +148,11 @@ def _build_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[
 
 
 def _get_shared_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[str, Dict[str, Any]]:
-    key = (os.path.abspath(card_images_dir), float(scale_factor))
+    key = (
+        os.path.abspath(card_images_dir),
+        float(scale_factor),
+        _template_dir_signature(card_images_dir),
+    )
     with _TEMPLATE_CACHE_LOCK:
         cached = _TEMPLATE_CACHE.get(key)
         if cached is not None:

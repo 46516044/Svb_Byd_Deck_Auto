@@ -20,6 +20,7 @@ from src.config.migrations import (
     migrate_runtime_legacy_fields,
     migrate_strategy_name_keys,
     migrate_strategy_effects_schema,
+    migrate_strategy_split_attack_times_buff,
     migrate_strategy_effects_to_ops,
 )
 
@@ -62,6 +63,10 @@ class ConfigManager:
             except Exception:
                 pass
             try:
+                migrate_strategy_split_attack_times_buff(config)
+            except Exception:
+                pass
+            try:
                 migrate_runtime_legacy_fields(config)
             except Exception:
                 pass
@@ -83,6 +88,8 @@ class ConfigManager:
                 if migrate_strategy_effects_schema(merged_config):
                     migrated = True
                 if migrate_strategy_effects_to_ops(merged_config):
+                    migrated = True
+                if migrate_strategy_split_attack_times_buff(merged_config):
                     migrated = True
                 if migrate_runtime_legacy_fields(merged_config):
                     migrated = True

@@ -6,7 +6,6 @@
 import time
 import random
 from typing import TYPE_CHECKING
-from src.config.card_priorities import is_high_priority_card
 from src.game.game_actions import human_like_drag
 from src.game.policy.effects import get_card_effect_steps
 
@@ -25,6 +24,8 @@ class CardPlaySpecialActions:
     def play_single_card(self, card):
         """打出单张牌"""
         self._extra_cost_bonus = 0
+        self._request_extra_hand_scan = False
+        self._request_extra_hand_scan_only_when_cost_empty = True
         self._should_not_consume_cost = False
         self._should_remove_from_hand = False
         self._preplay_origin_tag_attempted = False
@@ -52,6 +53,7 @@ class CardPlaySpecialActions:
             time.sleep(0.2)
 
             source_pos = None
+            source_uid = None
             if self._ops_require_source_origin(ops):
                 self._preplay_origin_tag_attempted = True
                 source_pos = self._tag_played_follower_origin(
@@ -60,6 +62,15 @@ class CardPlaySpecialActions:
                 )
                 if source_pos is not None:
                     self._preplay_origin_tag_succeeded = True
+                    try:
+                        runtime = getattr(self.device_state, "battle_runtime_state", None)
+                        if runtime is not None and hasattr(runtime, "get_ours_uid"):
+                            source_uid = runtime.get_ours_uid(
+                                source_pos,
+                                fallback_name=str(card_name or ""),
+                            )
+                    except Exception:
+                        source_uid = None
 
             ctx = HandCardContext(
                 device_state=self.device_state,
@@ -68,9 +79,30 @@ class CardPlaySpecialActions:
                 card_center=(int(center_x), int(center_y)),
                 play_target=(int(target_x), 400),
                 follower_pos=source_pos,
+                follower_uid=int(source_uid) if source_uid is not None else None,
                 card=dict(card or {}),
             )
             run_result = EffectEngine.run_ops(ops, ctx=ctx, trigger_id="on_play")
+
+            try:
+                bonus = int(getattr(ctx, "extra_cost_bonus", 0) or 0)
+            except Exception:
+                bonus = 0
+            self._extra_cost_bonus = int(bonus)
+
+            try:
+                req_scan = bool(getattr(ctx, "request_extra_hand_scan", False))
+            except Exception:
+                req_scan = False
+            self._request_extra_hand_scan = bool(req_scan)
+
+            try:
+                req_only_empty = bool(
+                    getattr(ctx, "request_extra_hand_scan_only_when_cost_empty", True)
+                )
+            except Exception:
+                req_only_empty = True
+            self._request_extra_hand_scan_only_when_cost_empty = bool(req_only_empty)
 
             # Unified failure policy for enemy_follower targeting:
             # - no cost consumption
@@ -106,31 +138,7 @@ class CardPlaySpecialActions:
         else:
             # 普通卡牌，正常打出
             self._default_card_play(center_x, center_y, target_x)
-        
-        # 特殊费用处理：勇武的堕天使奥莉薇打出后增加2点费用
-        if card_name == "勇武的堕天使奥莉薇":
-            time.sleep(5)
-            self.device_state.logger.info(f"检测到打出{card_name}，增加2点费用")
-            # 这里需要在调用方处理费用增加，我们通过返回值来通知
-            self._extra_cost_bonus = 2
-        elif card_name == "白银骑士团团长艾蜜莉亚":
-            time.sleep(5)
-            self.device_state.logger.info(f"检测到打出{card_name}，增加3点费用")
-            # 这里需要在调用方处理费用增加，我们通过返回值来通知
-            self._extra_cost_bonus = 3
-        elif card_name == "纯白圣女贞德":
-            time.sleep(5)
-            self.device_state.logger.info(f"检测到打出{card_name}，等待5s")
-        else:
-            self._extra_cost_bonus = 0
-        
-        # 如果是高优先级卡牌，多等一会
-        if is_high_priority_card(str(cfg_key), self.device_state.config) or is_high_priority_card(
-            str(card_name), self.device_state.config
-        ):
-            time.sleep(1)
-        
-        time.sleep(0.5)
+
         return True
 
     @staticmethod
@@ -140,7 +148,7 @@ class CardPlaySpecialActions:
         for step in list(ops or []):
             if not isinstance(step, dict):
                 continue
-            if str(step.get("op") or "") == "buff":
+            if str(step.get("op") or "") in ("buff", "buff_attack_times"):
                 return True
         return False
 
@@ -153,23 +161,36 @@ class CardPlaySpecialActions:
             return None
 
         try:
-            self.device_state.sleep(1.0)
-            screenshot = self.device_state.take_screenshot()
-            if screenshot is None:
-                return None
+            max_wait_s = 1.0
+            interval_s = 0.2
+            deadline = time.time() + float(max_wait_s)
 
-            followers = game_manager.scan_our_followers(
-                screenshot,
-                extra_shots=0,
-                sort_desc=True,
-                shot_delay_range=(0.05, 0.10),
-                with_names=True,
-            )
+            while True:
+                screenshot = self.device_state.take_screenshot()
+                if screenshot is not None:
+                    followers = game_manager.scan_our_followers(
+                        screenshot,
+                        extra_shots=0,
+                        sort_desc=True,
+                        shot_delay_range=(0.05, 0.10),
+                        with_names=True,
+                    )
 
-            if followers:
-                runtime.sync_ours(followers)
-            pos = runtime.mark_latest_play_origin(card_name=str(card_name or ""), cfg_key=str(cfg_key or ""))
-            return pos
+                    if followers:
+                        runtime.sync_ours(followers)
+                        pos = runtime.mark_latest_play_origin(
+                            card_name=str(card_name or ""),
+                            cfg_key=str(cfg_key or ""),
+                        )
+                        if pos is not None:
+                            return pos
+
+                now = time.time()
+                if now >= deadline:
+                    break
+                self.device_state.sleep(min(float(interval_s), max(0.0, deadline - now)))
+
+            return None
         except Exception:
             return None
 

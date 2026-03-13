@@ -34,10 +34,12 @@ class BattleRuntimeState:
         self.logger = logger
         self.ours: List[FollowerRuntimeState] = []
         self.enemy: List[FollowerRuntimeState] = []
+        self._next_uid: int = 1
 
     def reset(self, *, reason: str = "") -> None:
         self.ours = []
         self.enemy = []
+        self._next_uid = 1
         if reason:
             self._debug(f"reset: {reason}")
 
@@ -68,14 +70,40 @@ class BattleRuntimeState:
         self._drop_dead(self.enemy)
         return list(self.enemy)
 
-    def mark_our_evolution(self, follower_pos: Sequence[Any], evolved_type: str) -> bool:
-        state = self._find_state(self.ours, follower_pos)
+    def mark_our_evolution(
+        self,
+        follower_pos: Sequence[Any],
+        evolved_type: str,
+        *,
+        cfg_key: str = "",
+        fallback_name: str = "",
+    ) -> bool:
+        state = self._find_ours_for_action(
+            follower_pos,
+            cfg_key=str(cfg_key or ""),
+            fallback_name=str(fallback_name or ""),
+        )
         if state is None:
             return False
+        return self._mark_state_evolution(state, evolved_type)
+
+    def mark_our_evolution_by_uid(self, uid: Any, evolved_type: str) -> bool:
+        state = self._find_ours_by_uid(uid)
+        if state is None:
+            return False
+        return self._mark_state_evolution(state, evolved_type)
+
+    def _mark_state_evolution(self, state: FollowerRuntimeState, evolved_type: str) -> bool:
         mode = str(evolved_type or "none")
         if mode not in ("none", "normal", "super"):
             mode = "none"
         state.evolved_type = mode
+        self._debug(
+            "mark_evolution "
+            f"uid={int(getattr(state, 'uid', 0) or 0)} "
+            f"mode={mode} x={int(getattr(state, 'x', 0) or 0)} "
+            f"name={str(getattr(state, 'raw_name', '') or getattr(state, 'base_name', '') or '')}"
+        )
         return True
 
     def mark_latest_play_origin(
@@ -130,9 +158,16 @@ class BattleRuntimeState:
         self,
         *,
         follower_pos: Optional[Sequence[Any]],
+        follower_uid: Any = None,
         fallback_name: str = "",
     ) -> str:
-        state = self._find_state(self.ours, follower_pos) if follower_pos is not None else None
+        state = self._find_ours_by_uid(follower_uid)
+        if state is None:
+            state = (
+                self._find_ours_for_action(follower_pos, fallback_name=str(fallback_name or ""))
+                if follower_pos is not None
+                else None
+            )
         if state is not None:
             key = str(getattr(state, "source_cfg_key", "") or "")
             if key:
@@ -144,6 +179,28 @@ class BattleRuntimeState:
             if raw:
                 return raw
         return str(fallback_name or "")
+
+    def get_ours_uid(
+        self,
+        follower_pos: Sequence[Any],
+        *,
+        fallback_name: str = "",
+    ) -> Optional[int]:
+        state = self._find_ours_for_action(
+            follower_pos,
+            cfg_key="",
+            fallback_name=str(fallback_name or ""),
+        )
+        if state is None:
+            return None
+        uid = _safe_int(getattr(state, "uid", 0), 0)
+        return int(uid) if uid > 0 else None
+
+    def find_ours_pos_by_uid(self, uid: Any) -> Optional[Tuple[int, int]]:
+        st = self._find_ours_by_uid(uid)
+        if st is None:
+            return None
+        return (int(st.x), int(st.y))
 
     def find_ours_pos_by_cfg_key(
         self,
@@ -187,25 +244,24 @@ class BattleRuntimeState:
         self,
         *,
         source_pos: Optional[Sequence[Any]],
+        source_uid: Any = None,
         target_mode: str,
         atk_delta: int,
         hp_delta: int,
-        attack_times: Optional[int] = None,
         round_index: Optional[int] = None,
     ) -> int:
         atk_v = _safe_int(atk_delta, 0)
         hp_v = _safe_int(hp_delta, 0)
-        attack_times_v = None
-        if attack_times is not None:
-            attack_times_v = max(1, _safe_int(attack_times, 1))
-        if atk_v == 0 and hp_v == 0 and attack_times_v is None:
+        if atk_v == 0 and hp_v == 0:
             return 0
 
         mode = str(target_mode or "others")
         if mode not in ("others", "self"):
             mode = "others"
 
-        source = self._find_state(self.ours, source_pos) if source_pos is not None else None
+        source = self._find_ours_by_uid(source_uid)
+        if source is None and source_pos is not None:
+            source = self._find_state(self.ours, source_pos)
         changed = 0
 
         for st in self.ours:
@@ -221,19 +277,52 @@ class BattleRuntimeState:
             st.buff_atk += atk_v
             st.buff_hp += hp_v
 
-            if attack_times_v is not None:
-                ri = _safe_int(round_index, -1) if round_index is not None else -1
-                prev_round = _safe_int(getattr(st, "attack_times_round", -1), -1)
-                prev_total = max(1, _safe_int(getattr(st, "attack_times_total", 1), 1))
+            changed += 1
 
-                if ri >= 0:
-                    if prev_round == ri:
-                        st.attack_times_total = max(prev_total, int(attack_times_v))
-                    else:
-                        st.attack_times_round = int(ri)
-                        st.attack_times_total = int(attack_times_v)
-                else:
+        return changed
+
+    def apply_attack_times_buff(
+        self,
+        *,
+        source_pos: Optional[Sequence[Any]],
+        source_uid: Any = None,
+        target_mode: str,
+        attack_times: int,
+        round_index: Optional[int] = None,
+    ) -> int:
+        attack_times_v = max(1, _safe_int(attack_times, 1))
+
+        mode = str(target_mode or "others")
+        if mode not in ("others", "self"):
+            mode = "others"
+
+        source = self._find_ours_by_uid(source_uid)
+        if source is None and source_pos is not None:
+            source = self._find_state(self.ours, source_pos)
+        changed = 0
+
+        for st in self.ours:
+            is_source = source is not None and st is source
+
+            if mode == "self":
+                if not is_source:
+                    continue
+            else:
+                if is_source:
+                    continue
+
+            ri = _safe_int(round_index, -1) if round_index is not None else -1
+            prev_round = _safe_int(getattr(st, "attack_times_round", -1), -1)
+            prev_total = max(1, _safe_int(getattr(st, "attack_times_total", 1), 1))
+
+            if ri >= 0:
+                if prev_round == ri:
                     st.attack_times_total = max(prev_total, int(attack_times_v))
+                else:
+                    st.attack_times_round = int(ri)
+                    st.attack_times_total = int(attack_times_v)
+            else:
+                st.attack_times_total = max(prev_total, int(attack_times_v))
 
             changed += 1
 
@@ -428,6 +517,11 @@ class BattleRuntimeState:
                 parsed_base = str(parsed_base or raw_name)
             norm_base = normalize_card_base_name(parsed_base)
 
+            # Enemy scanned payload uses HP as item[3], not card name. Keep enemy
+            # matching coordinate-driven to avoid false "name" mismatches.
+            if str(side) != "ours":
+                norm_base = ""
+
             idx = None
             if norm_base:
                 idx = self._match_existing_index(
@@ -436,10 +530,12 @@ class BattleRuntimeState:
                     x,
                     y,
                     expected_base=norm_base,
-                    x_limit=max(150, x_limit),
-                    y_limit=max(120, y_limit),
+                    x_limit=max(220, x_limit),
+                    y_limit=max(150, y_limit),
                 )
-            if idx is None:
+
+            # Only do pure coordinate fallback when current scan has no reliable name.
+            if idx is None and not norm_base:
                 idx = self._match_existing_index(
                     existing,
                     used,
@@ -468,8 +564,12 @@ class BattleRuntimeState:
                         st_base = normalize_card_base_name(
                             str(getattr(st, "base_name", "") or getattr(st, "raw_name", "") or "")
                         )
+                        if st_base and st_base != norm_base:
+                            continue
                         if st_base and st_base == norm_base:
                             score -= 300
+                        else:
+                            score += 120
                     if score < best_score:
                         best_score = score
                         best_idx = i
@@ -480,6 +580,10 @@ class BattleRuntimeState:
                 used.add(int(idx))
             else:
                 st = FollowerRuntimeState(side=side)
+                st.uid = self._alloc_uid()
+
+            if _safe_int(getattr(st, "uid", 0), 0) <= 0:
+                st.uid = self._alloc_uid()
 
             st.side = side
             st.x = int(x)
@@ -557,10 +661,12 @@ class BattleRuntimeState:
                 st_base = normalize_card_base_name(
                     str(getattr(st, "base_name", "") or getattr(st, "raw_name", "") or "")
                 )
+                if st_base and st_base != expected_base:
+                    continue
                 if st_base and st_base == expected_base:
-                    score -= 400
-                elif st_base:
-                    score += 180
+                    score -= 420
+                else:
+                    score += 120
             if str(getattr(st, "source_cfg_key", "") or ""):
                 score -= 20
             if score < best_score:
@@ -589,10 +695,24 @@ class BattleRuntimeState:
             return True
         return False
 
+    def _find_ours_by_uid(self, uid: Any) -> Optional[FollowerRuntimeState]:
+        uid_i = _safe_int(uid, 0)
+        if uid_i <= 0:
+            return None
+        for st in list(self.ours or []):
+            if _safe_int(getattr(st, "uid", 0), 0) == uid_i:
+                return st
+        return None
+
     def _find_state(
         self,
         states: Sequence[FollowerRuntimeState],
         pos: Sequence[Any],
+        *,
+        expected_base: str = "",
+        prefer_cfg_key: str = "",
+        x_limit: int = 84,
+        y_limit: int = 110,
     ) -> Optional[FollowerRuntimeState]:
         if not isinstance(pos, (list, tuple)) or len(pos) < 2:
             return None
@@ -604,13 +724,84 @@ class BattleRuntimeState:
         for st in list(states or []):
             dx = abs(int(st.x) - int(x))
             dy = abs(int(st.y) - int(y))
-            if dx > 84 or dy > 110:
+            if dx > int(x_limit) or dy > int(y_limit):
                 continue
             score = dx * 2 + dy
+            if expected_base:
+                st_base = normalize_card_base_name(
+                    str(getattr(st, "base_name", "") or getattr(st, "raw_name", "") or "")
+                )
+                if st_base and st_base == expected_base:
+                    score -= 320
+                elif st_base:
+                    score += 140
+            if prefer_cfg_key:
+                cfg = str(getattr(st, "source_cfg_key", "") or "")
+                if cfg == prefer_cfg_key:
+                    score -= 360
             if score < best_score:
                 best_score = score
                 best = st
         return best
+
+    def _find_ours_for_action(
+        self,
+        pos: Sequence[Any],
+        *,
+        cfg_key: str = "",
+        fallback_name: str = "",
+    ) -> Optional[FollowerRuntimeState]:
+        key = str(cfg_key or "")
+        expected_base = normalize_card_base_name(str(fallback_name or ""))
+        if not expected_base and key:
+            b, _enh = split_enhance_key(key)
+            expected_base = normalize_card_base_name(str(b or ""))
+
+        if key:
+            st = self._find_state(
+                self.ours,
+                pos,
+                expected_base=expected_base,
+                prefer_cfg_key=key,
+                x_limit=140,
+                y_limit=150,
+            )
+            if st is not None and str(getattr(st, "source_cfg_key", "") or "") == key:
+                return st
+
+            exact = [
+                s
+                for s in list(self.ours or [])
+                if str(getattr(s, "source_cfg_key", "") or "") == key
+            ]
+            if exact:
+                try:
+                    px = _safe_int(pos[0], 0)
+                    py = _safe_int(pos[1], 0)
+                except Exception:
+                    px, py = 0, 0
+                return min(
+                    exact,
+                    key=lambda s: abs(int(getattr(s, "x", 0)) - px) * 2
+                    + abs(int(getattr(s, "y", 0)) - py),
+                )
+
+        st = self._find_state(
+            self.ours,
+            pos,
+            expected_base=expected_base,
+            x_limit=130,
+            y_limit=140,
+        )
+        if st is not None:
+            return st
+
+        return self._find_state(self.ours, pos)
+
+    def _alloc_uid(self) -> int:
+        uid = max(1, int(getattr(self, "_next_uid", 1) or 1))
+        self._next_uid = int(uid) + 1
+        return int(uid)
 
     def _drop_dead(self, states: List[FollowerRuntimeState]) -> None:
         keep: List[FollowerRuntimeState] = []

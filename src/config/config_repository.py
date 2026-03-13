@@ -25,6 +25,7 @@ from src.config.migrations import (
     migrate_runtime_legacy_fields,
     migrate_strategy_name_keys,
     migrate_strategy_effects_schema,
+    migrate_strategy_split_attack_times_buff,
     migrate_strategy_effects_to_ops,
 )
 from src.config.paths import get_config_path
@@ -76,6 +77,10 @@ def _normalize_and_migrate(user_config: Dict[str, Any]) -> Dict[str, Any]:
         pass
     try:
         migrate_strategy_effects_to_ops(cfg)
+    except Exception:
+        pass
+    try:
+        migrate_strategy_split_attack_times_buff(cfg)
     except Exception:
         pass
     try:

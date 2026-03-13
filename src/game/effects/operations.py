@@ -65,7 +65,7 @@ class OperationExecutor:
                 followers = ds.game_manager.scan_our_followers(
                     screenshot,
                     extra_shots=0,
-                    with_names=False,
+                    with_names=True,
                 )
                 follower_count = len(list(followers or []))
         except Exception:
@@ -99,13 +99,41 @@ class OperationExecutor:
         return True
 
     @staticmethod
+    def add_cost_bonus(ctx: Any, *, amount: Any) -> bool:
+        ds = getattr(ctx, "device_state", None)
+        val = _safe_int(amount, 0)
+        prev = _safe_int(getattr(ctx, "extra_cost_bonus", 0), 0)
+        setattr(ctx, "extra_cost_bonus", int(prev + val))
+        try:
+            if ds is not None:
+                ds.logger.info(f"[Effect] add_cost_bonus amount={val} total={int(prev + val)}")
+        except Exception:
+            pass
+        return True
+
+    @staticmethod
+    def request_extra_hand_scan(ctx: Any, *, only_when_cost_empty: Any = True) -> bool:
+        ds = getattr(ctx, "device_state", None)
+        flag = bool(only_when_cost_empty)
+        setattr(ctx, "request_extra_hand_scan", True)
+        setattr(ctx, "request_extra_hand_scan_only_when_cost_empty", flag)
+        try:
+            if ds is not None:
+                ds.logger.info(
+                    "[Effect] request_extra_hand_scan "
+                    f"only_when_cost_empty={bool(flag)}"
+                )
+        except Exception:
+            pass
+        return True
+
+    @staticmethod
     def buff(
         ctx: Any,
         *,
         target: Any,
         atk_delta: Any,
         hp_delta: Any,
-        attack_times: Any = None,
     ) -> bool:
         ds = getattr(ctx, "device_state", None)
         if ds is None:
@@ -117,9 +145,6 @@ class OperationExecutor:
 
         atk_val = _safe_int(atk_delta, 0)
         hp_val = _safe_int(hp_delta, 0)
-        attack_times_val = None
-        if attack_times is not None:
-            attack_times_val = max(1, _safe_int(attack_times, 1))
 
         runtime = getattr(ds, "battle_runtime_state", None)
         if runtime is None or not hasattr(runtime, "apply_buff"):
@@ -130,6 +155,29 @@ class OperationExecutor:
             return True
 
         source_pos = getattr(ctx, "follower_pos", None) or getattr(ctx, "attack_source_pos", None)
+        source_uid = None
+        try:
+            uid_raw = getattr(ctx, "follower_uid", None)
+            if uid_raw is not None:
+                uid_i = int(uid_raw)
+                if uid_i > 0:
+                    source_uid = int(uid_i)
+        except Exception:
+            source_uid = None
+
+        if source_uid is None and source_pos is not None and hasattr(runtime, "get_ours_uid"):
+            try:
+                source_uid = runtime.get_ours_uid(
+                    source_pos,
+                    fallback_name=str(
+                        getattr(ctx, "card_name", "")
+                        or getattr(ctx, "follower_name", "")
+                        or ""
+                    ),
+                )
+            except Exception:
+                source_uid = None
+
         if source_pos is None and runtime is not None and hasattr(runtime, "find_ours_pos_by_cfg_key"):
             try:
                 source_pos = runtime.find_ours_pos_by_cfg_key(
@@ -146,10 +194,10 @@ class OperationExecutor:
             changed = int(
                 runtime.apply_buff(
                     source_pos=source_pos,
+                    source_uid=source_uid,
                     target_mode=target_mode,
                     atk_delta=atk_val,
                     hp_delta=hp_val,
-                    attack_times=attack_times_val,
                     round_index=getattr(ds, "current_round_count", None),
                 )
             )
@@ -160,11 +208,95 @@ class OperationExecutor:
             ds.logger.info(
                 "[Effect] buff "
                 f"mode={target_mode} atk_delta={atk_val} hp_delta={hp_val} "
-                f"attack_times={attack_times_val if attack_times_val is not None else '-'} "
                 f"affected={changed}"
             )
         except Exception:
             pass
+        return True
+
+    @staticmethod
+    def buff_attack_times(
+        ctx: Any,
+        *,
+        target: Any,
+        attack_times: Any,
+    ) -> bool:
+        ds = getattr(ctx, "device_state", None)
+        if ds is None:
+            return False
+
+        target_mode = str(target or "others")
+        if target_mode not in ("others", "self"):
+            target_mode = "others"
+
+        attack_times_val = max(1, _safe_int(attack_times, 1))
+
+        runtime = getattr(ds, "battle_runtime_state", None)
+        if runtime is None or not hasattr(runtime, "apply_attack_times_buff"):
+            try:
+                ds.logger.warning("[Effect] buff_attack_times skipped: runtime unavailable")
+            except Exception:
+                pass
+            return True
+
+        source_pos = getattr(ctx, "follower_pos", None) or getattr(ctx, "attack_source_pos", None)
+        source_uid = None
+        try:
+            uid_raw = getattr(ctx, "follower_uid", None)
+            if uid_raw is not None:
+                uid_i = int(uid_raw)
+                if uid_i > 0:
+                    source_uid = int(uid_i)
+        except Exception:
+            source_uid = None
+
+        if source_uid is None and source_pos is not None and hasattr(runtime, "get_ours_uid"):
+            try:
+                source_uid = runtime.get_ours_uid(
+                    source_pos,
+                    fallback_name=str(
+                        getattr(ctx, "card_name", "")
+                        or getattr(ctx, "follower_name", "")
+                        or ""
+                    ),
+                )
+            except Exception:
+                source_uid = None
+
+        if source_pos is None and runtime is not None and hasattr(runtime, "find_ours_pos_by_cfg_key"):
+            try:
+                source_pos = runtime.find_ours_pos_by_cfg_key(
+                    cfg_key=str(getattr(ctx, "cfg_key", "") or ""),
+                    fallback_name=str(
+                        getattr(ctx, "card_name", "")
+                        or getattr(ctx, "follower_name", "")
+                        or ""
+                    ),
+                )
+            except Exception:
+                source_pos = None
+
+        try:
+            changed = int(
+                runtime.apply_attack_times_buff(
+                    source_pos=source_pos,
+                    source_uid=source_uid,
+                    target_mode=target_mode,
+                    attack_times=attack_times_val,
+                    round_index=getattr(ds, "current_round_count", None),
+                )
+            )
+        except Exception:
+            changed = 0
+
+        try:
+            ds.logger.info(
+                "[Effect] buff_attack_times "
+                f"mode={target_mode} attack_times={attack_times_val} affected={changed}"
+            )
+        except Exception:
+            pass
+
         return True
 
     @staticmethod

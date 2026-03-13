@@ -210,10 +210,28 @@ def _build_param_widget(param_spec: Dict[str, Any]) -> Optional[QWidget]:
         return cb
 
     if ptype == "int":
+        compact = bool(param_spec.get("compact", False))
+        min_v = _safe_int(param_spec.get("min", -10**9), -10**9)
+        max_v = _safe_int(param_spec.get("max", 10**9), 10**9)
+        default_v = _safe_int(param_spec.get("default", 0), 0)
+
+        if compact:
+            w = QWidget()
+            lay = QHBoxLayout(w)
+            lay.setContentsMargins(0, 0, 0, 0)
+            if label:
+                lay.addWidget(QLabel(label))
+            box = QSpinBox()
+            box.setRange(min_v, max_v)
+            box.setValue(default_v)
+            box.setMaximumWidth(80)
+            lay.addWidget(box)
+            return w
+
         box = QSpinBox()
         box.setPrefix(f"{label}:" if label else "")
-        box.setRange(_safe_int(param_spec.get("min", -10**9), -10**9), _safe_int(param_spec.get("max", 10**9), 10**9))
-        box.setValue(_safe_int(param_spec.get("default", 0), 0))
+        box.setRange(min_v, max_v)
+        box.setValue(default_v)
         box.setMaximumWidth(150)
         return box
 
@@ -277,6 +295,11 @@ def _set_param_widget_value(param_spec: Dict[str, Any], widget: QWidget, value: 
     if ptype == "int" and isinstance(widget, QSpinBox):
         widget.setValue(_safe_int(value, widget.value()))
         return
+    if ptype == "int":
+        box = _find_inner_widget(widget, QSpinBox)
+        if box is not None:
+            box.setValue(_safe_int(value, box.value()))
+        return
     if ptype == "float" and isinstance(widget, QDoubleSpinBox):
         widget.setValue(_safe_float(value, widget.value()))
         return
@@ -303,6 +326,11 @@ def _get_param_widget_value(param_spec: Dict[str, Any], widget: QWidget) -> Any:
         return bool(widget.isChecked())
     if ptype == "int" and isinstance(widget, QSpinBox):
         return int(widget.value())
+    if ptype == "int":
+        box = _find_inner_widget(widget, QSpinBox)
+        if box is not None:
+            return int(box.value())
+        return _safe_int(param_spec.get("default", 0), 0)
     if ptype == "float" and isinstance(widget, QDoubleSpinBox):
         return float(widget.value())
     if ptype == "str":
@@ -443,7 +471,7 @@ class RawStepRow(QWidget):
         preview = json.dumps(self.raw_step, ensure_ascii=False, sort_keys=True)
         lab = QLabel(preview)
         lab.setToolTip(preview)
-        lab.setStyleSheet("color: #FFCC88;")
+        lab.setStyleSheet("color: #7A4B00;")
         layout.addWidget(lab)
         layout.addStretch()
 
@@ -611,6 +639,13 @@ class CardEffectsDialog(QDialog):
 
         self.setWindowTitle(f"特殊效果 - {self.display_name}")
         self.resize(920, 520)
+        self.setStyleSheet(
+            """
+            QLabel { color: #1F2937; }
+            QCheckBox { color: #1F2937; }
+            QGroupBox { color: #1F2937; }
+            """
+        )
 
         self.repo = ConfigRepository(get_config_path())
 
@@ -620,14 +655,14 @@ class CardEffectsDialog(QDialog):
             "选择触发时机，并为每个触发时机配置操作序列。\n"
             "提示：基础卡可配置通用触发；爆能档位可配置仅该档位生效的触发。\n"
             "提示：爆能档位默认继承本体同触发效果；若配置了同类效果（如同一BUFF类型）则以爆能档位覆盖。\n"
-            "提示：BUFF请先选操作“BUFF”，再在第二个下拉选择“其他友方/自身”，并分别填写攻击变化X与生命变化Y。"
+            "提示：身材BUFF与攻击次数BUFF已拆分为两个独立操作；请分别配置。"
         )
-        hint.setStyleSheet("color: #AACCFF;")
+        hint.setStyleSheet("color: #38527A;")
         main.addWidget(hint)
 
         if self.is_enhance:
             enhance_notice = QLabel("当前为爆能档位配置：可设置该爆能档位专属的出牌/攻击/进化触发效果。")
-            enhance_notice.setStyleSheet("color: #FFCC88;")
+            enhance_notice.setStyleSheet("color: #7A4B00;")
             main.addWidget(enhance_notice)
 
         # Trigger multi-select

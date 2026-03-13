@@ -298,6 +298,73 @@ def migrate_strategy_effects_to_ops(config: Dict[str, Any]) -> bool:
     return changed
 
 
+def migrate_strategy_split_attack_times_buff(config: Dict[str, Any]) -> bool:
+    """Split legacy mixed buff step into independent ops.
+
+    Legacy shape:
+    - {"op":"buff", "target":"...", "atk_delta":X, "hp_delta":Y, "attack_times":N}
+
+    New shape:
+    - {"op":"buff", ...}
+    - {"op":"buff_attack_times", "target":"...", "attack_times":N}
+    """
+
+    strategy = config.get("strategy")
+    if not isinstance(strategy, dict):
+        return False
+    effects = strategy.get("effects")
+    if not isinstance(effects, dict):
+        return False
+
+    def _safe_int(v: Any, default: int = 0) -> int:
+        try:
+            return int(v)
+        except Exception:
+            return int(default)
+
+    changed = False
+
+    for _card_name, card_eff in list(effects.items()):
+        if not isinstance(card_eff, dict):
+            continue
+
+        for trigger, steps in list(card_eff.items()):
+            if not isinstance(steps, list) or not steps:
+                continue
+
+            local_changed = False
+            new_steps = []
+            for step in list(steps):
+                if not isinstance(step, dict):
+                    continue
+
+                if str(step.get("op") or "") != "buff" or step.get("attack_times") is None:
+                    new_steps.append(copy.deepcopy(step))
+                    continue
+
+                local_changed = True
+                stat_step = copy.deepcopy(step)
+                attack_times_raw = stat_step.pop("attack_times", None)
+                if stat_step:
+                    new_steps.append(stat_step)
+
+                target_mode = str(stat_step.get("target") or step.get("target") or "others")
+                attack_times_step = {
+                    "op": "buff_attack_times",
+                    "target": target_mode,
+                    "attack_times": max(1, _safe_int(attack_times_raw, 1)),
+                }
+                if step.get("on_error"):
+                    attack_times_step["on_error"] = step.get("on_error")
+                new_steps.append(attack_times_step)
+
+            if local_changed:
+                card_eff[trigger] = new_steps
+                changed = True
+
+    return changed
+
+
 def migrate_strategy_name_keys(config: Dict[str, Any]) -> bool:
     """Normalize strategy-related card keys to suffix-free base naming.
 

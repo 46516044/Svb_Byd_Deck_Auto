@@ -16,7 +16,11 @@ from src.game.game_actions import GameActions
 from src.game.state_machine import GameStateMachine
 from src.utils.gpu_utils import get_easyocr_reader
 from src.utils.resource_utils import resource_path
-from src.utils.card_filename import parse_card_stem
+from src.utils.card_filename import (
+    normalize_card_base_name,
+    parse_card_stem,
+    parse_follower_stat_suffix,
+)
 from src.utils.hp_detection import (
     detect_hp_in_window,
     sliding_window_detect,
@@ -209,7 +213,6 @@ class GameManager:
         screenshot,
         debug_flag: bool = False,
         is_select: bool = False,
-        _retry_on_empty: bool = True,
     ):
         """
         检测场上的敌方随从位置与血量 (Improved with sliding window + fallback recognition)
@@ -327,39 +330,10 @@ class GameManager:
             if enemy_followers:
                 return enemy_followers
 
-            if _retry_on_empty:
-                try:
-                    logger.info("敌方随从首次为空，执行第2次确认扫描")
-                    time.sleep(0.2)
-                    second = self.device_state.take_screenshot()
-                    if second is not None:
-                        return self.scan_enemy_followers(
-                            second,
-                            debug_flag=debug_flag,
-                            is_select=is_select,
-                            _retry_on_empty=False,
-                        )
-                except Exception:
-                    pass
-
             return []
 
         except Exception as e:
             logger.error(f"Enemy follower detection failed: {e}", exc_info=True)
-            if _retry_on_empty:
-                try:
-                    logger.info("敌方随从检测异常，执行第2次确认扫描")
-                    time.sleep(0.2)
-                    second = self.device_state.take_screenshot()
-                    if second is not None:
-                        return self.scan_enemy_followers(
-                            second,
-                            debug_flag=debug_flag,
-                            is_select=is_select,
-                            _retry_on_empty=False,
-                        )
-                except Exception:
-                    pass
             return []
 
     def scan_our_followers(
@@ -1040,6 +1014,39 @@ class GameManager:
             else:
                 card_templates = self._board_sift_templates
 
+            # Build a stable runtime name map for board recognition.
+            # Prefer names with explicit follower stats suffix (e.g. _4_4), so
+            # runtime can derive attacker ATK/HP and apply evolve(+2/+2,+3/+3)
+            # correctly. When matched template is *_evo without stats, fallback
+            # to a sibling template of the same base card that has stats.
+            runtime_name_map = {}
+            stat_name_by_base = {}
+            for tname in list(card_templates.keys()):
+                try:
+                    _c, _e, parsed_name = parse_card_stem(str(tname or ""))
+                except Exception:
+                    parsed_name = str(tname or "")
+                parsed_name = str(parsed_name or "")
+                base_key = normalize_card_base_name(parsed_name)
+                _base, atk_i, hp_i = parse_follower_stat_suffix(parsed_name)
+                if base_key and atk_i is not None and hp_i is not None and base_key not in stat_name_by_base:
+                    stat_name_by_base[base_key] = parsed_name
+
+            for tname in list(card_templates.keys()):
+                try:
+                    _c, _e, parsed_name = parse_card_stem(str(tname or ""))
+                except Exception:
+                    parsed_name = str(tname or "")
+                parsed_name = str(parsed_name or "")
+                _base, atk_i, hp_i = parse_follower_stat_suffix(parsed_name)
+                if atk_i is not None and hp_i is not None:
+                    runtime_name_map[str(tname)] = parsed_name
+                    continue
+
+                base_key = normalize_card_base_name(parsed_name)
+                fallback_with_stats = stat_name_by_base.get(base_key)
+                runtime_name_map[str(tname)] = str(fallback_with_stats or parsed_name)
+
             # 对每个矩形区域进行SIFT识别
             results = []
             for rect_coords in deduplicated_follower_positions:
@@ -1111,14 +1118,19 @@ class GameManager:
                     center_x = int((x1 + x2) // 2)
                     center_y = int((y1 + y2) // 2)
 
-                    # 去除前缀的费用数字和下划线，只保留随从名
-                    if "_" in best_match:
-                        try:
-                            _, _, name = parse_card_stem(best_match)
-                        except Exception:
-                            name = best_match.split("_", 1)[1]
-                    else:
-                        name = best_match
+                    name = runtime_name_map.get(str(best_match), "")
+                    if not name:
+                        if "_" in best_match:
+                            try:
+                                _, _, name = parse_card_stem(best_match)
+                            except Exception:
+                                name = best_match.split("_", 1)[1]
+                        else:
+                            name = best_match
+
+                    name = str(name or "").strip()
+                    if not name:
+                        continue
 
                     results.append((center_x, center_y, name))
 
@@ -1165,19 +1177,35 @@ class GameManager:
         return merged
 
     def scan_shield_targets(self, debug_flag=False):
-        """扫描护盾（三帧检测，不做跨帧聚类合并）。"""
+        """扫描护盾（三帧检测，2/3 命中才判定为真守护）。"""
 
         shot_results = []
         max_shots = 3
 
+        try:
+            debug_mode = bool(
+                isinstance(getattr(self.device_state, "config", None), dict)
+                and self.device_state.config.get("ui", {}).get("debug_mode")
+            )
+        except Exception:
+            debug_mode = False
+
         for idx in range(max_shots):
             screenshot = self.device_state.take_screenshot()
             if screenshot is None:
-                continue
+                targets = []
+            else:
+                targets = list(self._scan_shield_targets_single(screenshot, debug_flag) or [])
 
-            targets = self._scan_shield_targets_single(screenshot, debug_flag)
-            if targets:
-                shot_results.append(targets)
+            if debug_flag or debug_mode:
+                try:
+                    self.device_state.logger.info(
+                        f"[Scan][ward/full][{idx + 1}/{max_shots}] count={len(targets)} result={targets}"
+                    )
+                except Exception:
+                    pass
+
+            shot_results.append(list(targets))
 
             if idx < max_shots - 1:
                 time.sleep(random.uniform(0.10, 0.15))
@@ -1185,8 +1213,40 @@ class GameManager:
         if not shot_results:
             return []
 
-        # 不做跨帧点位聚类；直接取“检测到守护最多”的那一帧。
-        return max(shot_results, key=len)
+        bucket_width = 55
+        support = {}
+
+        for rows in list(shot_results or []):
+            seen_buckets = set()
+            for pos in list(rows or []):
+                if not isinstance(pos, (list, tuple)) or len(pos) < 2:
+                    continue
+                try:
+                    px = int(pos[0])
+                    py = int(pos[1])
+                except Exception:
+                    continue
+
+                bucket = int(round(float(px) / float(bucket_width)))
+                row = support.setdefault(bucket, {"count": 0, "samples": []})
+                row["samples"].append((int(px), int(py)))
+                if bucket not in seen_buckets:
+                    row["count"] = int(row.get("count", 0) or 0) + 1
+                    seen_buckets.add(bucket)
+
+        consensus = []
+        for bucket, info in list(support.items()):
+            if int(info.get("count", 0) or 0) < 2:
+                continue
+            samples = list(info.get("samples") or [])
+            if not samples:
+                continue
+            avg_x = int(round(sum(int(s[0]) for s in samples) / float(len(samples))))
+            avg_y = int(round(sum(int(s[1]) for s in samples) / float(len(samples))))
+            consensus.append((avg_x, avg_y))
+
+        consensus.sort(key=lambda pos: int(pos[0]))
+        return consensus
 
     def scan_shield_targets_for_enemy_followers(self, screenshot, enemy_followers, debug_flag=False):
         """在同一帧内将守护图标映射到敌方随从坐标。
