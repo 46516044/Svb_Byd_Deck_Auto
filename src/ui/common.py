@@ -6,7 +6,7 @@ Keep UI-specific utilities here so `main_ui.py` can stay thin.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Dict
 
 from src.config.paths import get_app_root
 
@@ -31,7 +31,7 @@ def _deep_copy_json_like(value: Any) -> Any:
     return value
 
 
-def deep_update_dict(base: dict, updates: dict) -> dict:
+def deep_update_dict(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
     """递归更新字典：只覆盖updates里出现的字段，不删除base里已有但updates未提供的字段。"""
 
     if not isinstance(base, dict) or not isinstance(updates, dict):

@@ -5,6 +5,7 @@ GPU工具模块
 
 import os
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def setup_gpu():
             try:
                 # 尝试设置torch的默认pin_memory为False
                 torch.utils.data.DataLoader.pin_memory = False
-            except:
+            except Exception:
                 pass
                 
             _gpu_status = False
@@ -79,7 +80,7 @@ def setup_gpu():
     return _gpu_status
 
 
-def get_easyocr_reader(gpu_enabled: bool = None, model_dir: str = None):
+def get_easyocr_reader(gpu_enabled: Optional[bool] = None, model_dir: Optional[str] = None):
     """
     获取EasyOCR读取器实例（全局单例）
     
@@ -91,6 +92,7 @@ def get_easyocr_reader(gpu_enabled: bool = None, model_dir: str = None):
         EasyOCR Reader实例
     """
     global _easyocr_reader, _easyocr_initialized
+    _ = model_dir
     
     # 如果已经初始化过，直接返回缓存的实例
     if _easyocr_initialized:

@@ -125,7 +125,7 @@ def migrate_strategy_effects_schema(config: Dict[str, Any]) -> bool:
             return True
         return str(step.get("op") or "") == "select_option"
 
-    def _ensure_steps(card_name: str, trigger: str) -> list:
+    def _ensure_steps(card_name: str, trigger: str) -> list[Dict[str, Any]]:
         nonlocal changed
         card_eff = effects.get(card_name)
         if not isinstance(card_eff, dict):
@@ -349,7 +349,7 @@ def migrate_strategy_split_attack_times_buff(config: Dict[str, Any]) -> bool:
                     new_steps.append(stat_step)
 
                 target_mode = str(stat_step.get("target") or step.get("target") or "others")
-                attack_times_step = {
+                attack_times_step: Dict[str, Any] = {
                     "op": "buff_attack_times",
                     "target": target_mode,
                     "attack_times": max(1, _safe_int(attack_times_raw, 1)),

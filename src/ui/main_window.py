@@ -7,6 +7,8 @@ This module contains the main window and wires pages + worker threads.
 
 from __future__ import annotations
 
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportIncompatibleMethodOverride=false, reportArgumentType=false
+
 import json
 import os
 import sys

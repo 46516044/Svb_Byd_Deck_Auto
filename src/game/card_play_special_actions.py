@@ -4,22 +4,24 @@
 """
 
 import time
-import random
-from typing import TYPE_CHECKING
-from src.game.game_actions import human_like_drag
+from src.game.drag_utils import human_like_drag
 from src.game.policy.effects import get_card_effect_steps
 
 from src.config.strategy_effects import normalize_effect_steps_to_ops
 from src.game.effects import EffectEngine, HandCardContext
 
-if TYPE_CHECKING:
-    from src.device.device_state import DeviceState
-
 class CardPlaySpecialActions:
     """出牌特殊操作处理类"""
     
-    def __init__(self, device_state: 'DeviceState'):
+    def __init__(self, device_state):
         self.device_state = device_state
+        self._extra_cost_bonus = 0
+        self._request_extra_hand_scan = False
+        self._request_extra_hand_scan_only_when_cost_empty = True
+        self._should_not_consume_cost = False
+        self._should_remove_from_hand = False
+        self._preplay_origin_tag_attempted = False
+        self._preplay_origin_tag_succeeded = False
     
     def play_single_card(self, card):
         """打出单张牌"""
@@ -161,7 +163,7 @@ class CardPlaySpecialActions:
             return None
 
         try:
-            max_wait_s = 1.0
+            max_wait_s = 3.0
             interval_s = 0.2
             deadline = time.time() + float(max_wait_s)
 
@@ -196,4 +198,7 @@ class CardPlaySpecialActions:
 
     def _default_card_play(self, center_x, center_y, target_x):
         """默认卡牌打出"""
-        human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
+        u2_device = self.device_state.require_u2_device()
+        if u2_device is None:
+            return
+        human_like_drag(u2_device, center_x, center_y, target_x, 400)

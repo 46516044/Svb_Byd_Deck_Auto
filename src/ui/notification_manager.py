@@ -9,7 +9,6 @@ import ctypes
 import logging
 import queue
 import threading
-from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
 

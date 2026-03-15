@@ -254,7 +254,7 @@ def _first_effect_steps(
     return []
 
 
-def _step_effect_signature(step: Dict[str, Any]) -> Optional[tuple]:
+def _step_effect_signature(step: Dict[str, Any]) -> Optional[tuple[Any, ...]]:
     if not isinstance(step, dict):
         return None
 
@@ -455,7 +455,7 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                 if idx is None:
                     idx = _norm_select_option(step.get("select_option"))
                 if idx is not None:
-                    normalized = {"op": "select_option", "index": int(idx)}
+                    normalized: Dict[str, Any] = {"op": "select_option", "index": int(idx)}
                     if step.get("on_error"):
                         normalized["on_error"] = step.get("on_error")
                     ops.append(normalized)
@@ -472,7 +472,7 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                         else None
                     )
                     if idx is not None:
-                        normalized = {"op": "select_option", "index": int(idx)}
+                        normalized: Dict[str, Any] = {"op": "select_option", "index": int(idx)}
                         if step.get("on_error"):
                             normalized["on_error"] = step.get("on_error")
                         ops.append(normalized)
@@ -506,7 +506,7 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                 hp_delta = step.get("hp_delta", 1)
                 has_stats = ("atk_delta" in step) or ("hp_delta" in step)
                 if has_stats or ("attack_times" not in step):
-                    buff_step = {
+                    buff_step: Dict[str, Any] = {
                         "op": "buff",
                         "target": target_mode,
                         "atk_delta": _safe_int(atk_delta, 0),
@@ -517,7 +517,7 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                     ops.append(buff_step)
 
                 if step.get("attack_times") is not None:
-                    times_step = {
+                    times_step: Dict[str, Any] = {
                         "op": "buff_attack_times",
                         "target": target_mode,
                         "attack_times": max(1, _safe_int(step.get("attack_times"), 1)),
@@ -527,7 +527,7 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                     ops.append(times_step)
                 continue
             if op_id == "buff_attack_times":
-                normalized = {
+                normalized: Dict[str, Any] = {
                     "op": "buff_attack_times",
                     "target": str(step.get("target") or "others"),
                     "attack_times": max(1, _safe_int(step.get("attack_times"), 1)),

@@ -6,7 +6,6 @@ Move the main "detect screen -> decide -> act" loop out of DeviceManager.
 from __future__ import annotations
 
 import random
-import time
 from typing import TYPE_CHECKING, List
 
 import cv2
@@ -41,6 +40,12 @@ class GameStateMachine:
 
         # Allow immediate pause/stop to unwind.
         device_state.check_interrupt()
+
+        u2_device = device_state.get_u2_device()
+        if u2_device is None:
+            device_state.logger.warning("u2_device未连接，跳过本轮状态机处理")
+            device_state.sleep(1)
+            return
 
         # 获取截图
         screenshot = device_state.take_screenshot()
@@ -84,19 +89,19 @@ class GameStateMachine:
                 if key in skip_buttons:
                     continue
                 if key == "LoginPage":
-                    device_state.u2_device.click(
+                    u2_device.click(
                         659 + random.randint(-10, 10), 338 + random.randint(-10, 10)
                     )
                     continue
 
                 if key == "mainPage":
-                    device_state.u2_device.click(
+                    u2_device.click(
                         987 + random.randint(-10, 10), 447 + random.randint(-10, 10)
                     )
                     continue
 
                 if key == "dailyCard":
-                    device_state.u2_device.click(
+                    u2_device.click(
                         640 + random.randint(-2, 2), 646 + random.randint(-2, 2)
                     )
                     continue
@@ -118,7 +123,7 @@ class GameStateMachine:
                     # 计算中心点并点击
                     center_x = max_loc[0] + template_info["w"] // 2
                     center_y = max_loc[1] + template_info["h"] // 2
-                    device_state.u2_device.click(
+                    u2_device.click(
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
                     )
@@ -137,7 +142,7 @@ class GameStateMachine:
                     # 计算中心点并点击
                     center_x = max_loc[0] + template_info["w"] // 2
                     center_y = max_loc[1] + template_info["h"] // 2
-                    device_state.u2_device.click(
+                    u2_device.click(
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
                     )
@@ -176,7 +181,7 @@ class GameStateMachine:
                     device_state.sleep(0.5)
                     center_x = max_loc[0] + template_info["w"] // 2
                     center_y = max_loc[1] + template_info["h"] // 2
-                    device_state.u2_device.click(
+                    u2_device.click(
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
                     )
@@ -238,7 +243,7 @@ class GameStateMachine:
                     # 自动点击结束回合按钮
                     center_x = max_loc[0] + template_info["w"] // 2
                     center_y = max_loc[1] + template_info["h"] // 2
-                    device_state.u2_device.click(
+                    u2_device.click(
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
                     )
@@ -254,7 +259,7 @@ class GameStateMachine:
                 # 计算中心点并点击（除了结束回合按钮）
                 center_x = max_loc[0] + template_info["w"] // 2
                 center_y = max_loc[1] + template_info["h"] // 2
-                device_state.u2_device.click(
+                u2_device.click(
                     center_x + random.randint(-2, 2),
                     center_y + random.randint(-2, 2),
                 )

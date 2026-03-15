@@ -10,7 +10,7 @@ import logging
 import threading
 import traceback
 import queue
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 from src.config import ConfigManager
 from src.core.logging_utils import setup_logging

@@ -13,7 +13,7 @@ import queue
 import random
 import numpy as np
 import cv2
-from typing import Any, Optional, List, Dict, TYPE_CHECKING
+from typing import Any, Optional, List, Dict, Protocol, TYPE_CHECKING
 from PIL import Image
 from src.utils.resource_utils import ensure_directory
 from src.core.logging_utils import QueueHandler
@@ -31,10 +31,24 @@ def _safe_int(value: Any, default: int) -> int:
         return int(default)
 
 
+class U2DeviceLike(Protocol):
+    """Minimal uiautomator2 device protocol used in this project."""
+
+    def click(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    def swipe(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    def app_start(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    def app_stop(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    def app_current(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
 class _U2DeviceProxy:
     """Proxy for uiautomator2 Device with pause gating."""
 
-    def __init__(self, device_state: "DeviceState", raw_device: Any):
+    def __init__(self, device_state: "DeviceState", raw_device: U2DeviceLike):
         self._device_state = device_state
         self._raw = raw_device
 
@@ -68,6 +82,17 @@ class _U2DeviceProxy:
         self._device_state.check_interrupt()
         return self._raw.swipe(*args, **kwargs)
 
+    def app_start(self, *args, **kwargs):
+        self._device_state.check_interrupt()
+        return self._raw.app_start(*args, **kwargs)
+
+    def app_stop(self, *args, **kwargs):
+        self._device_state.check_interrupt()
+        return self._raw.app_stop(*args, **kwargs)
+
+    def app_current(self, *args, **kwargs):
+        return self._raw.app_current(*args, **kwargs)
+
     def __getattr__(self, item: str):
         attr = getattr(self._raw, item)
         if item in self._gated_methods and callable(attr):
@@ -87,7 +112,7 @@ class DeviceState:
         serial: str,
         config: Dict[str, Any],
         device_config: Optional[Dict[str, Any]] = None,
-        log_queue: Optional[queue.Queue] = None,
+        log_queue: Optional[queue.Queue[Any]] = None,
     ):
         self.serial = serial
         self.config = config
@@ -158,8 +183,8 @@ class DeviceState:
 
         # 设备对象
         # Kept as `Any` (not Optional) to avoid pervasive None-check noise.
-        self.u2_device: Any = None
-        self.u2_device_raw: Any = None
+        self.u2_device: Optional[U2DeviceLike] = None
+        self.u2_device_raw: Optional[U2DeviceLike] = None
         self.adb_device: Any = None
 
         # 游戏管理器
@@ -616,7 +641,20 @@ class DeviceState:
         except Exception:
             pass
 
-    def wrap_u2_device(self, u2_device: Any) -> Any:
+    def get_u2_device(self) -> Optional[U2DeviceLike]:
+        """Get current wrapped u2 device (if connected)."""
+
+        return self.u2_device
+
+    def require_u2_device(self) -> U2DeviceLike:
+        """Get wrapped u2 device or raise a descriptive runtime error."""
+
+        dev = self.u2_device
+        if dev is None:
+            raise RuntimeError("u2_device is not connected")
+        return dev
+
+    def wrap_u2_device(self, u2_device: Optional[U2DeviceLike]) -> Optional[U2DeviceLike]:
         """Wrap uiautomator2 device to gate click/swipe on pause."""
 
         if u2_device is None:
@@ -715,7 +753,7 @@ class DeviceState:
         # 保存统计数据到文件
         self.save_round_statistics()
 
-        self.logger.info(f"===== 对战结束 =====")
+        self.logger.info("===== 对战结束 =====")
         self.logger.info(
             f"回合数: {self.current_round_count}, 持续时间: {int(minutes)}分{int(seconds)}秒"
         )
@@ -780,13 +818,13 @@ class DeviceState:
             round_distribution[match["rounds"]] += 1
 
         # 显示统计数据
-        self.logger.info(f"\n===== 对战回合统计 =====")
+        self.logger.info("\n===== 对战回合统计 =====")
         self.logger.info(f"总对战次数: {total_matches}")
         self.logger.info(f"总回合数: {total_rounds}")
         self.logger.info(f"平均每局回合数: {avg_rounds:.1f}")
 
         # 显示本次运行统计
-        self.logger.info(f"\n===== 本次运行统计 =====")
+        self.logger.info("\n===== 本次运行统计 =====")
         self.logger.info(f"对战次数: {current_run_matches}")
         self.logger.info(f"总回合数: {current_run_rounds}")
         self.logger.info(f"平均每局回合数: {current_run_avg:.1f}")

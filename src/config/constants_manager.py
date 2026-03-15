@@ -3,14 +3,16 @@
 统一管理游戏中的所有常量配置
 """
 
-from typing import Dict, Any, Tuple, List
-from src.config.game_constants import *
+# ruff: noqa: F403,F405
+
+from typing import Dict, Any, Tuple, List, Optional
+from src.config.game_constants import *  # noqa: F403,F405
 
 
 class ConstantsManager:
     """常量管理器类"""
     
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         初始化常量管理器
         
@@ -181,7 +183,7 @@ class ConstantsManager:
         """获取调试路径"""
         return DEBUG_PATHS.get(path_type, "")
     
-    def get_hsv_ranges(self) -> Dict[str, List[int]]:
+    def get_hsv_ranges(self) -> Dict[str, Dict[str, List[int]]]:
         """获取HSV颜色范围"""
         return {
             "enemy_hp": ENEMY_HP_HSV,
@@ -191,6 +193,5 @@ class ConstantsManager:
     def get_resolution_params(self, resolution: str) -> Dict[str, Any]:
         """获取分辨率参数"""
         if resolution == "1080p":
-            return RESOLUTION_1080P
-        else:
-            return RESOLUTION_720P 
+            return globals().get("RESOLUTION_1080P", RESOLUTION_720P)
+        return RESOLUTION_720P 

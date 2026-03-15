@@ -6,19 +6,22 @@ gradually migrated without changing outward behavior.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Any, Protocol
 
 from src.config.card_priorities import is_evolve_priority_card
 
 
-if TYPE_CHECKING:
-    from src.game.game_actions import GameActions
+class _BattleActionsLike(Protocol):
+    device_state: Any
+    follower_manager: Any
+
+    def _scan_enemy_ATK(self, screenshot: Any) -> Any: ...
 
 
 class BattlePolicy(Protocol):
     name: str
 
-    def should_evolve(self, actions: "GameActions") -> bool: ...
+    def should_evolve(self, actions: _BattleActionsLike) -> bool: ...
 
 
 class LegacyBattlePolicy:
@@ -26,7 +29,7 @@ class LegacyBattlePolicy:
 
     name = "legacy"
 
-    def should_evolve(self, actions: "GameActions") -> bool:
+    def should_evolve(self, actions: _BattleActionsLike) -> bool:
         ds = actions.device_state
 
         # Must have points.
@@ -52,7 +55,11 @@ class LegacyBattlePolicy:
 
         # Condition 2: our green (storm) followers exist.
         try:
-            our_followers = actions.follower_manager.get_positions() or []
+            manager = getattr(actions, "follower_manager", None)
+            if manager is None or not hasattr(manager, "get_positions"):
+                our_followers = []
+            else:
+                our_followers = manager.get_positions() or []
         except Exception:
             our_followers = []
         green_followers = [f for f in our_followers if len(f) > 2 and f[2] == "green"]

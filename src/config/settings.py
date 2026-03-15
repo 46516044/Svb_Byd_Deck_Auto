@@ -3,9 +3,7 @@
 包含默认配置、免责声明等常量
 """
 
-import datetime
 import json
-import os
 import logging
 
 from src.config.paths import get_config_path
@@ -41,7 +39,7 @@ DISCLAIMER = """
 - 通过任何渠道要求付款
 - 索取账号密码或支付信息
 
-""".format(date=datetime.date.today().strftime("%Y-%m-%d"))
+"""
 
 # ============================= 默认配置 =============================
 DEFAULT_CONFIG = {
@@ -101,15 +99,15 @@ DEFAULT_CONFIG = {
 HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT = (0.12, 0.16)
 
 # Optional runtime config injection (avoids repeated disk reads).
-_RUNTIME_CONFIG = None
-_CACHED_DRAG_RANGE = None
-_WARNED_BATTLE_FALLBACK = False
+_runtime_config = None
+_cached_drag_range = None
+_warned_battle_fallback = False
 
 
 def set_runtime_config(config):
     """Inject a runtime config dict (e.g. ConfigManager.config)."""
-    global _RUNTIME_CONFIG
-    _RUNTIME_CONFIG = config
+    global _runtime_config
+    _runtime_config = config
 
 
 def _extract_drag_range(config):
@@ -131,30 +129,30 @@ def _extract_drag_range(config):
 
 def get_human_like_drag_duration_range():
     # Prefer in-memory config if provided.
-    if isinstance(_RUNTIME_CONFIG, dict):
-        return _extract_drag_range(_RUNTIME_CONFIG) or HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
+    if isinstance(_runtime_config, dict):
+        return _extract_drag_range(_runtime_config) or HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
 
     # In battle hot paths, do not read from disk.
-    global _WARNED_BATTLE_FALLBACK
+    global _warned_battle_fallback
     if is_in_battle():
-        if not _WARNED_BATTLE_FALLBACK:
-            _WARNED_BATTLE_FALLBACK = True
+        if not _warned_battle_fallback:
+            _warned_battle_fallback = True
             logger.warning(
                 "[IO] battle context: runtime config not injected; "
                 "using default drag range without disk read"
             )
         return HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
 
-    global _CACHED_DRAG_RANGE
-    if _CACHED_DRAG_RANGE is not None:
-        return _CACHED_DRAG_RANGE
+    global _cached_drag_range
+    if _cached_drag_range is not None:
+        return _cached_drag_range
 
     config_path = get_config_path()
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-            _CACHED_DRAG_RANGE = _extract_drag_range(config) or HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
-            return _CACHED_DRAG_RANGE
+            _cached_drag_range = _extract_drag_range(config) or HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
+            return _cached_drag_range
     except Exception:
-        _CACHED_DRAG_RANGE = HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
-        return _CACHED_DRAG_RANGE
+        _cached_drag_range = HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
+        return _cached_drag_range

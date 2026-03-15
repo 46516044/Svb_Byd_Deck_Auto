@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
 
 class LogListener(QThread):
@@ -13,7 +13,7 @@ class LogListener(QThread):
 
     log_signal = pyqtSignal(str)
 
-    def __init__(self, log_queue, parent: Optional[object] = None):
+    def __init__(self, log_queue, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._log_queue = log_queue
         self.running = True

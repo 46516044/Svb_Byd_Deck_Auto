@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportIncompatibleMethodOverride=false
+
 import base64
 import json
 import os

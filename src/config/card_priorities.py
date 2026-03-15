@@ -24,14 +24,14 @@ from src.utils.card_filename import (
 logger = logging.getLogger(__name__)
 
 
-_RUNTIME_CONFIG: Optional[Dict[str, Any]] = None
+_runtime_config: Optional[Dict[str, Any]] = None
 
 
 def set_runtime_config(config: Optional[Dict[str, Any]]) -> None:
     """Inject a runtime config dict (e.g. ConfigManager.config)."""
 
-    global _RUNTIME_CONFIG
-    _RUNTIME_CONFIG = config if isinstance(config, dict) else None
+    global _runtime_config
+    _runtime_config = config if isinstance(config, dict) else None
 
 
 def reload_config(config: Optional[Dict[str, Any]] = None) -> None:
@@ -51,8 +51,8 @@ def reload_config(config: Optional[Dict[str, Any]] = None) -> None:
 def _effective_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if isinstance(config, dict):
         return config
-    if isinstance(_RUNTIME_CONFIG, dict):
-        return _RUNTIME_CONFIG
+    if isinstance(_runtime_config, dict):
+        return _runtime_config
     return {}
 
 

@@ -9,10 +9,11 @@ import time
 
 import cv2
 import numpy as np
-from typing import Dict, Any, List
+from typing import Dict, Any
 from src.core.run_control import PauseRequested, StopRequested
 from src.device.device_state import DeviceState
 from src.game.game_manager import GameManager
+from src.game.state_machine import GameStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class DeviceManager:
             
             # 初始化游戏管理器
             game_manager = GameManager(device_state)
+            game_manager.state_machine = GameStateMachine()
             device_state.game_manager = game_manager
             
             # 运行设备主循环
@@ -154,7 +156,7 @@ class DeviceManager:
                 # 检测到已开始的对战，设置为第1场
                 device_state.current_run_matches = 0
                 device_state.in_match = True
-                device_state.logger.debug(f"检测到已开始的对战，将作为第1场计算")
+                device_state.logger.debug("检测到已开始的对战，将作为第1场计算")
             else:
                 device_state.logger.debug("未检测到进行中的对战")
         else:

@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportIncompatibleMethodOverride=false
+
 import json
 import os
 import shutil
-import time
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QPixmap

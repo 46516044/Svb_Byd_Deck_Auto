@@ -6,7 +6,7 @@ import time
 import traceback
 from typing import Callable, Optional
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
 
 class ScriptRunner(QThread):
@@ -19,7 +19,7 @@ class ScriptRunner(QThread):
         self,
         run_main_script: Callable[..., object],
         log_queue,
-        parent: Optional[object] = None,
+        parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
         self._run_main_script = run_main_script

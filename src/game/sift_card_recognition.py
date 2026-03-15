@@ -3,6 +3,8 @@ SIFT卡牌识别模块
 基于SIFT特征匹配识别手牌区域中的卡牌及其费用
 """
 
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportMissingTypeArgument=false
+
 import cv2
 import numpy as np
 import os

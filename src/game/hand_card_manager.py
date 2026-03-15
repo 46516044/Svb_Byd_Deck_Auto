@@ -5,30 +5,42 @@
 
 import logging
 import time
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional, Protocol
 from src.config.paths import get_card_cost_dir
 from .sift_card_recognition import SiftCardRecognition
 
 logger = logging.getLogger(__name__)
 
+CardInfo = Dict[str, Any]
+
+
+class _U2DeviceLike(Protocol):
+    def click(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class _DeviceStateLike(Protocol):
+    def take_screenshot(self) -> Any: ...
+
+    def get_u2_device(self) -> Optional[_U2DeviceLike]: ...
+
 
 class HandCardManager:
     """手牌管理器类"""
     
-    def __init__(self, device_state=None):
+    def __init__(self, device_state: Optional[_DeviceStateLike] = None):
         """
         初始化手牌管理器
         
         Args:
             device_state: 设备状态对象
         """
-        self.device_state = device_state
+        self.device_state: Optional[_DeviceStateLike] = device_state
         self.hand_area = (229, 539, 1130, 710)  # 手牌区域坐标
 
         # Per-device/per-instance recognizer (templates are shared internally).
         self.sift_recognition = SiftCardRecognition(get_card_cost_dir(ensure=True))
 
-    def recognize_hand_cards(self, screenshot, silent=False) -> List[Dict]:
+    def recognize_hand_cards(self, screenshot, silent=False) -> List[CardInfo]:
         """
         使用SIFT识别手牌区域中的卡牌
         
@@ -66,7 +78,7 @@ class HandCardManager:
             logger.error(f"手牌识别出错: {str(e)}")
             return []
     
-    def get_hand_cards_with_retry(self, max_retries: int = 3, silent: bool = False) -> List[Dict]:
+    def get_hand_cards_with_retry(self, max_retries: int = 3, silent: bool = False) -> List[CardInfo]:
         """
         带重试机制的手牌识别
         
@@ -77,10 +89,17 @@ class HandCardManager:
         Returns:
             List[Dict]: 识别到的卡牌列表
         """
+        device_state = self.device_state
+        if device_state is None:
+            if not silent:
+                logger.warning("device_state未初始化，无法识别手牌")
+            return []
+        assert device_state is not None
+
         for attempt in range(max_retries):
             try:
                 # 获取截图
-                screenshot = self.device_state.take_screenshot()
+                screenshot = device_state.take_screenshot()
                 if screenshot is None:
                     if not silent:
                         logger.warning(f"第{attempt + 1}次尝试获取截图失败")
@@ -97,8 +116,14 @@ class HandCardManager:
                     
                     # 未识别到手牌时，点击展牌按钮再重试
                     from src.config.game_constants import SHOW_CARDS_BUTTON, SHOW_CARDS_RANDOM_X, SHOW_CARDS_RANDOM_Y
-                    import random, time
-                    self.device_state.u2_device.click(
+                    import random
+                    u2_device = device_state.get_u2_device()
+                    if u2_device is None:
+                        if not silent:
+                            logger.warning("u2_device未连接，无法点击展牌按钮")
+                        continue
+
+                    u2_device.click(
                         SHOW_CARDS_BUTTON[0] + random.randint(SHOW_CARDS_RANDOM_X[0], SHOW_CARDS_RANDOM_X[1]),
                         SHOW_CARDS_BUTTON[1] + random.randint(SHOW_CARDS_RANDOM_Y[0], SHOW_CARDS_RANDOM_Y[1])
                     )
@@ -150,7 +175,7 @@ class HandCardManager:
         """
         return self.sift_recognition.get_all_card_costs()
     
-    def sort_cards_by_cost(self, cards: List[Dict]) -> List[Dict]:
+    def sort_cards_by_cost(self, cards: List[CardInfo]) -> List[CardInfo]:
         """
         按费用排序卡牌（从低到高）
         
@@ -162,7 +187,7 @@ class HandCardManager:
         """
         return sorted(cards, key=lambda card: card['cost'])
     
-    def sort_cards_by_position(self, cards: List[Dict]) -> List[Dict]:
+    def sort_cards_by_position(self, cards: List[CardInfo]) -> List[CardInfo]:
         """
         按位置排序卡牌（从左到右）
         
@@ -174,7 +199,7 @@ class HandCardManager:
         """
         return sorted(cards, key=lambda card: card['center'][0])
     
-    def filter_cards_by_cost(self, cards: List[Dict], max_cost: int) -> List[Dict]:
+    def filter_cards_by_cost(self, cards: List[CardInfo], max_cost: int) -> List[CardInfo]:
         """
         按费用过滤卡牌
         
@@ -187,7 +212,7 @@ class HandCardManager:
         """
         return [card for card in cards if card['cost'] <= max_cost]
     
-    def get_cards_summary(self, cards: List[Dict]) -> str:
+    def get_cards_summary(self, cards: List[CardInfo]) -> str:
         """
         获取卡牌摘要信息
         

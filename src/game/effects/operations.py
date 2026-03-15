@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from src.config.game_constants import BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
 
@@ -16,6 +16,16 @@ def _safe_int(v: Any, default: int = 0) -> int:
         return int(v)
     except Exception:
         return int(default)
+
+
+def _get_u2_device(ds: Any) -> Optional[Any]:
+    try:
+        getter = getattr(ds, "get_u2_device", None)
+        if callable(getter):
+            return getter()
+        return None
+    except Exception:
+        return None
 
 
 class OperationExecutor:
@@ -37,8 +47,12 @@ class OperationExecutor:
         except Exception:
             pass
 
+        u2_device = _get_u2_device(ds)
+        if u2_device is None:
+            return False
+
         time.sleep(0.3)
-        ds.u2_device.click(x + random.randint(-15, 15), y + random.randint(-2, 2))
+        u2_device.click(x + random.randint(-15, 15), y + random.randint(-2, 2))
         time.sleep(0.5)
         return True
 
@@ -91,7 +105,11 @@ class OperationExecutor:
             ds.logger.info("[Effect] cancel_action")
         except Exception:
             pass
-        ds.u2_device.click(
+        u2_device = _get_u2_device(ds)
+        if u2_device is None:
+            return False
+
+        u2_device.click(
             BLANK_CLICK_POSITION[0] + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM),
             BLANK_CLICK_POSITION[1] + random.randint(-BLANK_CLICK_RANDOM, BLANK_CLICK_RANDOM),
         )
@@ -370,8 +388,12 @@ class OperationExecutor:
         except Exception:
             pass
 
+        u2_device = _get_u2_device(ds)
+        if u2_device is None:
+            return False
+
         for i, (x, y) in enumerate(list(positions)[:n], 1):
-            ds.u2_device.click(int(x), int(y))
+            u2_device.click(int(x), int(y))
             try:
                 ds.logger.info(f"[Effect] click_target {i}: ({int(x)},{int(y)})")
             except Exception:

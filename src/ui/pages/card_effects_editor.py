@@ -32,7 +32,6 @@ from PyQt5.QtWidgets import (
 
 from src.config.config_repository import ConfigRepository
 from src.config.effects_registry import (
-    CONTEXT_FOLLOWER,
     CONTEXT_HAND_CARD,
     get_operation,
     get_operations,

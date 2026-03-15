@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Tuple
+from typing import List, Tuple
 
 from PyQt5.QtCore import QObject, pyqtSignal
 

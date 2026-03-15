@@ -168,7 +168,7 @@ class ConfigManager:
             config[last_key] = value
         return self._save_config(self.config)
     
-    def get_devices(self) -> list:
+    def get_devices(self) -> list[Dict[str, Any]]:
         """获取设备配置列表"""
         return self.config.get("devices", [])
     

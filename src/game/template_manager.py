@@ -7,7 +7,7 @@ import cv2
 import os
 import logging
 import numpy as np
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Dict, Any, Optional, Tuple
 from src.utils.resource_utils import resource_path
 
 logger = logging.getLogger(__name__)

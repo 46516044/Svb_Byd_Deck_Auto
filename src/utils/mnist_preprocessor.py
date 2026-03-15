@@ -85,7 +85,7 @@ class MNISTPreprocessor:
         self.green_erosion_iterations = green_erosion_iterations
         self.green_edge_margin = green_edge_margin
 
-    def preprocess(self, img: np.ndarray, mask: Optional[np.ndarray] = None) -> list:
+    def preprocess(self, img: np.ndarray, mask: Optional[np.ndarray] = None) -> list[np.ndarray]:
         """
         完整预处理流程
 
@@ -215,12 +215,6 @@ class MNISTPreprocessor:
         is_white = ((r > 150) & (g > 140) & (b > 100) &
                    (s < 80) & (v > 150) & (min_channel > 100)).astype(np.uint8) * 255
 
-        # PINK: 粉色抗锯齿 (红色数字的边缘)
-        # 排除金棕色括号：限制G值上限
-        is_pink = ((r > 140) & (g > 70) & (g < 140) & (b > 40) & (b < 150) &
-                  (s > 40) & (s < 130) & (r > g * 1.15) & (r > b * 1.2) &
-                  (v > 140)).astype(np.uint8) * 255
-
         # BRIGHT_RED: 亮红色数字中心（之前被错误地归类为RED背景）
         # 区分亮红色（数字）和暗红色（背景）：使用可配置的V阈值
         is_bright_red = ((r > 140) & (r > g * 1.3) & (r > b * 1.2) &
@@ -278,13 +272,6 @@ class MNISTPreprocessor:
         min_channel = np.minimum(np.minimum(r, g), b)
         is_white = ((r > 150) & (g > 140) & (b > 100) &
                    (s < 80) & (v > 150) & (min_channel > 100))
-
-        # PINK - 红色数字的抗锯齿像素
-        # 排除金棕色括号：限制G值上限（括号G值高达142）
-        is_pink = ((r > 140) & (g > 70) & (g < 140) & (b > 40) & (b < 150) &
-                  (s > 40) & (s < 130) &
-                  (r > g * 1.15) & (r > b * 1.2) &
-                  (v > 140))
 
         # BRIGHT_RED - 亮红色数字中心
         # 区分亮红色（数字）和暗红色（背景）：使用可配置的V阈值
@@ -457,9 +444,9 @@ class MNISTPreprocessor:
                        f"列{mid_col2}={white_pixels_col2}, "
                        f"总计={total_white}, 阈值={self.split_threshold}")
 
-        return total_white < self.split_threshold
+        return bool(total_white < self.split_threshold)
 
-    def _split_double_digit(self, binary_128: np.ndarray) -> tuple:
+    def _split_double_digit(self, binary_128: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """
         分割双数字为左右两半
 
@@ -481,7 +468,11 @@ class MNISTPreprocessor:
 
         return left_half, right_half
 
-    def preprocess_batch(self, images: list, masks: Optional[list] = None) -> list:
+    def preprocess_batch(
+        self,
+        images: list[np.ndarray],
+        masks: Optional[list[Optional[np.ndarray]]] = None,
+    ) -> list[list[np.ndarray]]:
         """
         批量预处理
 
@@ -494,11 +485,14 @@ class MNISTPreprocessor:
             - 单数字: [28x28灰度图]
             - 双数字: [左数字28x28, 右数字28x28]
         """
+        masks_iter: list[Optional[np.ndarray]]
         if masks is None:
-            masks = [None] * len(images)
+            masks_iter = [None for _ in images]
+        else:
+            masks_iter = list(masks)
 
-        results = []
-        for img, mask in zip(images, masks):
+        results: list[list[np.ndarray]] = []
+        for img, mask in zip(images, masks_iter):
             preprocessed = self.preprocess(img, mask)  # 返回列表
             results.append(preprocessed)
 
@@ -525,8 +519,11 @@ def create_default_preprocessor(debug: bool = False) -> MNISTPreprocessor:
     )
 
 
-def preprocess_for_mnist(img: np.ndarray, mask: Optional[np.ndarray] = None,
-                        debug: bool = False) -> np.ndarray:
+def preprocess_for_mnist(
+    img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    debug: bool = False,
+) -> np.ndarray:
     """
     便捷函数: 单张图像预处理
 
@@ -539,4 +536,7 @@ def preprocess_for_mnist(img: np.ndarray, mask: Optional[np.ndarray] = None,
         预处理后的图像 (28x28灰度图)
     """
     preprocessor = create_default_preprocessor(debug=debug)
-    return preprocessor.preprocess(img, mask)
+    processed = preprocessor.preprocess(img, mask)
+    if processed:
+        return processed[0]
+    return np.zeros((28, 28), dtype=np.uint8)

@@ -6,7 +6,7 @@ This module is runtime-only (allowed to call cv/u2/game managers).
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 from src.config.card_priorities import get_evolve_priority_cards
 from src.config.game_constants import DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_TARGET

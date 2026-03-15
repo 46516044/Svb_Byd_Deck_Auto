@@ -10,7 +10,7 @@ Future steps can extend this to support loading/merging external profile files.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 @dataclass(frozen=True)

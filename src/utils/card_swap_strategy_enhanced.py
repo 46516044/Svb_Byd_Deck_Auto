@@ -15,6 +15,8 @@
 - 删除了冗余的规则3-7（核心费用强制、曲线完整性等）
 """
 
+# pyright: reportMissingTypeArgument=false
+
 from typing import List, Tuple, Dict, Optional
 import logging
 

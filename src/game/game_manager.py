@@ -10,10 +10,11 @@ import time
 import logging
 import os
 import onnxruntime
+from typing import Any, cast
+from PIL import Image
 from src.game.follower_manager import FollowerManager
 from src.game.template_manager import TemplateManager
 from src.game.game_actions import GameActions
-from src.game.state_machine import GameStateMachine
 from src.utils.gpu_utils import get_easyocr_reader
 from src.utils.resource_utils import resource_path
 from src.utils.card_filename import (
@@ -22,7 +23,6 @@ from src.utils.card_filename import (
     parse_follower_stat_suffix,
 )
 from src.utils.hp_detection import (
-    detect_hp_in_window,
     sliding_window_detect,
     merge_detections,
     recognize_hp_with_fallback,
@@ -32,18 +32,13 @@ from src.config.paths import get_card_cost_dir
 from src.config.game_constants import (
     ENEMY_HP_REGION,
     ENEMY_HP_REGION_UP,
-    ENEMY_HP_HSV,
     ENEMY_FOLLOWER_Y_ADJUST,
     ENEMY_FOLLOWER_Y_RANDOM,
     OUR_FOLLOWER_REGION,
     OUR_ATK_REGION,
     OUR_FOLLOWER_HSV,
-    ENEMY_HP_REGION_OFFSET_X,
-    ENEMY_HP_REGION_OFFSET_Y,
     ENEMY_FOLLOWER_OFFSET_X,
-    ENEMY_FOLLOWER_OFFSET_Y,
     ENEMY_ATK_REGION,
-    OCR_CROP_HALF_SIZE,
     ENEMY_SHIELD_REGION,
     ENEMY_ATK_HSV,
     HP_WINDOW_WIDTH,
@@ -58,6 +53,7 @@ from src.config.game_constants import (
 )
 
 logger = logging.getLogger(__name__)
+cv2 = cast(Any, cv2)
 
 
 class GameManager:
@@ -69,7 +65,8 @@ class GameManager:
         # 传递设备配置给模板管理器
         self.template_manager = TemplateManager(device_state.device_config)
         self.game_actions = GameActions(device_state)
-        self.state_machine = GameStateMachine()
+        self.state_machine: Any = None
+        self._board_sift_templates: dict[str, dict[str, Any]] | None = None
         self.reader = get_easyocr_reader()
 
         # 加载MNIST模型用于HP识别的后备方案
@@ -157,8 +154,7 @@ class GameManager:
         )
 
         # 创建用于调试的图像
-        if debug_flag:
-            debug_img = region_blue_cv.copy()
+        debug_img = region_blue_cv.copy() if debug_flag else None
 
         for cnt in blue_contours:
             rect = cv2.minAreaRect(cnt)
@@ -171,10 +167,8 @@ class GameManager:
             if 15 < max_dim < 40 and 3 < min_dim < 15 and area < 200:
                 # 区域截图中敌方随从的中心位置
                 in_card_center_x_full = center_x + 50
-                in_card_center_y_full = center_y - 46
                 # 全局中敌方随从中心位置
                 center_x_full = in_card_center_x_full + 263
-                center_y_full = in_card_center_y_full + 297
 
                 # 添加到结果列表
                 enemy_atk_positions.append((center_x_full, 227 + random.randint(-5, 5)))
@@ -182,26 +176,29 @@ class GameManager:
                 # Debug 标注
                 if debug_flag:
                     # 画中心点
-                    cv2.circle(
-                        debug_img, (int(center_x), int(center_y)), 5, (0, 0, 255), -1
-                    )
+                    if debug_img is not None:
+                        cv2.circle(
+                            debug_img, (int(center_x), int(center_y)), 5, (0, 0, 255), -1
+                        )
                     # 画外接矩形
                     box = cv2.boxPoints(rect).astype(int)
-                    cv2.drawContours(debug_img, [box], 0, (0, 255, 0), 2)
+                    if debug_img is not None:
+                        cv2.drawContours(debug_img, [box], 0, (0, 255, 0), 2)
                     # 添加标注文字
                     label = f"W:{w:.1f} H:{h:.1f} Area:{area:.0f}"
-                    cv2.putText(
-                        debug_img,
-                        label,
-                        (int(center_x), int(center_y)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        (255, 0, 0),
-                        1,
-                    )
+                    if debug_img is not None:
+                        cv2.putText(
+                            debug_img,
+                            label,
+                            (int(center_x), int(center_y)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            (255, 0, 0),
+                            1,
+                        )
 
         # 保存debug图像
-        if debug_flag:
+        if debug_flag and debug_img is not None:
             timestamp = int(time.time() * 1000)
             cv2.imwrite(f"debug/enemy_ATK_debug_{timestamp}.png", debug_img)
             cv2.imwrite(f"debug/enemy_ATK_mask_{timestamp}.png", blue_eroded)
@@ -224,9 +221,9 @@ class GameManager:
             - hp_value: HP as string (e.g., "5", "99")
         """
         timestamp = int(time.time() * 1000)
-        HP_REGION = ENEMY_HP_REGION
+        hp_region = ENEMY_HP_REGION
         if is_select:
-            HP_REGION = ENEMY_HP_REGION_UP
+            hp_region = ENEMY_HP_REGION_UP
         try:
             # 确保debug目录存在
             if debug_flag:
@@ -236,8 +233,8 @@ class GameManager:
                 cv2.imwrite(f"debug/screenshot_{timestamp}.png", screenshot_cv)
 
             # Step 1: Crop enemy HP region
-            x1, y1, x2, y2 = HP_REGION
-            region = screenshot.crop(HP_REGION)
+            x1, y1, x2, y2 = hp_region
+            region = screenshot.crop(hp_region)
             region_np = np.array(region)
             region_cv = cv2.cvtColor(region_np, cv2.COLOR_RGB2BGR)
 
@@ -358,13 +355,6 @@ class GameManager:
             sort_desc: True=按x坐标从右到左排序；False=从左到右排序
             shot_delay_range: 保留参数（单帧模式下不使用）
         """
-        import time
-        import random
-        from math import hypot
-        import numpy as np
-        import cv2
-        from PIL import Image
-        import os
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         base_shot = screenshot
@@ -379,7 +369,11 @@ class GameManager:
         def _type_priority(t: str) -> int:
             return {"green": 3, "yellow": 2, "normal": 1}.get(t, 0)
 
-        def _dedup_by_x(followers, x_thresh: int = 54):
+        # Wider x-axis dedup threshold to absorb animation jitter and mixed
+        # contour artifacts (e.g. one follower detected as both green+normal).
+        dedup_x_thresh = 96
+
+        def _dedup_by_x(followers, x_thresh: int = dedup_x_thresh):
             """按x轴聚类去重：同一随从保留更高优先级类型，并尽量保留名字"""
             if not followers:
                 return []
@@ -455,6 +449,9 @@ class GameManager:
             else:
                 debug_img_color = None
                 debug_img_blue = None
+            dbg_color = cast(Any, debug_img_color)
+            dbg_blue = cast(Any, debug_img_blue)
+            cv2_any = cast(Any, cv2)
             hsv_color = cv2.cvtColor(region_color_cv, cv2.COLOR_BGR2HSV)
             hsv_blue = cv2.cvtColor(region_blue_cv, cv2.COLOR_BGR2HSV)
             settings = OUR_FOLLOWER_HSV
@@ -524,7 +521,7 @@ class GameManager:
                     ret, sure_fg = cv2.threshold(dist, 0.5 * dist.max(), 255, 0)
                     sure_fg = np.uint8(sure_fg)
                     # 3. 标记不同目标
-                    ret, markers = cv2.connectedComponents(sure_fg)
+                    ret, markers = cv2_any.connectedComponents(sure_fg)
                     markers = markers + 1
                     markers[mask == 0] = 0
                     # 4. 分水岭
@@ -556,8 +553,8 @@ class GameManager:
                             # 调整debug坐标，因为debug图像包含了更大的区域
                             debug_cx = int(cx)
                             debug_cy = int(cy) + 30  # 向下偏移30像素
-                            cv2.circle(
-                                debug_img_color,
+                            cv2_any.circle(
+                                dbg_color,
                                 (debug_cx, debug_cy),
                                 7,
                                 (0, 255, 255),
@@ -594,8 +591,8 @@ class GameManager:
                             # 调整debug坐标，因为debug图像包含了更大的区域
                             debug_box = box.copy()
                             debug_box[:, 1] += 30  # Y坐标向下偏移30像素
-                            cv2.drawContours(
-                                debug_img_color, [debug_box], 0, (0, 255, 0), 2
+                            cv2_any.drawContours(
+                                dbg_color, [debug_box], 0, (0, 255, 0), 2
                             )
                             lcx, lcy = int(left_center[0]), int(left_center[1])
                             rcx, rcy = int(right_center[0]), int(right_center[1])
@@ -604,23 +601,23 @@ class GameManager:
                             debug_lcy = lcy + 30
                             debug_rcx = rcx
                             debug_rcy = rcy + 30
-                            cv2.circle(
-                                debug_img_color,
+                            cv2_any.circle(
+                                dbg_color,
                                 (debug_lcx, debug_lcy),
                                 5,
                                 (0, 0, 255),
                                 -1,
                             )
-                            cv2.circle(
-                                debug_img_color,
+                            cv2_any.circle(
+                                dbg_color,
                                 (debug_rcx, debug_rcy),
                                 5,
                                 (0, 0, 255),
                                 -1,
                             )
                             label = f"W:{w:.1f} H:{h:.1f} Area:{area:.0f}"
-                            cv2.putText(
-                                debug_img_color,
+                            cv2_any.putText(
+                                dbg_color,
                                 label,
                                 (debug_lcx, debug_lcy - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -628,8 +625,8 @@ class GameManager:
                                 (255, 0, 0),
                                 1,
                             )
-                            cv2.putText(
-                                debug_img_color,
+                            cv2_any.putText(
+                                dbg_color,
                                 label,
                                 (debug_rcx, debug_rcy - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -651,23 +648,23 @@ class GameManager:
                             # 调整debug坐标，因为debug图像包含了更大的区域
                             debug_box = box.copy()
                             debug_box[:, 1] += 30  # Y坐标向下偏移30像素
-                            cv2.drawContours(
-                                debug_img_color, [debug_box], 0, (0, 255, 0), 2
+                            cv2_any.drawContours(
+                                dbg_color, [debug_box], 0, (0, 255, 0), 2
                             )
                             cx, cy = int(center_x), int(center_y)
                             # 调整debug坐标，因为debug图像包含了更大的区域
                             debug_cx = cx
                             debug_cy = cy + 30  # 向下偏移30像素
-                            cv2.circle(
-                                debug_img_color,
+                            cv2_any.circle(
+                                dbg_color,
                                 (debug_cx, debug_cy),
                                 5,
                                 (0, 0, 255),
                                 -1,
                             )
                             label = f"W:{w:.1f} H:{h:.1f} Area:{area:.0f}"
-                            cv2.putText(
-                                debug_img_color,
+                            cv2_any.putText(
+                                dbg_color,
                                 label,
                                 (debug_cx, debug_cy - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -691,7 +688,7 @@ class GameManager:
                     ret, sure_fg = cv2.threshold(dist, 0.5 * dist.max(), 255, 0)
                     sure_fg = np.uint8(sure_fg)
                     # 3. 连通域
-                    ret, markers = cv2.connectedComponents(sure_fg)
+                    ret, markers = cv2_any.connectedComponents(sure_fg)
                     markers = markers + 1
                     markers[mask == 0] = 0
                     # 4. 分水岭
@@ -737,8 +734,8 @@ class GameManager:
                             # 调整debug坐标，因为debug图像包含了更大的区域
                             debug_cx = int(cx)
                             debug_cy = int(cy) + 30  # 向下偏移30像素
-                            cv2.circle(
-                                debug_img_color,
+                            cv2_any.circle(
+                                dbg_color,
                                 (debug_cx, debug_cy),
                                 7,
                                 (0, 255, 255),
@@ -771,19 +768,19 @@ class GameManager:
                         # 调整debug坐标，因为debug图像包含了更大的区域
                         debug_box = box.copy()
                         debug_box[:, 1] += 30  # Y坐标向下偏移30像素
-                        cv2.drawContours(
-                            debug_img_color, [debug_box], 0, (0, 255, 255), 2
+                        cv2_any.drawContours(
+                            dbg_color, [debug_box], 0, (0, 255, 255), 2
                         )
                         cx, cy = int(center_x), int(center_y)
                         # 调整debug坐标，因为debug图像包含了更大的区域
                         debug_cx = cx
                         debug_cy = cy + 30  # 向下偏移30像素
-                        cv2.circle(
-                            debug_img_color, (debug_cx, debug_cy), 5, (0, 0, 255), -1
+                        cv2_any.circle(
+                            dbg_color, (debug_cx, debug_cy), 5, (0, 0, 255), -1
                         )
                         label = f"W:{w:.1f} H:{h:.1f} Area:{area:.0f}"
-                        cv2.putText(
-                            debug_img_color,
+                        cv2_any.putText(
+                            dbg_color,
                             label,
                             (debug_cx, debug_cy - 10),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -839,17 +836,17 @@ class GameManager:
                         # 调整debug坐标，因为debug图像包含了更大的区域
                         debug_box = box.copy()
                         debug_box[:, 1] += 30  # Y坐标向下偏移30像素
-                        cv2.drawContours(debug_img_blue, [debug_box], 0, (255, 0, 0), 2)
+                        cv2_any.drawContours(dbg_blue, [debug_box], 0, (255, 0, 0), 2)
                         cx, cy = int(center_x), int(center_y)
                         # 调整debug坐标，因为debug图像包含了更大的区域
                         debug_cx = cx
                         debug_cy = cy + 30  # 向下偏移30像素
-                        cv2.circle(
-                            debug_img_blue, (debug_cx, debug_cy), 5, (0, 0, 255), -1
+                        cv2_any.circle(
+                            dbg_blue, (debug_cx, debug_cy), 5, (0, 0, 255), -1
                         )
                         label = f"W:{w:.1f} H:{h:.1f} Area:{area:.0f}"
-                        cv2.putText(
-                            debug_img_blue,
+                        cv2_any.putText(
+                            dbg_blue,
                             label,
                             (debug_cx, debug_cy - 10),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -862,10 +859,10 @@ class GameManager:
                 import time
 
                 timestamp = int(time.time() * 1000)
-                cv2.imwrite(
-                    f"debug/our_follower_region_{timestamp}.png", debug_img_color
+                cv2_any.imwrite(
+                    f"debug/our_follower_region_{timestamp}.png", dbg_color
                 )
-                cv2.imwrite(f"debug/our_hp_region_{timestamp}.png", debug_img_blue)
+                cv2_any.imwrite(f"debug/our_hp_region_{timestamp}.png", dbg_blue)
 
             follower_positions.sort(key=lambda pos: pos[0], reverse=sort_desc)
             return follower_positions, shot_all_follower_positions
@@ -877,7 +874,7 @@ class GameManager:
         )
         followers = _dedup_by_x([(x, y, t, None) for (x, y, t) in followers])
 
-        # 矩形区域去重（仅用于SIFT命名；左上角x轴在54像素内视为同一个随从区域）
+        # 矩形区域去重（仅用于SIFT命名；左上角x轴在阈值内视为同一个随从区域）
         deduplicated_follower_positions = []
         if with_names and all_rectangles:
             for rect_coords in all_rectangles:
@@ -886,7 +883,7 @@ class GameManager:
                 found = False
                 for existing_rect in deduplicated_follower_positions:
                     (ex1, ey1), (ex2, ey2) = existing_rect
-                    if abs(x1 - ex1) < 54:
+                    if abs(x1 - ex1) < dedup_x_thresh:
                         found = True
                         break
                 if not found:
@@ -896,7 +893,7 @@ class GameManager:
         def perform_sift_recognition_on_rectangles(base_screenshot):
             """对去重后的all_follower_positions中的每个矩形区域进行SIFT识别"""
             import os
-            from PIL import Image
+            cv2_any = cast(Any, cv2)
 
             supported_exts = (".png", ".jpg", ".jpeg", ".webp")
 
@@ -943,7 +940,7 @@ class GameManager:
                             return None
                     else:
                         return None
-                except Exception as e:
+                except Exception:
                     return None
 
                 TEMPLATE_SCALE_FACTOR = 0.4
@@ -971,7 +968,7 @@ class GameManager:
                 template_gray = cv2.GaussianBlur(template_gray, (3, 3), 0.5)
 
                 # SIFT特征提取
-                sift = cv2.SIFT_create(
+                sift = cv2_any.SIFT_create(
                     nfeatures=0, contrastThreshold=0.02, edgeThreshold=15, sigma=1.6
                 )
                 tkp, tdes = sift.detectAndCompute(template_gray, None)
@@ -1012,7 +1009,7 @@ class GameManager:
 
                 self._board_sift_templates = card_templates
             else:
-                card_templates = self._board_sift_templates
+                card_templates = cast(dict[str, dict[str, Any]], self._board_sift_templates)
 
             # Build a stable runtime name map for board recognition.
             # Prefer names with explicit follower stats suffix (e.g. _4_4), so
@@ -1066,7 +1063,7 @@ class GameManager:
                 rect_gray = cv2.GaussianBlur(rect_gray, (3, 3), 0.5)
 
                 # SIFT特征提取
-                sift = cv2.SIFT_create(
+                sift = cv2_any.SIFT_create(
                     nfeatures=0, contrastThreshold=0.02, edgeThreshold=15, sigma=1.2
                 )
                 rkp, rdes = sift.detectAndCompute(rect_gray, None)
@@ -1080,13 +1077,15 @@ class GameManager:
 
                 for tname, tinfo in card_templates.items():
                     tdes = tinfo["descriptors"]
-                    tkp = tinfo["keypoints"]
 
                     # FLANN匹配
                     FLANN_INDEX_KDTREE = 1
                     index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=8)
                     search_params = dict(checks=100)
-                    flann = cv2.FlannBasedMatcher(index_params, search_params)
+                    flann = cv2_any.FlannBasedMatcher(
+                        cast(dict[str, Any], index_params),
+                        cast(dict[str, Any], search_params),
+                    )
                     matches = flann.knnMatch(tdes, rdes, k=2)
 
                     good_matches = []
@@ -1459,7 +1458,7 @@ class GameManager:
             area = cv2.contourArea(cnt)
             if 500 < area < 1200:
                 # 转换为全局坐标
-                cx, cy = x + w // 2, y + h // 2
+                cx = x + w // 2
                 global_x = can_choose_region[0] + cx
                 can_choosetargets.append((global_x, 216 + random.randint(-5, 5)))
             if debug_flag:
