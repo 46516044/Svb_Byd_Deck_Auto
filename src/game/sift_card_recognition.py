@@ -3,14 +3,12 @@ SIFT卡牌识别模块
 基于SIFT特征匹配识别手牌区域中的卡牌及其费用
 """
 
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportMissingTypeArgument=false
-
 import cv2
 import numpy as np
 import os
 import logging
 import threading
-from typing import Any, List, Tuple, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple, cast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.utils.resource_utils import resource_path
@@ -23,6 +21,11 @@ SUPPORTED_CARD_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 # Shared template cache (read-only) across instances/devices.
 _TEMPLATE_CACHE: Dict[Tuple[str, float, str], Dict[str, Dict[str, Any]]] = {}
 _TEMPLATE_CACHE_LOCK = threading.Lock()
+CardMatch = Dict[str, Any]
+
+
+def _create_sift() -> Any:
+    return cast(Any, cv2).SIFT_create()
 
 
 def _template_dir_signature(card_images_dir: str) -> str:
@@ -60,7 +63,7 @@ def _build_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[
         logger.error(f"卡牌图片目录不存在: {card_images_dir}")
         return templates
 
-    sift = cv2.SIFT_create()
+    sift = _create_sift()
 
     card_files: List[str] = []
     for filename in os.listdir(card_images_dir):
@@ -190,7 +193,7 @@ class SiftCardRecognition:
         except Exception:
             pass
         self.card_templates = {}  # 缓存卡牌模板
-        self.sift = cv2.SIFT_create()
+        self.sift = _create_sift()
         # 恢复到 d5d10c5 的识别参数（更稳，减少误识别/漏识别）
         self.scale_factor = 0.3  # 缩放因子（匹配游戏中卡牌的实际大小）
         self.hand_area = (229, 539, 1130, 710)  # 手牌区域 (x1, y1, x2, y2) - 更新为新坐标
@@ -208,7 +211,7 @@ class SiftCardRecognition:
         screenshot,
         *,
         hand_area: Optional[Tuple[int, int, int, int]] = None,
-    ) -> List[Dict]:
+    ) -> List[CardMatch]:
         """
         识别手牌区域中的卡牌（支持同名卡牌多张识别，支持多模板并发SIFT加速）
         """
@@ -249,7 +252,7 @@ class SiftCardRecognition:
                 FLANN_INDEX_KDTREE = 1
                 index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
                 search_params = dict(checks=50)
-                flann = cv2.FlannBasedMatcher(index_params, search_params)
+                flann = cv2.FlannBasedMatcher(cast(Any, index_params), cast(Any, search_params))
                 try:
                     matches = flann.knnMatch(template_descriptors, hand_descriptors, k=2)
                 except Exception as e:
@@ -262,7 +265,10 @@ class SiftCardRecognition:
                         if m.distance < 0.7 * n.distance:
                             good_matches.append(m)
                 if len(good_matches) >= self.min_matches:
-                    dst_pts = np.float32([hand_keypoints[m.trainIdx].pt for m in good_matches])
+                    dst_pts = np.asarray(
+                        [hand_keypoints[m.trainIdx].pt for m in good_matches],
+                        dtype=np.float32,
+                    )
                     clusters = []
                     cluster_indices = []
                     # 根据区域动态调整聚类阈值
@@ -286,8 +292,14 @@ class SiftCardRecognition:
                         if len(idx_list) < 4:  # findHomography至少需要4个点
                             continue
                         cluster_good_matches = [good_matches[i] for i in idx_list]
-                        src_pts = np.float32([template_info['keypoints'][m.queryIdx].pt for m in cluster_good_matches]).reshape(-1, 1, 2)
-                        dst_pts_c = np.float32([hand_keypoints[m.trainIdx].pt for m in cluster_good_matches]).reshape(-1, 1, 2)
+                        src_pts = np.asarray(
+                            [template_info['keypoints'][m.queryIdx].pt for m in cluster_good_matches],
+                            dtype=np.float32,
+                        ).reshape(-1, 1, 2)
+                        dst_pts_c = np.asarray(
+                            [hand_keypoints[m.trainIdx].pt for m in cluster_good_matches],
+                            dtype=np.float32,
+                        ).reshape(-1, 1, 2)
                         M, mask = cv2.findHomography(src_pts, dst_pts_c, cv2.RANSAC, 5.0)
                         # 优化Homography检查：确保有足够的内点
                         if M is not None:
@@ -353,7 +365,7 @@ class SiftCardRecognition:
             # --- 位置去重（NMS）：同一张实体卡可能匹配到多个模板，按置信度保留最优 ---
             # 以中心点距离阈值进行抑制，优先保留置信度高的候选。
             recognized_cards.sort(key=lambda c: c.get('confidence', 0), reverse=True)
-            final_cards: List[Dict] = []
+            final_cards: List[CardMatch] = []
             for card in recognized_cards:
                 cx, cy = card.get('center', (None, None))
                 if cx is None or cy is None:
@@ -372,7 +384,7 @@ class SiftCardRecognition:
                     final_cards.append(card)
 
             # 再做一次同名去重（极少数情况下同名双卡会靠得很近）
-            dedup_by_name: List[Dict] = []
+            dedup_by_name: List[CardMatch] = []
             for card in final_cards:
                 too_close_same_name = False
                 for kept in dedup_by_name:

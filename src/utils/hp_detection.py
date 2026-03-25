@@ -80,7 +80,23 @@ def detect_hp_in_window(window, mask, red_bg_threshold=0.25, other_threshold=0.2
     返回：
         (detected, red_count): 布尔值和整数的元组
     """
-    mask_bool = mask > 0
+    if mask is None:
+        mask_bool = np.ones(window.shape[:2], dtype=bool)
+    else:
+        try:
+            mask_arr = np.asarray(mask)
+            if mask_arr.ndim > 2:
+                mask_arr = mask_arr[:, :, 0]
+            if mask_arr.shape[:2] != window.shape[:2]:
+                mask_arr = cv2.resize(
+                    mask_arr.astype(np.uint8),
+                    (int(window.shape[1]), int(window.shape[0])),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+            mask_bool = mask_arr > 0
+        except Exception:
+            mask_bool = np.ones(window.shape[:2], dtype=bool)
+
     if not np.any(mask_bool):
         return False, 0
 
@@ -160,14 +176,35 @@ def sliding_window_detect(region_img, mask, window_width=43, window_height=39,
     返回：
         (center_x, width, score)元组的列表
     """
+    # Keep API compatibility: callers may pass window_height explicitly.
+    _ = window_height
     h, w = region_img.shape[:2]
     detections = []
+
+    # Normalize mask once to reduce per-window overhead.
+    mask_local = mask
+    if mask_local is None:
+        mask_local = np.ones((int(h), int(window_width)), dtype=np.uint8) * 255
+    else:
+        try:
+            mask_arr = np.asarray(mask_local)
+            if mask_arr.ndim > 2:
+                mask_arr = mask_arr[:, :, 0]
+            if mask_arr.shape[:2] != (int(h), int(window_width)):
+                mask_arr = cv2.resize(
+                    mask_arr.astype(np.uint8),
+                    (int(window_width), int(h)),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+            mask_local = mask_arr
+        except Exception:
+            mask_local = None
 
     # Slide from right to left
     x = w - window_width
     while x >= 0:
         window = region_img[0:h, x:x+window_width]
-        detected, red_count = detect_hp_in_window(window, mask, **color_kwargs)
+        detected, red_count = detect_hp_in_window(window, mask_local, **color_kwargs)
 
         if detected:
             center_x = x + window_width // 2

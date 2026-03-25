@@ -16,6 +16,7 @@ from src.game.follower_manager import FollowerManager
 from src.game.template_manager import TemplateManager
 from src.game.game_actions import GameActions
 from src.utils.gpu_utils import get_easyocr_reader
+from src.utils.image_io import safe_imread
 from src.utils.resource_utils import resource_path
 from src.utils.card_filename import (
     normalize_card_base_name,
@@ -86,6 +87,7 @@ class GameManager:
 
         # 加载HP检测遮罩（内部资源，不作为用户可编辑模板的一部分）
         self.hp_mask = None
+        self._hp_mask_warning_logged = False
         mask_candidates = [
             resource_path(os.path.join("src", "masks", "hp_mask.png")),
             # Backward compatibility (older layouts might ship it under templates).
@@ -99,7 +101,7 @@ class GameManager:
                 break
 
         if mask_path:
-            self.hp_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+            self.hp_mask = safe_imread(mask_path, cv2.IMREAD_GRAYSCALE)
             if self.hp_mask is not None:
                 logger.info(f"HP遮罩已加载: {mask_path}, 尺寸: {self.hp_mask.shape}")
             else:
@@ -237,6 +239,10 @@ class GameManager:
             region = screenshot.crop(hp_region)
             region_np = np.array(region)
             region_cv = cv2.cvtColor(region_np, cv2.COLOR_RGB2BGR)
+
+            if self.hp_mask is None and not self._hp_mask_warning_logged:
+                logger.warning("HP遮罩不可用：启用无遮罩兜底检测（精度可能下降）")
+                self._hp_mask_warning_logged = True
 
             # Step 2: Sliding window detection with color analysis
             detections_raw = sliding_window_detect(

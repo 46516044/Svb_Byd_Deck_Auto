@@ -8,6 +8,7 @@ import os
 import logging
 import numpy as np
 from typing import Dict, Any, Optional, Tuple
+from src.utils.image_io import safe_imread
 from src.utils.resource_utils import resource_path
 
 logger = logging.getLogger(__name__)
@@ -132,9 +133,9 @@ class TemplateManager:
             return None
         # 只对进化和超进化按钮用彩色，其余用灰度
         if filename in ["evolution.png", "super_evolution.png"]:
-            template = cv2.imread(path, cv2.IMREAD_COLOR)
+            template = safe_imread(path, cv2.IMREAD_COLOR)
         else:
-            template = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            template = safe_imread(path, cv2.IMREAD_GRAYSCALE)
         if template is None:
             logger.error(f"无法加载模板: {path}")
         return template

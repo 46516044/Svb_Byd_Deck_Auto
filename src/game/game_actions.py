@@ -9,6 +9,7 @@ import random
 import time
 import logging
 import os
+from collections import Counter
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple, cast
 from src.config import settings
 from src.config.game_constants import (
@@ -24,6 +25,7 @@ from src.config.card_priorities import (
     is_evolve_priority_card,
 )
 from src.game.drag_utils import human_like_drag
+from src.utils.image_io import safe_imread
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,6 @@ class GameActions:
 
         # Spot-based scan stabilization (max 5 board slots).
         self._spot_state: Dict[int, Dict[str, Any]] = {}
-        self._forced_normal_slots: Dict[int, int] = {}
         self._spot_round_key: Optional[Tuple[int, int]] = None
         self._spot_centers: List[int] = self._build_spot_centers()
 
@@ -160,23 +161,19 @@ class GameActions:
             return
         if key != prev:
             self._spot_state.clear()
-            self._forced_normal_slots.clear()
             self._spot_round_key = key
 
     def _mark_recent_attack_slot(self, pos: Sequence[Any]) -> None:
-        """After a successful attack, force that slot into normal for current round."""
+        """Compatibility hook after a successful attack.
+
+        Attack consumption is tracked by attacker identity (uid/key + used/cap).
+        Do not apply slot-level force-normal here, which can leak across followers
+        after board compression/shift.
+        """
 
         if not isinstance(pos, (list, tuple)) or len(pos) < 1:
             return
         self._sync_spot_round()
-        slot = self._slot_id_for_x(pos[0])
-        round_idx = self._current_round_key()[1]
-        self._forced_normal_slots[int(slot)] = int(round_idx)
-        st = self._spot_state.get(int(slot))
-        if isinstance(st, dict):
-            st["type"] = "normal"
-            st["normal_streak"] = max(2, int(st.get("normal_streak", 0)))
-            st["round"] = int(round_idx)
 
     def _aggregate_followers_from_shots(
         self,
@@ -188,8 +185,8 @@ class GameActions:
 
         Priority to pick anchor frame:
         1) total follower count
-        2) attackable count (green/yellow)
-        3) named count
+        2) named count
+        3) attackable count (green/yellow)
 
         Then assign type evidence from other frames to anchor followers:
         - first by exact name
@@ -232,22 +229,13 @@ class GameActions:
 
         def _shot_score(shot: Sequence[Tuple[int, int, str, Optional[str]]]) -> Tuple[int, int, int]:
             total = len(list(shot or []))
-            attackable = sum(1 for it in list(shot or []) if str(it[2]) in ("green", "yellow"))
             named = sum(1 for it in list(shot or []) if bool(it[3]))
-            return (int(total), int(attackable), int(named))
+            attackable = sum(1 for it in list(shot or []) if str(it[2]) in ("green", "yellow"))
+            return (int(total), int(named), int(attackable))
 
-        # Prefer the most stable follower count across shots (mode count) instead
-        # of blindly taking the max-count shot, so one noisy frame won't become
-        # the anchor and duplicate the board state.
-        from collections import Counter
-
-        shot_counts = [len(list(s or [])) for s in shots]
-        count_mode = max(Counter(shot_counts).items(), key=lambda it: (int(it[1]), int(it[0])))[0]
-        anchor_candidates = [i for i, s in enumerate(shots) if len(list(s or [])) == int(count_mode)]
-        if not anchor_candidates:
-            anchor_candidates = list(range(len(shots)))
-
-        best_idx = max(anchor_candidates, key=lambda i: (_shot_score(shots[i]), i))
+        # Use best single-shot as anchor, with strong priority on follower count,
+        # then naming quality, then attackable type evidence.
+        best_idx = max(range(len(shots)), key=lambda i: (_shot_score(shots[i]), i))
         best_shot = list(shots[best_idx])
 
         type_rank = {"normal": 1, "yellow": 2, "green": 3}
@@ -421,29 +409,50 @@ class GameActions:
             prev_type = str(prev.get("type") or "")
             prev_name = prev.get("name")
             prev_streak = int(prev.get("normal_streak", 0) or 0)
-            forced_normal = int(self._forced_normal_slots.get(slot, -1) or -1) == int(round_idx)
+            prev_x = int(prev.get("x", x_i) or x_i)
+            prev_y = int(prev.get("y", y_i) or y_i)
+
+            in_name_s = str(in_name or "") if isinstance(in_name, str) else ""
+            prev_name_s = str(prev_name or "") if isinstance(prev_name, str) else ""
+            same_name = bool(in_name_s and prev_name_s and in_name_s == prev_name_s)
+            name_conflict = bool(in_name_s and prev_name_s and in_name_s != prev_name_s)
+
+            dx = abs(int(prev_x) - int(x_i))
+            dy = abs(int(prev_y) - int(y_i))
+            if same_name:
+                spot_continuous = dx <= 120 and dy <= 130
+            elif in_name_s or prev_name_s:
+                spot_continuous = dx <= 72 and dy <= 96
+            else:
+                spot_continuous = dx <= 56 and dy <= 90
+            if name_conflict:
+                spot_continuous = False
 
             eff_type = in_type
             normal_streak = 0
 
-            if forced_normal:
-                # Once a slot has consumed its attack cap this round, keep it as
-                # normal regardless of noisy green/yellow re-detections.
-                eff_type = "normal"
-                normal_streak = max(2, prev_streak + 1)
-            elif in_type == "normal":
-                normal_streak = prev_streak + 1
-                if prev_type == "green":
-                    eff_type = "green"
-                elif prev_type == "yellow":
-                    eff_type = "normal" if normal_streak >= 2 else "yellow"
+            if in_type == "normal":
+                if spot_continuous:
+                    normal_streak = prev_streak + 1
+                    if prev_type == "green":
+                        eff_type = "normal" if normal_streak >= 2 else "green"
+                    elif prev_type == "yellow":
+                        eff_type = "normal" if normal_streak >= 2 else "yellow"
+                    else:
+                        eff_type = "normal"
                 else:
+                    normal_streak = 1
                     eff_type = "normal"
             else:
                 eff_type = in_type
                 normal_streak = 0
 
-            eff_name = in_name if in_name else prev_name
+            if isinstance(in_name, str) and in_name:
+                eff_name = in_name
+            elif spot_continuous and str(eff_type) in ("green", "yellow") and prev_name_s:
+                eff_name = prev_name_s
+            else:
+                eff_name = None
 
             out.append((x_i, y_i, str(eff_type), eff_name))
             self._spot_state[slot] = {
@@ -1083,6 +1092,27 @@ class GameActions:
 
                 if not plans:
                     continue
+
+                if debug_mode:
+                    try:
+                        brief_rows: List[str] = []
+                        for p in list(plans or []):
+                            ax = int(p.get("attacker", (0, 0))[0])
+                            ay = int(p.get("attacker", (0, 0))[1])
+                            pname = str(p.get("attacker_name") or "?")
+                            reason_obj = p.get("reason")
+                            reason = reason_obj if isinstance(reason_obj, dict) else {}
+                            brief_rows.append(
+                                f"{pname}@({ax},{ay}) mode={p.get('mode')} "
+                                f"atk={reason.get('attacker_atk')} hp={reason.get('target_hp')} "
+                                f"residual={p.get('residual')}"
+                            )
+                        self.device_state.logger.info(
+                            f"[AttackPlan] type={str(type_priority)} ward_only={bool(ward_only)} "
+                            f"candidates={' | '.join(brief_rows)}"
+                        )
+                    except Exception:
+                        pass
 
                 kill_plans = [
                     p for p in plans if p.get("mode") == "kill_overflow" and p.get("residual") is not None
@@ -2593,12 +2623,12 @@ class GameActions:
             ):
                 return planned_cards_local, retry_count_local, False, False
 
-            time.sleep(0.15)
+            time.sleep(0.30)
             self._require_u2_device().click(
                 SHOW_CARDS_BUTTON[0] + random.randint(-2, 2),
                 SHOW_CARDS_BUTTON[1] + random.randint(-2, 2),
             )
-            time.sleep(0.7)
+            time.sleep(1.0)
 
             new_cards_local: List[Dict[str, Any]] = hand_manager.get_hand_cards_with_retry(
                 max_retries=2,
@@ -3038,7 +3068,7 @@ class GameActions:
                 self.device_state.logger.debug(f"额外费用点模板不存在: {template_path}")
                 return None
             
-            template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+            template = safe_imread(template_path, cv2.IMREAD_GRAYSCALE)
             if template is None:
                 self.device_state.logger.debug("无法加载额外费用点模板")
                 return None

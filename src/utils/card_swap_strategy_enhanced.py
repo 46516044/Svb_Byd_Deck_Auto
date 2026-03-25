@@ -15,14 +15,17 @@
 - 删除了冗余的规则3-7（核心费用强制、曲线完整性等）
 """
 
-# pyright: reportMissingTypeArgument=false
-
-from typing import List, Tuple, Dict, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 import logging
 
 from src.utils.card_filename import make_enhance_key, normalize_config_key, split_enhance_key
 
 logger = logging.getLogger(__name__)
+
+CardDict = Dict[str, Any]
+PriorityCards = Dict[str, Any]
+CardsByCost = Dict[int, List[CardDict]]
+StrategyConfig = Dict[str, Any]
 
 
 # ========== 策略配置系统 ==========
@@ -54,7 +57,7 @@ STRATEGY_CONFIGS = {
 
 # ========== 辅助函数 ==========
 
-def get_card_priority(card_name: str, priority_cards: Optional[Dict] = None) -> int:
+def get_card_priority(card_name: str, priority_cards: Optional[PriorityCards] = None) -> int:
     """
     获取卡牌优先级（换牌阶段专用）
 
@@ -86,7 +89,7 @@ def get_card_priority(card_name: str, priority_cards: Optional[Dict] = None) -> 
 
         return out
 
-    def _resolve_cfg(raw_name: str, mapping: Optional[Dict]) -> Optional[Dict]:
+    def _resolve_cfg(raw_name: str, mapping: Optional[PriorityCards]) -> Optional[CardDict]:
         if not isinstance(mapping, dict) or not mapping:
             return None
 
@@ -97,7 +100,7 @@ def get_card_priority(card_name: str, priority_cards: Optional[Dict] = None) -> 
                 return cfg_v if isinstance(cfg_v, dict) else {"priority": cfg_v}
 
         # 2) Normalized lookup: strip follower suffixes and align enhance key format.
-        normalized_mapping: Dict[str, Dict] = {}
+        normalized_mapping: Dict[str, CardDict] = {}
         for k, v in mapping.items():
             nk = normalize_config_key(str(k or ""))
             if not nk:
@@ -144,7 +147,7 @@ def get_card_priority(card_name: str, priority_cards: Optional[Dict] = None) -> 
     return 500
 
 
-def _build_card_index(hand_cards: List[Dict], priority_cards: Optional[Dict]) -> Dict:
+def _build_card_index(hand_cards: List[CardDict], priority_cards: Optional[PriorityCards]) -> CardsByCost:
     """
     构建按费用分组的卡牌索引结构
 
@@ -170,7 +173,7 @@ def _build_card_index(hand_cards: List[Dict], priority_cards: Optional[Dict]) ->
 def _sort_swaps_by_cost(
     swap_indices: List[int],
     reasons: List[str],
-    hand_cards: List[Dict]
+    hand_cards: List[CardDict]
 ) -> Tuple[List[int], List[str]]:
     """
     按费用从高到低排序换牌索引，并同步调整原因列表
@@ -193,7 +196,7 @@ def _sort_swaps_by_cost(
 # ========== 极简2规则系统 ==========
 
 def _apply_rule1_overcost_and_limits(
-    cards_by_cost: Dict,
+    cards_by_cost: CardsByCost,
     max_cost: int,
     cost_limits: Dict[int, int],
     swap_indices: List[int],
@@ -241,9 +244,9 @@ def _apply_rule1_overcost_and_limits(
 
 
 def _apply_rule2_curve_balance(
-    cards_by_cost: Dict,
+    cards_by_cost: CardsByCost,
     low_cost_target: List[int],
-    allowed_costs: set,
+    allowed_costs: Set[int],
     swap_indices: List[int],
     reasons: List[str]
 ) -> Tuple[List[int], List[str]]:
@@ -323,9 +326,9 @@ def _apply_rule2_curve_balance(
 # ========== 统一执行引擎 ==========
 
 def _execute_strategy_rules(
-    hand_cards: List[Dict],
-    config: Dict,
-    priority_cards: Optional[Dict]
+    hand_cards: List[CardDict],
+    config: StrategyConfig,
+    priority_cards: Optional[PriorityCards]
 ) -> Tuple[List[int], List[int], List[str]]:
     """
     配置驱动的规则执行引擎（极简2规则）
@@ -378,9 +381,9 @@ def _execute_strategy_rules(
 # ========== 公共接口 ==========
 
 def determine_card_swaps_enhanced(
-    hand_cards: List[Dict],
+    hand_cards: List[CardDict],
     strategy: str,
-    priority_cards: Optional[Dict] = None
+    priority_cards: Optional[PriorityCards] = None
 ) -> Tuple[List[int], List[int], List[str]]:
     """
     增强版换牌策略决策（极简2规则系统）

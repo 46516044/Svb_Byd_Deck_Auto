@@ -483,6 +483,224 @@ class BattleRuntimeState:
             "target_dead": target_dead,
         }
 
+    def _parse_scanned_item(
+        self,
+        item: Sequence[Any],
+        *,
+        side: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            return None
+
+        x = _safe_int(item[0], 0)
+        y = _safe_int(item[1], 0)
+        ftype = str(item[2] if len(item) > 2 else "normal")
+
+        raw_name = ""
+        if len(item) > 3 and isinstance(item[3], str):
+            raw_name = str(item[3] or "")
+
+        parsed_base = ""
+        parsed_atk = None
+        parsed_hp = None
+        if raw_name:
+            parsed_base, parsed_atk, parsed_hp = parse_follower_stat_suffix(raw_name)
+            parsed_base = str(parsed_base or raw_name)
+
+        norm_base = normalize_card_base_name(parsed_base)
+        if str(side) != "ours":
+            # Enemy slot payload at item[3] is usually HP text, not reliable name.
+            norm_base = ""
+
+        return {
+            "x": int(x),
+            "y": int(y),
+            "ftype": ftype,
+            "raw_name": raw_name,
+            "parsed_base": parsed_base,
+            "parsed_atk": parsed_atk,
+            "parsed_hp": parsed_hp,
+            "norm_base": norm_base,
+            "hp_field": item[3] if len(item) > 3 else None,
+        }
+
+    def _match_runtime_marked_ours_index(
+        self,
+        existing: Sequence[FollowerRuntimeState],
+        used: Iterable[int],
+        *,
+        x: int,
+        y: int,
+        norm_base: str,
+    ) -> Optional[int]:
+        used_set = set(used)
+        best_idx = None
+        best_score = 10**9
+
+        for i, st in enumerate(list(existing or [])):
+            if i in used_set:
+                continue
+            if not self._has_runtime_marks(st):
+                continue
+
+            dx = abs(int(getattr(st, "x", 0)) - int(x))
+            dy = abs(int(getattr(st, "y", 0)) - int(y))
+            if dx > 176 or dy > 150:
+                continue
+
+            score = dx * 2 + dy
+            if norm_base:
+                st_base = normalize_card_base_name(
+                    str(getattr(st, "base_name", "") or getattr(st, "raw_name", "") or "")
+                )
+                if st_base and st_base != norm_base:
+                    continue
+                if st_base and st_base == norm_base:
+                    score -= 300
+                else:
+                    score += 120
+
+            if score < best_score:
+                best_score = score
+                best_idx = i
+
+        return best_idx
+
+    def _pick_existing_index_for_scan(
+        self,
+        *,
+        existing: Sequence[FollowerRuntimeState],
+        used: Iterable[int],
+        side: str,
+        x: int,
+        y: int,
+        norm_base: str,
+        x_limit: int,
+        y_limit: int,
+    ) -> Optional[int]:
+        idx = None
+
+        if norm_base:
+            idx = self._match_existing_index(
+                existing,
+                used,
+                x,
+                y,
+                expected_base=norm_base,
+                x_limit=max(220, x_limit),
+                y_limit=max(150, y_limit),
+            )
+
+        if idx is None and not norm_base:
+            idx = self._match_existing_index(
+                existing,
+                used,
+                x,
+                y,
+                expected_base="",
+                x_limit=x_limit,
+                y_limit=y_limit,
+            )
+
+        if idx is None and str(side) == "ours":
+            idx = self._match_runtime_marked_ours_index(
+                existing,
+                used,
+                x=x,
+                y=y,
+                norm_base=norm_base,
+            )
+
+        return idx
+
+    def _build_or_reuse_state(
+        self,
+        *,
+        existing: Sequence[FollowerRuntimeState],
+        used: set[int],
+        idx: Optional[int],
+        side: str,
+    ) -> FollowerRuntimeState:
+        if idx is not None:
+            st = existing[idx]
+            used.add(int(idx))
+        else:
+            st = FollowerRuntimeState(side=side)
+            st.uid = self._alloc_uid()
+
+        if _safe_int(getattr(st, "uid", 0), 0) <= 0:
+            st.uid = self._alloc_uid()
+        return st
+
+    def _apply_scanned_fields(
+        self,
+        st: FollowerRuntimeState,
+        *,
+        side: str,
+        scan: Dict[str, Any],
+        with_hp: bool,
+        wards: Sequence[Sequence[Any]],
+    ) -> None:
+        x = _safe_int(scan.get("x"), 0)
+        y = _safe_int(scan.get("y"), 0)
+        ftype = str(scan.get("ftype") or "normal")
+        raw_name = str(scan.get("raw_name") or "")
+        parsed_base = str(scan.get("parsed_base") or "")
+        parsed_atk = scan.get("parsed_atk")
+        parsed_hp = scan.get("parsed_hp")
+
+        st.side = side
+        st.x = int(x)
+        st.y = int(y)
+        st.follower_type = ftype
+
+        if side == "enemy":
+            st.is_ward = any(abs(int(x) - _safe_int(w[0], 0)) < 50 for w in wards if len(w) >= 1)
+
+        if raw_name:
+            st.raw_name = raw_name
+            st.base_name = parsed_base if parsed_base else raw_name
+            if parsed_atk is not None:
+                st.atk0 = int(parsed_atk)
+            if parsed_hp is not None:
+                st.hp0 = int(parsed_hp)
+        elif not st.base_name:
+            st.base_name = st.raw_name or ""
+
+        st.miss_count = 0
+
+        if with_hp:
+            hp_seen = _parse_hp(scan.get("hp_field"))
+            if hp_seen is not None:
+                hp_seen_i = int(hp_seen)
+                st.observed_hp = hp_seen_i
+                if st.hp0 is None:
+                    st.hp0 = hp_seen_i
+                total = int(st.hp0 or hp_seen_i) + int(st.evolution_bonus()) + int(st.buff_hp)
+                if hp_seen_i > total:
+                    st.hp0 = hp_seen_i - int(st.evolution_bonus()) - int(st.buff_hp)
+                    st.damage_taken = 0
+                else:
+                    st.damage_taken = max(0, total - hp_seen_i)
+
+    def _append_preserved_unseen_ours(
+        self,
+        out: List[FollowerRuntimeState],
+        *,
+        existing: Sequence[FollowerRuntimeState],
+        used: Iterable[int],
+    ) -> None:
+        used_set = set(used)
+        for i, st in enumerate(list(existing or [])):
+            if i in used_set:
+                continue
+            if not self._should_preserve_unseen_ours(st):
+                continue
+            st.miss_count = int(getattr(st, "miss_count", 0) or 0) + 1
+            if st.miss_count > 2:
+                continue
+            out.append(st)
+
     def _sync_side(
         self,
         *,
@@ -500,137 +718,40 @@ class BattleRuntimeState:
         y_limit = 120 if str(side) == "ours" else 90
 
         for item in list(scanned or []):
-            if not isinstance(item, (list, tuple)) or len(item) < 2:
+            scan = self._parse_scanned_item(item, side=side)
+            if scan is None:
                 continue
-            x = _safe_int(item[0], 0)
-            y = _safe_int(item[1], 0)
-            ftype = str(item[2] if len(item) > 2 else "normal")
 
-            raw_name = ""
-            if len(item) > 3 and isinstance(item[3], str):
-                raw_name = str(item[3] or "")
-            parsed_base = ""
-            parsed_atk = None
-            parsed_hp = None
-            if raw_name:
-                parsed_base, parsed_atk, parsed_hp = parse_follower_stat_suffix(raw_name)
-                parsed_base = str(parsed_base or raw_name)
-            norm_base = normalize_card_base_name(parsed_base)
+            idx = self._pick_existing_index_for_scan(
+                existing=existing,
+                used=used,
+                side=side,
+                x=_safe_int(scan.get("x"), 0),
+                y=_safe_int(scan.get("y"), 0),
+                norm_base=str(scan.get("norm_base") or ""),
+                x_limit=x_limit,
+                y_limit=y_limit,
+            )
 
-            # Enemy scanned payload uses HP as item[3], not card name. Keep enemy
-            # matching coordinate-driven to avoid false "name" mismatches.
-            if str(side) != "ours":
-                norm_base = ""
+            st = self._build_or_reuse_state(
+                existing=existing,
+                used=used,
+                idx=idx,
+                side=side,
+            )
 
-            idx = None
-            if norm_base:
-                idx = self._match_existing_index(
-                    existing,
-                    used,
-                    x,
-                    y,
-                    expected_base=norm_base,
-                    x_limit=max(220, x_limit),
-                    y_limit=max(150, y_limit),
-                )
-
-            # Only do pure coordinate fallback when current scan has no reliable name.
-            if idx is None and not norm_base:
-                idx = self._match_existing_index(
-                    existing,
-                    used,
-                    x,
-                    y,
-                    expected_base="",
-                    x_limit=x_limit,
-                    y_limit=y_limit,
-                )
-
-            if idx is None and str(side) == "ours":
-                # 对带有运行时状态（来源键/BUFF/进化）的随从放宽匹配阈值，减少动画导致的状态丢失。
-                best_idx = None
-                best_score = 10**9
-                for i, st in enumerate(list(existing or [])):
-                    if i in used:
-                        continue
-                    if not self._has_runtime_marks(st):
-                        continue
-                    dx = abs(int(getattr(st, "x", 0)) - int(x))
-                    dy = abs(int(getattr(st, "y", 0)) - int(y))
-                    if dx > 176 or dy > 150:
-                        continue
-                    score = dx * 2 + dy
-                    if norm_base:
-                        st_base = normalize_card_base_name(
-                            str(getattr(st, "base_name", "") or getattr(st, "raw_name", "") or "")
-                        )
-                        if st_base and st_base != norm_base:
-                            continue
-                        if st_base and st_base == norm_base:
-                            score -= 300
-                        else:
-                            score += 120
-                    if score < best_score:
-                        best_score = score
-                        best_idx = i
-                idx = best_idx
-
-            if idx is not None:
-                st = existing[idx]
-                used.add(int(idx))
-            else:
-                st = FollowerRuntimeState(side=side)
-                st.uid = self._alloc_uid()
-
-            if _safe_int(getattr(st, "uid", 0), 0) <= 0:
-                st.uid = self._alloc_uid()
-
-            st.side = side
-            st.x = int(x)
-            st.y = int(y)
-            st.follower_type = ftype
-
-            if side == "enemy":
-                st.is_ward = any(abs(int(x) - _safe_int(w[0], 0)) < 50 for w in wards if len(w) >= 1)
-
-            if raw_name:
-                st.raw_name = raw_name
-                st.base_name = parsed_base if parsed_base else raw_name
-                if parsed_atk is not None:
-                    st.atk0 = int(parsed_atk)
-                if parsed_hp is not None:
-                    st.hp0 = int(parsed_hp)
-            elif not st.base_name:
-                st.base_name = st.raw_name or ""
-
-            st.miss_count = 0
-
-            if with_hp:
-                hp_seen = _parse_hp(item[3] if len(item) > 3 else None)
-                if hp_seen is not None:
-                    hp_seen_i = int(hp_seen)
-                    st.observed_hp = hp_seen_i
-                    if st.hp0 is None:
-                        st.hp0 = hp_seen_i
-                    total = int(st.hp0 or hp_seen_i) + int(st.evolution_bonus()) + int(st.buff_hp)
-                    if hp_seen_i > total:
-                        st.hp0 = hp_seen_i - int(st.evolution_bonus()) - int(st.buff_hp)
-                        st.damage_taken = 0
-                    else:
-                        st.damage_taken = max(0, total - hp_seen_i)
+            self._apply_scanned_fields(
+                st,
+                side=side,
+                scan=scan,
+                with_hp=bool(with_hp),
+                wards=wards,
+            )
 
             out.append(st)
 
         if str(side) == "ours" and existing:
-            for i, st in enumerate(list(existing or [])):
-                if i in used:
-                    continue
-                if not self._should_preserve_unseen_ours(st):
-                    continue
-                st.miss_count = int(getattr(st, "miss_count", 0) or 0) + 1
-                if st.miss_count > 2:
-                    continue
-                out.append(st)
+            self._append_preserved_unseen_ours(out, existing=existing, used=used)
 
         out = sorted(out, key=lambda s: int(s.x), reverse=True)
         return out

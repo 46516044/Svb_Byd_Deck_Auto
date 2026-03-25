@@ -4,6 +4,8 @@
 """
 
 import time
+from typing import Any
+
 from src.game.drag_utils import human_like_drag
 from src.game.policy.effects import get_card_effect_steps
 
@@ -13,7 +15,7 @@ from src.game.effects import EffectEngine, HandCardContext
 class CardPlaySpecialActions:
     """出牌特殊操作处理类"""
     
-    def __init__(self, device_state):
+    def __init__(self, device_state: Any):
         self.device_state = device_state
         self._extra_cost_bonus = 0
         self._request_extra_hand_scan = False
