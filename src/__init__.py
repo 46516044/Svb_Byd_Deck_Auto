@@ -23,7 +23,7 @@ def __getattr__(name: str):
     """
 
     if name == "ConfigManager":
-        from src.config import ConfigManager as _ConfigManager
+        from src.config.config_manager import ConfigManager as _ConfigManager
 
         return _ConfigManager
 
@@ -40,12 +40,12 @@ def __getattr__(name: str):
         return _display_disclaimer_and_get_consent
 
     if name == "DeviceManager":
-        from src.device import DeviceManager as _DeviceManager
+        from src.device.device_manager import DeviceManager as _DeviceManager
 
         return _DeviceManager
 
     if name == "NotificationManager":
-        from src.ui import NotificationManager as _NotificationManager
+        from src.ui.notification_manager import NotificationManager as _NotificationManager
 
         return _NotificationManager
 

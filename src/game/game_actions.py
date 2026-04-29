@@ -2021,6 +2021,20 @@ class GameActions:
         center_x = int(max_loc[0]) + int(template_info["w"]) // 2
         center_y = int(max_loc[1]) + int(template_info["h"]) // 2
         self._require_u2_device().click(center_x, center_y)
+        self.device_state.sleep(0.4)
+
+        if follower_name:
+            special_ok = self._handle_evolve_special_action(
+                follower_name,
+                pos,
+                is_super_evolution=True,
+                existing_followers=all_followers,
+                follower_uid=evolve_uid,
+            )
+            if not special_ok:
+                return False
+
+        self.device_state.sleep(4.8)
         self.device_state.super_evolution_point -= 1
         if follower_name:
             if is_evolve_priority_card(follower_name, runtime_cfg):
@@ -2039,16 +2053,6 @@ class GameActions:
             evolve_uid=evolve_uid,
             mode="super",
         )
-        self.device_state.sleep(4.8)
-
-        if follower_name:
-            self._handle_evolve_special_action(
-                follower_name,
-                pos,
-                is_super_evolution=True,
-                existing_followers=all_followers,
-                follower_uid=evolve_uid,
-            )
 
         self._try_super_evolution_attack_follow_up(
             pos,
@@ -2077,6 +2081,20 @@ class GameActions:
         center_x = int(max_loc[0]) + int(template_info["w"]) // 2
         center_y = int(max_loc[1]) + int(template_info["h"]) // 2
         self._require_u2_device().click(center_x, center_y)
+        self.device_state.sleep(0.4)
+
+        if follower_name:
+            special_ok = self._handle_evolve_special_action(
+                follower_name,
+                pos,
+                is_super_evolution=False,
+                existing_followers=all_followers,
+                follower_uid=evolve_uid,
+            )
+            if not special_ok:
+                return False
+
+        self.device_state.sleep(4.8)
         self.device_state.evolution_point -= 1
         if follower_name:
             if is_evolve_priority_card(follower_name, runtime_cfg):
@@ -2093,16 +2111,6 @@ class GameActions:
             evolve_uid=evolve_uid,
             mode="normal",
         )
-        self.device_state.sleep(4.8)
-
-        if follower_name:
-            self._handle_evolve_special_action(
-                follower_name,
-                pos,
-                is_super_evolution=False,
-                existing_followers=all_followers,
-                follower_uid=evolve_uid,
-            )
         return True
 
     def perform_evolution_actions(self):
@@ -2172,7 +2180,7 @@ class GameActions:
         is_super_evolution=False,
         existing_followers=None,
         follower_uid=None,
-    ):
+    ) -> bool:
         """
         处理进化/超进化后特殊action（如铁拳神父等），便于扩展
         follower_name: 卡牌名称
@@ -2182,13 +2190,13 @@ class GameActions:
         """
         from .evolution_special_actions import EvolutionSpecialActions
         evolution_actions = EvolutionSpecialActions(self.device_state)
-        evolution_actions.handle_evolve_special_action(
+        return bool(evolution_actions.handle_evolve_special_action(
             follower_name,
             pos,
             is_super_evolution,
             existing_followers,
             follower_uid=follower_uid,
-        )
+        ))
 
     def _show_cards_once(self):
         """点击一次展牌按钮（不包含额外 sleep，调用方保持原顺序控制时序）。"""

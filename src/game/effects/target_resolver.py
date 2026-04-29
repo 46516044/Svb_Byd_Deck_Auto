@@ -65,6 +65,7 @@ def _scan_ward_targets(
     selector: str,
     screenshot: Any,
     enemy_followers: Sequence[Any],
+    is_select_ui: bool,
 ) -> List[Tuple[int, int]]:
     if selector != "ward_or_highest_hp":
         return []
@@ -74,6 +75,7 @@ def _scan_ward_targets(
             return ds.game_manager.scan_shield_targets_for_enemy_followers(
                 screenshot,
                 enemy_followers,
+                is_select=bool(is_select_ui),
             )
         return ds.game_manager.scan_shield_targets() if ds.game_manager else []
     except Exception:
@@ -205,6 +207,7 @@ def _resolve_enemy_follower_targets(
         selector=selector,
         screenshot=screenshot,
         enemy_followers=enemy_followers,
+        is_select_ui=bool(is_select_ui),
     )
 
     if not enemy_followers and allow_amulet_fallback:

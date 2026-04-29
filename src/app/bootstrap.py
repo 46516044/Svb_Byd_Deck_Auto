@@ -18,7 +18,7 @@ from src.utils.consent_utils import display_disclaimer_and_get_consent
 from src.utils.gpu_utils import get_easyocr_reader, setup_gpu
 
 if TYPE_CHECKING:
-    from src.device import DeviceManager
+    from src.device.device_manager import DeviceManager
 
 
 def _command_listener(
@@ -84,8 +84,8 @@ def run_cli(
     logger: logging.Logger = logging.getLogger(__name__)
 
     # Local imports to keep UI startup light.
-    from src.device import DeviceManager
-    from src.ui import NotificationManager
+    from src.device.device_manager import DeviceManager
+    from src.ui.notification_manager import NotificationManager
 
     try:
         # 初始化配置管理器

@@ -41,6 +41,7 @@ from src.config.game_constants import (
     ENEMY_FOLLOWER_OFFSET_X,
     ENEMY_ATK_REGION,
     ENEMY_SHIELD_REGION,
+    ENEMY_SHIELD_REGION_UP,
     ENEMY_ATK_HSV,
     HP_WINDOW_WIDTH,
     HP_WINDOW_HEIGHT,
@@ -1074,7 +1075,7 @@ class GameManager:
                 )
                 rkp, rdes = sift.detectAndCompute(rect_gray, None)
 
-                if rdes is None:
+                if rdes is None or len(rdes) < 2:
                     continue
 
                 # 与所有模板进行匹配
@@ -1083,6 +1084,8 @@ class GameManager:
 
                 for tname, tinfo in card_templates.items():
                     tdes = tinfo["descriptors"]
+                    if tdes is None or len(tdes) < 2:
+                        continue
 
                     # FLANN匹配
                     FLANN_INDEX_KDTREE = 1
@@ -1092,10 +1095,16 @@ class GameManager:
                         cast(dict[str, Any], index_params),
                         cast(dict[str, Any], search_params),
                     )
-                    matches = flann.knnMatch(tdes, rdes, k=2)
+                    try:
+                        matches = flann.knnMatch(tdes, rdes, k=2)
+                    except Exception:
+                        continue
 
                     good_matches = []
-                    for m, n in matches:
+                    for match_pair in matches:
+                        if len(match_pair) != 2:
+                            continue
+                        m, n = match_pair
                         if m.distance < 0.7 * n.distance:
                             good_matches.append(m)
 
@@ -1143,7 +1152,10 @@ class GameManager:
 
         sift_results = []
         if with_names and deduplicated_follower_positions:
-            sift_results = perform_sift_recognition_on_rectangles(base_shot)
+            try:
+                sift_results = perform_sift_recognition_on_rectangles(base_shot)
+            except Exception as e:
+                logger.debug(f"我方随从SIFT命名失败，保留位置/类型结果: {e}")
 
         def attach_names(followers):
             named = []
@@ -1253,7 +1265,7 @@ class GameManager:
         consensus.sort(key=lambda pos: int(pos[0]))
         return consensus
 
-    def scan_shield_targets_for_enemy_followers(self, screenshot, enemy_followers, debug_flag=False):
+    def scan_shield_targets_for_enemy_followers(self, screenshot, enemy_followers, debug_flag=False, is_select=False):
         """在同一帧内将守护图标映射到敌方随从坐标。
 
         用于 target_resolver 的 `ward_or_highest_hp`：
@@ -1264,7 +1276,11 @@ class GameManager:
         if screenshot is None or not enemy_followers:
             return []
 
-        detected_shields = self._extract_shield_points(screenshot, debug_flag=debug_flag)
+        detected_shields = self._extract_shield_points(
+            screenshot,
+            debug_flag=debug_flag,
+            is_select=bool(is_select),
+        )
         if not detected_shields:
             return []
 
@@ -1276,15 +1292,20 @@ class GameManager:
         shield_targets = sorted(shield_targets, key=lambda pos: int(pos[0]))
         return shield_targets
 
-    def _extract_shield_points(self, screenshot, debug_flag=False):
+    def _extract_shield_points(self, screenshot, debug_flag=False, is_select=False):
         """Extract raw shield icon centers (global coordinates) from screenshot."""
 
         if screenshot is None:
             return []
         try:
-            region = screenshot.crop(ENEMY_SHIELD_REGION)
+            shield_region = ENEMY_SHIELD_REGION_UP if bool(is_select) else ENEMY_SHIELD_REGION
+            region = screenshot.crop(shield_region)
             bgr_image = cv2.cvtColor(np.array(region), cv2.COLOR_RGB2BGR)
-            return self._process_shield_image(bgr_image, debug_flag)
+            return self._process_shield_image(
+                bgr_image,
+                debug_flag,
+                region_offset=(int(shield_region[0]), int(shield_region[1])),
+            )
         except Exception as e:
             import logging
 
@@ -1355,10 +1376,13 @@ class GameManager:
 
         return shield_targets
 
-    def _process_shield_image(self, image, debug_flag):
+    def _process_shield_image(self, image, debug_flag, region_offset=None):
         """处理护盾图像"""
         shield_targets = []
-        offset_x, offset_y = ENEMY_SHIELD_REGION[0], ENEMY_SHIELD_REGION[1]
+        if isinstance(region_offset, (list, tuple)) and len(region_offset) >= 2:
+            offset_x, offset_y = int(region_offset[0]), int(region_offset[1])
+        else:
+            offset_x, offset_y = ENEMY_SHIELD_REGION[0], ENEMY_SHIELD_REGION[1]
 
         if debug_flag:
             os.makedirs("debug", exist_ok=True)
