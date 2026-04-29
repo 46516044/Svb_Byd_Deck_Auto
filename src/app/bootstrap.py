@@ -12,7 +12,7 @@ import traceback
 import queue
 from typing import Optional, TYPE_CHECKING
 
-from src.config import ConfigManager
+from src.config.config_manager import ConfigManager
 from src.core.logging_utils import setup_logging
 from src.utils.consent_utils import display_disclaimer_and_get_consent
 from src.utils.gpu_utils import get_easyocr_reader, setup_gpu
