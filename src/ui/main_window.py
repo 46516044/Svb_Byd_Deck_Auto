@@ -685,10 +685,36 @@ class ShadowverseUI(QMainWindow):
         self.script_thread.status_signal.connect(self.update_status)
         self.script_thread.stats_signal.connect(self.update_stats)
 
-        # 模拟连接成功
-        self.start_btn.setEnabled(True)
-        self.status_label.setText("已连接")
-        self.status_label.setStyleSheet("color: #55FF55;")
+        # 连接设备检测
+        if self._check_device_connection(adb_port):
+            self.start_btn.setEnabled(True)
+            self.status_label.setText("已连接")
+            self.status_label.setStyleSheet("color: #55FF55;")
+        else:
+            self.connect_btn.setEnabled(True)
+            self.status_label.setText("连接失败")
+            self.status_label.setStyleSheet("color: #FF5555;")
+            self.append_log(f"设备连接失败: {adb_port}")
+
+    def _check_device_connection(self, serial: str) -> bool:
+        """检查设备是否能成功连接"""
+        try:
+            from adbutils import adb
+
+            adb_device = adb.device(serial)
+            if adb_device is None:
+                return False
+
+            import uiautomator2 as u2
+
+            u2_device = u2.connect(serial)
+            if u2_device is None:
+                return False
+
+            return True
+        except Exception as e:
+            self.append_log(f"设备连接检测异常: {str(e)}")
+            return False
 
     def is_script_running(self) -> bool:
         """Return True when automation thread is active."""
