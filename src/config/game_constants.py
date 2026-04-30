@@ -20,6 +20,7 @@ OUR_HP_REGION = (263, 466, 1015, 480)
 
 # 敌方护盾检测区域 (左上角x, 左上角y, 右下角x, 右下角y)
 ENEMY_SHIELD_REGION = (164, 136, 1096, 228)
+ENEMY_SHIELD_REGION_UP = (164, 123, 1096, 215)
 
 # 敌方随从位置偏移
 ENEMY_FOLLOWER_OFFSET_X = -50  # 从血量中心到随从中心的X偏移

@@ -49,3 +49,7 @@ class FollowerContext:
 
     # For on_attack
     attack_source_pos: Optional[Tuple[int, int]] = None
+
+    # Runtime diagnostics for select_targets failures (used by caller policy)
+    select_targets_fail_kinds: List[str] = field(default_factory=list)
+    select_targets_success_kinds: List[str] = field(default_factory=list)

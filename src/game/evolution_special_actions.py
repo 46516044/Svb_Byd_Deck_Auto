@@ -21,7 +21,7 @@ class EvolutionSpecialActions:
         is_super_evolution=False,
         existing_followers=None,
         follower_uid=None,
-    ):
+    ) -> bool:
         """
         处理进化/超进化后特殊action（如铁拳神父等），便于扩展
         follower_name: 卡牌名称
@@ -87,4 +87,44 @@ class EvolutionSpecialActions:
             is_super_evolution=bool(is_super_evolution),
             existing_followers=existing_followers,
         )
-        EffectEngine.run_ops(ops, ctx=ctx, trigger_id=trigger)
+        run_result = EffectEngine.run_ops(ops, ctx=ctx, trigger_id=trigger)
+
+        # If a required enemy-follower target was not selected, the game may still
+        # be waiting in target-select UI; cancel and let caller try another follower.
+        fail_kinds = list(getattr(ctx, "select_targets_fail_kinds", []) or [])
+        success_kinds = set(str(k) for k in list(getattr(ctx, "select_targets_success_kinds", []) or []))
+        enemy_target_failed = any(
+            str(k) == "enemy_follower" and "enemy_follower" not in success_kinds
+            for k in fail_kinds
+        )
+        if enemy_target_failed:
+            try:
+                self.device_state.logger.info(
+                    f"[{effect_key}] 进化敌方随从目标选择失败，取消当前进化并尝试其他随从"
+                )
+            except Exception:
+                pass
+            try:
+                from src.game.effects.operations import OperationExecutor
+
+                OperationExecutor.cancel_action(ctx)
+            except Exception:
+                pass
+            return False
+
+        if run_result.aborted:
+            try:
+                self.device_state.logger.warning(
+                    f"[{effect_key}] {trigger} effects aborted，取消当前进化并尝试其他随从"
+                )
+            except Exception:
+                pass
+            try:
+                from src.game.effects.operations import OperationExecutor
+
+                OperationExecutor.cancel_action(ctx)
+            except Exception:
+                pass
+            return False
+
+        return True
