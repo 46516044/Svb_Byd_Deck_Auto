@@ -9,7 +9,6 @@ import random
 import time
 import logging
 import os
-import onnxruntime
 from typing import Any, cast
 from PIL import Image
 from src.game.follower_manager import FollowerManager
@@ -79,6 +78,7 @@ class GameManager:
             mnist_path = resource_path(mnist_path)
         if os.path.exists(mnist_path):
             try:
+                import onnxruntime
                 self.mnist_session = onnxruntime.InferenceSession(mnist_path, providers=["CPUExecutionProvider"])
                 logger.info(f"MNIST模型已加载: {mnist_path}")
             except Exception as e:
