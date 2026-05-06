@@ -4,16 +4,55 @@ Support Enhance/"爆能" tiers encoded in image filenames.
 
 Naming convention (stem without extension):
 - "4_xxx" -> base_cost=4, enhance_costs=[], name="xxx"
-- "4_6_xxx" -> base_cost=4, enhance_costs=[6], name="xxx"
-- "4_6_8_xxx" -> base_cost=4, enhance_costs=[6, 8], name="xxx"
+- "4@6_xxx" -> base_cost=4, enhance_costs=[6], name="xxx"
+- "4@6@8_xxx" -> base_cost=4, enhance_costs=[6, 8], name="xxx"
 
-Card names may contain underscores. Enhance tiers are parsed as consecutive
+Card names may contain underscores. Enhance tiers are parsed as @-separated
 integer segments immediately after the base cost.
+
+Card names are resolved from CSV file when the parsed name looks like a card ID.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+import csv
+import os
+from typing import Dict, List, Optional, Tuple
+
+# Global card ID to name mapping, loaded on first access
+_CARD_ID_MAP: Dict[str, str] = {}
+
+
+def _load_card_id_map() -> Dict[str, str]:
+    """Load card ID to name mapping from CSV file."""
+    if _CARD_ID_MAP:
+        return _CARD_ID_MAP
+
+    csv_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "quanka", "SV_WB_Cards.csv"
+    )
+    csv_path = os.path.abspath(csv_path)
+
+    if not os.path.exists(csv_path):
+        return {}
+
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                card_id = row.get("card_id", "").strip()
+                card_name = row.get("name", "").strip()
+                if card_id and card_name:
+                    _CARD_ID_MAP[card_id] = card_name
+    except Exception:
+        pass
+
+    return _CARD_ID_MAP
+
+
+def get_card_name_by_id(card_id: str) -> Optional[str]:
+    """Get card name from card ID using CSV mapping."""
+    return _load_card_id_map().get(str(card_id).strip())
 
 
 def _basename_stem(raw: str) -> str:
@@ -130,35 +169,43 @@ def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
     if not stem:
         return 0, [], ""
 
+    # Handle new format: "2@4@6_xxx" (base_cost@enhance1@enhance2_name)
+    # Split by underscore first to separate cost part from name part
     parts = stem.split("_")
     if not parts:
         return 0, [], stem
 
+    # Parse cost part (may contain @ for enhance tiers)
+    cost_part = parts[0]
+    cost_segments = cost_part.split("@")
+
     try:
-        base_cost = int(parts[0])
+        base_cost = int(cost_segments[0])
     except Exception:
         # Fallback: treat whole stem as name.
         return 0, [], stem
 
+    # Parse enhance tiers from @-separated segments
     enhance_raw: List[int] = []
-    name_parts: List[str] = []
-
-    # Parse consecutive enhance tiers until the first non-int segment.
-    for seg in parts[1:]:
-        if name_parts:
-            name_parts.append(seg)
-            continue
-
+    for seg in cost_segments[1:]:
         try:
             enhance_raw.append(int(seg))
-            continue
         except Exception:
-            name_parts.append(seg)
+            break
+
+    # The rest are name parts
+    name_parts = parts[1:]
 
     card_name = "_".join([p for p in name_parts if p is not None])
     if not card_name:
         # If name is missing, best-effort fallback to stem tail.
         card_name = stem.split("_", 1)[-1] if "_" in stem else stem
+
+    # Try to resolve card ID to real name from CSV
+    # Check if card_name looks like a card ID (8-digit number)
+    resolved_name = _resolve_card_name(card_name)
+    if resolved_name:
+        card_name = resolved_name
 
     # Normalize enhance tiers: unique, > base_cost, sorted ascending.
     enhance_costs: List[int] = []
@@ -174,6 +221,31 @@ def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
     enhance_costs.sort()
 
     return int(base_cost), enhance_costs, str(card_name)
+
+
+def _resolve_card_name(card_name: str) -> Optional[str]:
+    """Resolve card name from card ID if it looks like an ID.
+
+    Card IDs are typically 8-digit numbers. If the parsed name is purely numeric,
+    try to look it up in the CSV mapping.
+    """
+    card_name = str(card_name or "").strip()
+    if not card_name:
+        return None
+
+    # Check if it looks like a card ID (8-digit number)
+    if card_name.isdigit() and len(card_name) == 8:
+        return get_card_name_by_id(card_name)
+
+    # Also check if it ends with atk_hp suffix (e.g., "10001110_2_2")
+    # Strip the stat suffix to get the base ID
+    parts = card_name.split("_")
+    if len(parts) >= 3 and parts[-1].isdigit() and parts[-2].isdigit():
+        potential_id = "_".join(parts[:-2])
+        if potential_id.isdigit() and len(potential_id) == 8:
+            return get_card_name_by_id(potential_id)
+
+    return None
 
 
 def parse_card_filename(filename: str) -> Tuple[int, List[int], str]:

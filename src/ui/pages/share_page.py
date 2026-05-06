@@ -9,11 +9,36 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import time
 import zlib
 
 from PyQt5.QtCore import Qt, QSize
+
+CUSTOM_DICT = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
+
+
+def decode_shortcode(shortcode: str) -> int:
+    if len(shortcode) != 4:
+        return 0
+    return (
+        CUSTOM_DICT.index(shortcode[0]) << 18
+        | CUSTOM_DICT.index(shortcode[1]) << 12
+        | CUSTOM_DICT.index(shortcode[2]) << 6
+        | CUSTOM_DICT.index(shortcode[3])
+    )
+
+
+def extract_card_id_from_filename(filename: str) -> int:
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    parts = stem.split("_")
+    for part in parts:
+        if part.isdigit() and len(part) >= 7 and len(part) <= 9:
+            return int(part)
+    return 0
+
+
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -153,7 +178,7 @@ class SharePage(QWidget):
         main_layout.addWidget(back_btn)
 
     def generate_share_code(self):
-        """生成分享码"""
+        """生成分享码（旧格式：base64压缩）"""
         try:
             card_files = []
             card_dir = get_card_cost_dir(ensure=True)
@@ -209,7 +234,7 @@ class SharePage(QWidget):
             QMessageBox.information(self, "成功", "分享码已复制到剪贴板！")
 
     def apply_share_code(self):
-        """应用分享码"""
+        """应用分享码（兼容旧格式base64和新格式4位Hash短码）"""
         try:
             if getattr(self.parent, "is_script_running", lambda: False)():
                 QMessageBox.warning(
@@ -226,76 +251,175 @@ class SharePage(QWidget):
             QMessageBox.warning(self, "警告", "请输入有效的分享码！")
             return
 
+        share_code = re.sub(r"#.*?#", "", share_code).strip()
+
         try:
-            compressed = base64.b64decode(share_code.encode("ascii"))
-            json_data = zlib.decompress(compressed).decode("utf-8")
-            share_data = json.loads(json_data)
+            if self._apply_old_format(share_code):
+                return
+        except Exception:
+            pass
 
-            version = share_data.get("version", 1)
-            if version not in [1, 2, 3]:
-                raise ValueError("不支持的分享码版本")
-
-            card_dir = get_card_cost_dir(ensure=True)
-            os.makedirs(card_dir, exist_ok=True)
-
-            for f in os.listdir(card_dir):
-                os.remove(os.path.join(card_dir, f))
-
-            source_dir = os.path.join(get_exe_dir(), "quanka")
-            exact_index, stem_index = build_card_source_index(source_dir)
-            variant_index = build_card_variant_index(source_dir)
-            for card_file in filter_non_evo_cards(list(share_data.get("cards", []))):
-                runtime_paths = resolve_runtime_card_paths(
-                    source_dir,
-                    card_file,
-                    exact_index=exact_index,
-                    stem_index=stem_index,
-                    variant_index=variant_index,
-                )
-
-                if not runtime_paths:
-                    self.parent.log_output.append(f"[分享] 未找到卡片: {card_file}")
-                    continue
-
-                for src in runtime_paths:
-                    if not os.path.exists(src):
-                        continue
-                    dst = os.path.join(card_dir, os.path.basename(src))
-                    shutil.copy2(src, dst)
-
-            config_path = get_config_path()
-            sc = share_data.get("strategy_config")
-            if not isinstance(sc, dict) and isinstance(share_data.get("config"), dict):
-                # Backward compatibility: version 2 share codes stored full config.
-                sc = extract_strategy_config(
-                    share_data["config"], cards=list(share_data.get("cards") or [])
-                )
-
-            if isinstance(sc, dict) and sc:
-                repo = ConfigRepository(config_path)
-                existing, _, _ = repo.load_existing(allow_default_on_error=True)
-                existing_cfg = existing if isinstance(existing, dict) else {}
-                merged = apply_strategy_config(existing_cfg, strategy_config=sc)
-                res = repo.replace_with_snapshot(merged, indent=4, ensure_ascii=False)
-                if not res.ok:
-                    raise RuntimeError(res.error or "config write failed")
-
-            if hasattr(self.parent, "config_page"):
-                self.parent.config_page.refresh_config_display()
-            if hasattr(self.parent, "card_priority_page"):
-                self.parent.card_priority_page.refresh_card_priority()
-
-            if hasattr(self.parent, "my_deck_page"):
-                self.parent.my_deck_page.load_deck()
-
-            self.refresh_preview()
-
-            QMessageBox.information(self, "成功", "卡组和配置已成功应用！")
-            self.parent.log_output.append("[分享] 已成功应用分享码中的卡组和配置")
-
+        try:
+            if self._apply_new_format(share_code):
+                return
         except Exception as e:
             QMessageBox.warning(self, "错误", f"应用分享码失败: {str(e)}")
             self.parent.log_output.append(f"[分享] 应用分享码失败: {str(e)}")
+
+    def _apply_old_format(self, share_code):
+        """应用旧格式分享码（base64压缩）"""
+        compressed = base64.b64decode(share_code.encode("ascii"))
+        json_data = zlib.decompress(compressed).decode("utf-8")
+        share_data = json.loads(json_data)
+
+        version = share_data.get("version", 1)
+        if version not in [1, 2, 3]:
+            raise ValueError("不支持的分享码版本")
+
+        card_dir = get_card_cost_dir(ensure=True)
+        os.makedirs(card_dir, exist_ok=True)
+
+        for f in os.listdir(card_dir):
+            os.remove(os.path.join(card_dir, f))
+
+        source_dir = os.path.join(get_exe_dir(), "quanka")
+        exact_index, stem_index = build_card_source_index(source_dir)
+        variant_index = build_card_variant_index(source_dir)
+        for card_file in filter_non_evo_cards(list(share_data.get("cards", []))):
+            runtime_paths = resolve_runtime_card_paths(
+                source_dir,
+                card_file,
+                exact_index=exact_index,
+                stem_index=stem_index,
+                variant_index=variant_index,
+            )
+
+            if not runtime_paths:
+                self.parent.log_output.append(f"[分享] 未找到卡片: {card_file}")
+                continue
+
+            for src in runtime_paths:
+                if not os.path.exists(src):
+                    continue
+                dst = os.path.join(card_dir, os.path.basename(src))
+                shutil.copy2(src, dst)
+
+        config_path = get_config_path()
+        sc = share_data.get("strategy_config")
+        if not isinstance(sc, dict) and isinstance(share_data.get("config"), dict):
+            sc = extract_strategy_config(
+                share_data["config"], cards=list(share_data.get("cards") or [])
+            )
+
+        if isinstance(sc, dict) and sc:
+            repo = ConfigRepository(config_path)
+            existing, _, _ = repo.load_existing(allow_default_on_error=True)
+            existing_cfg = existing if isinstance(existing, dict) else {}
+            merged = apply_strategy_config(existing_cfg, strategy_config=sc)
+            res = repo.replace_with_snapshot(merged, indent=4, ensure_ascii=False)
+            if not res.ok:
+                raise RuntimeError(res.error or "config write failed")
+
+        if hasattr(self.parent, "config_page"):
+            self.parent.config_page.refresh_config_display()
+        if hasattr(self.parent, "card_priority_page"):
+            self.parent.card_priority_page.refresh_card_priority()
+
+        if hasattr(self.parent, "my_deck_page"):
+            self.parent.my_deck_page.load_deck()
+
+        self.refresh_preview()
+
+        QMessageBox.information(self, "成功", "卡组和配置已成功应用！")
+        self.parent.log_output.append("[分享] 已成功应用分享码中的卡组和配置")
+        return True
+
+    def _apply_new_format(self, share_code):
+        """应用新格式分享码（4位Hash短码）"""
+        shortcode_parts = share_code.split(".")
+        if len(shortcode_parts) < 3:
+            raise ValueError("分享码格式非法")
+
+        card_shortcodes = shortcode_parts[2:]
+
+        card_id_map = {}
+        for sc in card_shortcodes:
+            cid = decode_shortcode(sc)
+            if cid > 0:
+                cid_str = str(cid)
+                if cid_str not in card_id_map:
+                    card_id_map[cid_str] = sc
+
+        if not card_id_map:
+            raise ValueError("分享码无效或已损坏")
+
+        card_dir = get_card_cost_dir(ensure=True)
+        os.makedirs(card_dir, exist_ok=True)
+
+        for f in os.listdir(card_dir):
+            os.remove(os.path.join(card_dir, f))
+
+        source_dir = os.path.join(get_exe_dir(), "quanka")
+        id_to_files = {}
+        if os.path.isdir(source_dir):
+            all_files = []
+            for root, dirs, files in os.walk(source_dir):
+                for fn in files:
+                    if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                        all_files.append(os.path.join(root, fn))
+
+            for fp in all_files:
+                fn = os.path.basename(fp)
+                cid = extract_card_id_from_filename(fn)
+                if cid > 0:
+                    cid_str = str(cid)
+                    if cid_str not in id_to_files:
+                        id_to_files[cid_str] = []
+                    id_to_files[cid_str].append(fp)
+
+        variant_index = build_card_variant_index(source_dir)
+        applied_count = 0
+        for cid_str in card_id_map:
+            matching_files = id_to_files.get(cid_str, [])
+            if not matching_files:
+                shortcode = card_id_map[cid_str]
+                self.parent.log_output.append(
+                    f"[分享] 未找到卡牌: {shortcode} -> {cid_str}"
+                )
+                print(f"[分享] 未找到卡牌: {shortcode} -> {cid_str}")
+                continue
+
+            card_file = matching_files[0]
+            runtime_paths = resolve_runtime_card_paths(
+                source_dir,
+                card_file,
+                variant_index=variant_index,
+            )
+
+            for src in runtime_paths:
+                if not os.path.exists(src):
+                    continue
+                dst = os.path.join(card_dir, os.path.basename(src))
+                shutil.copy2(src, dst)
+                applied_count += 1
+
+        if hasattr(self.parent, "config_page"):
+            self.parent.config_page.refresh_config_display()
+        if hasattr(self.parent, "card_priority_page"):
+            self.parent.card_priority_page.refresh_card_priority()
+
+        if hasattr(self.parent, "my_deck_page"):
+            self.parent.my_deck_page.load_deck()
+
+        self.refresh_preview()
+
+        QMessageBox.information(
+            self, "成功", f"卡组已成功应用！（{applied_count}张卡牌）"
+        )
+        self.parent.log_output.append(
+            f"[分享] 已成功应用分享码（共{applied_count}张卡牌）"
+        )
+        return True
 
     def refresh_preview(self):
         """刷新卡组预览"""
