@@ -23,15 +23,56 @@ from typing import Dict, List, Optional, Tuple
 _CARD_ID_MAP: Dict[str, str] = {}
 
 
+def _get_app_root() -> str:
+    """Get the application root directory.
+
+    In packaged (EXE) mode, returns the directory containing the EXE.
+    In development mode, returns the project root directory.
+    """
+    import sys
+
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        return os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+
+
+def _find_csv_path() -> str:
+    """Find the CSV file path with multiple fallback locations."""
+    import sys
+
+    app_root = _get_app_root()
+
+    possible_paths = [
+        os.path.join(app_root, "quanka", "SV_WB_Cards.csv"),
+        os.path.join(app_root, "SV_WB_Cards.csv"),
+        os.path.join(os.path.dirname(app_root), "quanka", "SV_WB_Cards.csv"),
+    ]
+
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        possible_paths.extend(
+            [
+                os.path.join(exe_dir, "quanka", "SV_WB_Cards.csv"),
+                os.path.join(exe_dir, "SV_WB_Cards.csv"),
+            ]
+        )
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            return os.path.abspath(path)
+
+    return possible_paths[0]
+
+
 def _load_card_id_map() -> Dict[str, str]:
     """Load card ID to name mapping from CSV file."""
     if _CARD_ID_MAP:
         return _CARD_ID_MAP
 
-    csv_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "quanka", "SV_WB_Cards.csv"
-    )
-    csv_path = os.path.abspath(csv_path)
+    csv_path = _find_csv_path()
 
     if not os.path.exists(csv_path):
         return {}
