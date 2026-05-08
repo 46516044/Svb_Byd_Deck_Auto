@@ -299,13 +299,28 @@ class CardSelectPage(QWidget):
                         if is_evo_card_name(file):
                             continue
                         rel_path = os.path.relpath(os.path.join(root, file), card_dir)
+
+                        # 解析卡片名称
+                        try:
+                            _, _, base_name = parse_card_filename(file)
+                            card_name = " ".join(
+                                normalize_card_base_name(str(base_name or "")).split(
+                                    "_"
+                                )
+                            )
+                        except Exception:
+                            card_name = " ".join(
+                                file.split("_", 1)[-1].rsplit(".", 1)[0].split("_")
+                            )
+
                         self.all_cards.append(
                             {
                                 "path": rel_path,
                                 "file": file,
-                                "category": os.path.basename(root)
-                                if root != card_dir
-                                else None,
+                                "name": card_name,
+                                "category": (
+                                    os.path.basename(root) if root != card_dir else None
+                                ),
                             }
                         )
 
@@ -360,7 +375,11 @@ class CardSelectPage(QWidget):
             if selected_costs and self.get_card_cost(card["file"]) not in selected_costs:
                 continue
 
-            if search_text and search_text not in card["file"].lower():
+            if (
+                search_text
+                and search_text not in card["file"].lower()
+                and search_text not in card["name"].lower()
+            ):
                 continue
 
             self.filtered_cards.append(card)

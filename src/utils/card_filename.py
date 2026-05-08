@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 from typing import Dict, List, Optional, Tuple
 
 # Global card ID to name mapping, loaded on first access
@@ -269,6 +270,9 @@ def _resolve_card_name(card_name: str) -> Optional[str]:
 
     Card IDs are typically 8-digit numbers. If the parsed name is purely numeric,
     try to look it up in the CSV mapping.
+
+    Also supports alternate art format: "10001110@1" -> resolves "10001110@1" from CSV
+    If alternate art is not found in CSV, falls back to base card ID.
     """
     card_name = str(card_name or "").strip()
     if not card_name:
@@ -278,6 +282,17 @@ def _resolve_card_name(card_name: str) -> Optional[str]:
     if card_name.isdigit() and len(card_name) == 8:
         return get_card_name_by_id(card_name)
 
+    # Check if it looks like alternate art format: "10001110@1"
+    alt_art_pattern = re.match(r"^(\d{8})@(\d+)$", card_name)
+    if alt_art_pattern:
+        # First try to find the alternate art entry
+        resolved = get_card_name_by_id(card_name)
+        if resolved:
+            return resolved
+        # Fallback to base card ID
+        base_id = alt_art_pattern.group(1)
+        return get_card_name_by_id(base_id)
+
     # Also check if it ends with atk_hp suffix (e.g., "10001110_2_2")
     # Strip the stat suffix to get the base ID
     parts = card_name.split("_")
@@ -285,6 +300,17 @@ def _resolve_card_name(card_name: str) -> Optional[str]:
         potential_id = "_".join(parts[:-2])
         if potential_id.isdigit() and len(potential_id) == 8:
             return get_card_name_by_id(potential_id)
+
+        # Also check alternate art format with stat suffix (e.g., "10001110@1_2_3")
+        alt_art_pattern = re.match(r"^(\d{8})@(\d+)$", potential_id)
+        if alt_art_pattern:
+            # First try to find the alternate art entry
+            resolved = get_card_name_by_id(potential_id)
+            if resolved:
+                return resolved
+            # Fallback to base card ID
+            base_id = alt_art_pattern.group(1)
+            return get_card_name_by_id(base_id)
 
     return None
 
