@@ -179,7 +179,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='shadowverse_auto_ui',
+    name='Svb_Byd_Deck_Auto',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -201,7 +201,7 @@ coll = COLLECT(
         'onnxruntime_providers_shared.dll',
         'onnxruntime_pybind11_state.pyd',
     ],
-    name='shadowverse_auto_ui',
+    name='Svb_Byd_Deck_Auto',
 )
 
 print("打包配置说明:")
