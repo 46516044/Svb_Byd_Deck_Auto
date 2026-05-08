@@ -36,6 +36,7 @@ class GameStateMachine:
             "gala_war",
             "gala_Ok",
             "gala_index",
+            "gala_BackPark",
         }
 
         # Allow immediate pause/stop to unwind.
@@ -134,7 +135,7 @@ class GameStateMachine:
                     continue
 
                 # 处理庆典模式按钮
-                if key in {"gala_war", "gala_Ok", "gala_index"}:
+                if key in {"gala_war", "gala_Ok", "gala_index", "gala_BackPark"}:
                     # 检测到庆典模式按钮，计算中心点并点击
                     device_state.logger.debug(
                         f"检测到庆典模式按钮: {template_info['name']}"
