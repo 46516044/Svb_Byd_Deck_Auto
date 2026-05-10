@@ -14,7 +14,7 @@ import shutil
 import time
 import zlib
 
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QTimer
 
 CUSTOM_DICT = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
 
@@ -65,6 +65,7 @@ from src.ui.deck_io import (
     filter_non_evo_cards,
     normalize_deck_cards,
     resolve_runtime_card_paths,
+    save_deck_snapshot,
 )
 from src.utils.card_filename import normalize_card_base_name, parse_card_filename
 
@@ -108,8 +109,7 @@ class SharePage(QWidget):
         self.preview_grid_layout.setAlignment(Qt.AlignTop)
         self.preview_scroll_area.setWidget(self.preview_scroll_content)
 
-        self.preview_scroll_area.setStyleSheet(
-            """
+        self.preview_scroll_area.setStyleSheet("""
             QScrollArea {
                 background-color: transparent;
                 border: 1px solid #555555;
@@ -118,8 +118,7 @@ class SharePage(QWidget):
             QWidget#PreviewScrollContent {
                 background-color: rgba(60, 60, 80, 180);
             }
-        """
-        )
+        """)
         self.preview_scroll_content.setObjectName("PreviewScrollContent")
 
         self.preview_scroll_area.setFixedHeight(180)
@@ -330,6 +329,8 @@ class SharePage(QWidget):
 
         self.refresh_preview()
 
+        self._auto_save_deck()
+
         QMessageBox.information(self, "成功", "卡组和配置已成功应用！")
         self.parent.log_output.append("[分享] 已成功应用分享码中的卡组和配置")
         return True
@@ -413,6 +414,8 @@ class SharePage(QWidget):
 
         self.refresh_preview()
 
+        self._auto_save_deck()
+
         QMessageBox.information(
             self, "成功", f"卡组已成功应用！（{applied_count}张卡牌）"
         )
@@ -420,6 +423,62 @@ class SharePage(QWidget):
             f"[分享] 已成功应用分享码（共{applied_count}张卡牌）"
         )
         return True
+
+    def _auto_save_deck(self):
+        """自动保存应用的卡组"""
+        try:
+            card_dir = get_card_cost_dir(ensure=True)
+            if not os.path.exists(card_dir):
+                return
+
+            card_files = [
+                f
+                for f in os.listdir(card_dir)
+                if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+            ]
+            card_files = filter_non_evo_cards(card_files)
+            if not card_files:
+                return
+
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            deck_name = f"导入卡组_{timestamp}"
+
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            save_deck_snapshot(
+                deck_name=deck_name,
+                cards=card_files,
+                decks_dir=decks_dir,
+                config_path=get_config_path(),
+            )
+
+            self.parent.log_output.append(f"[卡组] 已自动保存卡组 '{deck_name}'")
+
+            if hasattr(self.parent, "deck_store"):
+                try:
+                    self.parent.deck_store.refresh()
+                except Exception:
+                    pass
+
+            QTimer.singleShot(500, self._refresh_deck_list)
+
+        except Exception as e:
+            self.parent.log_output.append(f"[卡组] 自动保存卡组失败: {str(e)}")
+
+    def _refresh_deck_list(self):
+        """延迟刷新卡组列表"""
+        if hasattr(self.parent, "my_deck_page"):
+            my_page = self.parent.my_deck_page
+            try:
+                my_page.refresh_saved_decks()
+            except Exception:
+                pass
+
+        if hasattr(self.parent, "card_select_page"):
+            cs_page = self.parent.card_select_page
+            try:
+                cs_page.refresh_saved_decks()
+            except Exception:
+                pass
 
     def refresh_preview(self):
         """刷新卡组预览"""
@@ -457,12 +516,10 @@ class SharePage(QWidget):
             card_path = os.path.join(card_dir, card_file)
 
             card_container = QWidget()
-            card_container.setStyleSheet(
-                """
+            card_container.setStyleSheet("""
                 background-color: rgba(60, 60, 90, 150);
                 border-radius: 10px;
-            """
-            )
+            """)
             card_layout = QVBoxLayout(card_container)
             card_layout.setAlignment(Qt.AlignCenter)
             card_layout.setSpacing(5)
@@ -471,7 +528,9 @@ class SharePage(QWidget):
             card_label = QLabel()
             pixmap = QPixmap(card_path)
             if not pixmap.isNull():
-                pixmap = pixmap.scaled(card_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pixmap = pixmap.scaled(
+                    card_size, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
                 card_label.setPixmap(pixmap)
             card_label.setAlignment(Qt.AlignCenter)
 
@@ -479,10 +538,11 @@ class SharePage(QWidget):
                 _, _, card_name = parse_card_filename(card_file)
             except Exception:
                 card_name = card_file.split("_", 1)[-1].rsplit(".", 1)[0]
-            card_name = " ".join(normalize_card_base_name(str(card_name or "")).split("_"))
+            card_name = " ".join(
+                normalize_card_base_name(str(card_name or "")).split("_")
+            )
             name_label = QLabel(card_name)
-            name_label.setStyleSheet(
-                """
+            name_label.setStyleSheet("""
                 QLabel {
                     color: #FFFFFF;
                     background-color: transparent;
@@ -491,9 +551,7 @@ class SharePage(QWidget):
                     padding: 2px;
                     max-width: %dpx;
                 }
-            """
-                % (card_size.width() - 10)
-            )
+            """ % (card_size.width() - 10))
             name_label.setAlignment(Qt.AlignCenter)
             name_label.setWordWrap(True)
 
