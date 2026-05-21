@@ -115,50 +115,29 @@ class DeviceManager:
                 device_state.logger.info("用户中断脚本执行")
                 break
             except Exception as e:
-                # 检测是否是连接相关的错误（截图失败通常是连接问题）
-                error_str = str(e)
-                error_lower = error_str.lower()
-                is_connection_error = (
-                    "image file is truncated" in error_str
-                    or "truncated" in error_str
-                    or "disconnected" in error_lower
-                    or "connection refused" in error_lower
-                    or "adb" in error_lower
-                    or "timeout" in error_lower
-                    or "adbtimeout" in error_lower
-                    or "securityexception" in error_lower
-                    or "unknown rpc error" in error_lower
-                    or "inject_events" in error_lower
+                reconnect_count += 1
+                logger.warning(
+                    f"设备 {serial} 工作线程异常，尝试重连 ({reconnect_count}/{max_reconnect_attempts}): {str(e)}"
                 )
 
-                if is_connection_error:
-                    reconnect_count += 1
-                    logger.warning(
-                        f"设备 {serial} 连接异常，尝试重连 ({reconnect_count}/{max_reconnect_attempts}): {str(e)}"
+                if reconnect_count >= max_reconnect_attempts:
+                    logger.error(
+                        f"设备 {serial} 重连 {max_reconnect_attempts} 次失败，停止尝试"
                     )
-
-                    if reconnect_count >= max_reconnect_attempts:
-                        logger.error(
-                            f"设备 {serial} 重连 {max_reconnect_attempts} 次失败，停止尝试"
-                        )
-                        self.notification_manager.show_error(
-                            f"设备连接失败: {serial}",
-                            f"重连 {max_reconnect_attempts} 次均失败",
-                        )
-                        break
-
-                    # 重置设备状态以便重新连接
-                    device_state.adb_device = None
-                    device_state.u2_device = None
-                    device_state.game_manager = None
-
-                    logger.info(f"等待 {reconnect_delay} 秒后重试...")
-                    time.sleep(reconnect_delay)
-                    continue
-                else:
-                    # 非连接类错误，记录日志并退出
-                    logger.exception(f"设备 {serial} 工作线程异常: {str(e)}")
+                    self.notification_manager.show_error(
+                        f"设备连接失败: {serial}",
+                        f"重连 {max_reconnect_attempts} 次均失败",
+                    )
                     break
+
+                # 重置设备状态以便重新连接
+                device_state.adb_device = None
+                device_state.u2_device = None
+                device_state.game_manager = None
+
+                logger.info(f"等待 {reconnect_delay} 秒后重试...")
+                time.sleep(reconnect_delay)
+                continue
             finally:
                 # 只有在完全退出时才清理资源
                 if (

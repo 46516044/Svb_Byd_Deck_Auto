@@ -7,6 +7,7 @@ stay thin.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import traceback
 import queue
@@ -78,8 +79,14 @@ def run_cli(
     enable_command_listener: bool,
     command_queue: "queue.Queue[str]",
     log_queue: Optional["queue.Queue[str]"],
+    device_config: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Run the automation loop (CLI/script mode)."""
+    """Run the automation loop (CLI/script mode).
+
+    Args:
+        device_config: Optional device configuration from UI input.
+                       If provided, use this config directly instead of reading from config.json.
+    """
 
     logger: logging.Logger = logging.getLogger(__name__)
 
@@ -91,6 +98,24 @@ def run_cli(
         # 初始化配置管理器
         config_manager = ConfigManager()
 
+        # 如果提供了设备配置，直接使用它覆盖config中的设备列表
+        if device_config is not None:
+            config_manager.config["devices"] = [device_config]
+            logger.info(f"使用UI输入的设备配置: {device_config.get('serial')}")
+
+            # 如果设备配置中包含策略配置，应用到全局配置
+            strategy_config = device_config.get("strategy_config")
+            if isinstance(strategy_config, dict) and strategy_config:
+                try:
+                    from src.ui.deck_io import apply_strategy_config
+
+                    config_manager.config = apply_strategy_config(
+                        config_manager.config, strategy_config=strategy_config
+                    )
+                    logger.info("已应用卡组策略配置")
+                except Exception as e:
+                    logger.warning(f"应用策略配置失败: {e}")
+
         # Inject runtime config to avoid repeated disk reads in hot paths.
         try:
             from src.config import settings as _settings
@@ -100,7 +125,9 @@ def run_cli(
             pass
 
         # 设置日志系统（尽早初始化，方便后续步骤输出一致）
-        logger = setup_logging(config_manager.config, log_queue)
+        # 使用进程ID生成唯一日志文件名，避免多实例日志混淆
+        log_file = f"main_log_{os.getpid()}.log"
+        logger = setup_logging(config_manager.config, log_queue, log_file=log_file)
         logger.info("=== 影之诗自动对战脚本启动 ===")
         logger.info(f"使用配置文件: {config_manager.config_file}")
 
@@ -203,11 +230,16 @@ def run_gui(argv: Optional[list[str]] = None) -> int:
     command_queue: "queue.Queue[str]" = queue.Queue()
     log_queue: "queue.Queue[str]" = queue.Queue()
 
-    def run_main_script(*, enable_command_listener: bool = True) -> None:
+    def run_main_script(
+        *,
+        enable_command_listener: bool = True,
+        device_config: Optional[Dict[str, Any]] = None,
+    ) -> None:
         run_cli(
             enable_command_listener=enable_command_listener,
             command_queue=command_queue,
             log_queue=log_queue,
+            device_config=device_config,
         )
 
     app = QApplication(argv if argv is not None else _sys.argv)

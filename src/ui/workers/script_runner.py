@@ -20,10 +20,12 @@ class ScriptRunner(QThread):
         run_main_script: Callable[..., object],
         log_queue,
         parent: Optional[QObject] = None,
+        device_config=None,
     ):
         super().__init__(parent)
         self._run_main_script = run_main_script
         self._log_queue = log_queue
+        self._device_config = device_config
         self.start_time = 0
         self.battle_count = 0
         self.turn_count = 0
@@ -34,7 +36,9 @@ class ScriptRunner(QThread):
             self.start_time = time.time()
             self.status_signal.emit("运行中")
 
-            self._run_main_script(enable_command_listener=True)
+            self._run_main_script(
+                enable_command_listener=True, device_config=self._device_config
+            )
         except Exception as e:
             try:
                 self._log_queue.put(f"脚本运行出错: {str(e)}")

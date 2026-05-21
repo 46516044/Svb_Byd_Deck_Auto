@@ -622,66 +622,34 @@ class ShadowverseUI(QMainWindow):
         gala_mode = self.gala_mode_checkbox.isChecked()
         auto_pass = self.auto_pass_checkbox.isChecked()
 
-        # 更新配置文件
-        config_path = get_config_path()
-        config = None
+        # 保存设备配置（不写入配置文件，直接用于脚本运行）
+        # 包含卡组策略配置
+        strategy_config = {}
+        if hasattr(self, "card_select_page") and hasattr(self.card_select_page, "strategy_config"):
+            strategy_config = self.card_select_page.strategy_config or {}
 
-        try:
-            repo = ConfigRepository(config_path)
-            config, _, parse_err = repo.load_existing(allow_default_on_error=False)
-            if config is None:
-                # Avoid overwriting a potentially recoverable/copyable broken file.
-                self.append_log(f"更新配置文件失败: config.json解析错误: {str(parse_err or '')}")
-                config = None
+        self._device_config = {
+            "name": f"模拟器-{adb_port}",
+            "serial": adb_port,
+            "is_global": is_global,
+            "screenshot_deep_color": deep_color,
+            "gala_mode": gala_mode,
+            "strategy_config": strategy_config,
+        }
+        self._auto_pass = auto_pass
 
-            # 添加/更新当前设备（保留config里其它所有字段，包括UI未暴露的隐藏字段）
-            device_update = {
-                "name": f"模拟器-{adb_port}",
-                "serial": adb_port,
-                "is_global": is_global,
-                "screenshot_deep_color": deep_color,
-                "gala_mode": gala_mode,
-            }
+        # 写入配置文件（保存供下次启动使用）
+        self._save_device_config_to_file(adb_port, is_global, deep_color, gala_mode, auto_pass)
 
-            if config is not None:
-                # 每次只保留当前连接的设备，但保留该设备条目里可能存在的隐藏字段
-                base_device = {}
-                try:
-                    existing_devices = config.get("devices", [])
-                    if isinstance(existing_devices, list):
-                        for d in existing_devices:
-                            if isinstance(d, dict) and d.get("serial") == adb_port:
-                                base_device = dict(d)
-                                break
-                except Exception:
-                    base_device = {}
+        self.append_log(
+            f"设备配置已准备: 服务器={self.server_combo.currentText()}, "
+            f"深色识别={'开启' if deep_color else '关闭'}, "
+            f"庆典模式={'开启' if gala_mode else '关闭'}, "
+            f"启用空过={'开启' if auto_pass else '关闭'}"
+        )
 
-                deep_update_dict(base_device, device_update)
-                res = repo.update(
-                    {"devices": [base_device], "game": {"enable_auto_pass": auto_pass}},
-                    refuse_on_parse_error=True,
-                    indent=4,
-                    ensure_ascii=False,
-                )
-                if not res.ok:
-                    raise RuntimeError(res.error or "config write failed")
-
-                self.append_log(
-                    f"设备设置已更新: 服务器={self.server_combo.currentText()}, "
-                    f"深色识别={'开启' if deep_color else '关闭'}, "
-                    f"庆典模式={'开启' if gala_mode else '关闭'}, "
-                    f"启用空过={'开启' if auto_pass else '关闭'}"
-                )
-            else:
-                self.append_log(
-                    "设备设置未写入config.json（文件解析失败，请检查config.json格式是否为合法JSON）"
-                )
-
-        except Exception as e:
-            self.append_log(f"更新配置文件失败: {str(e)}")
-
-        # 创建脚本运行线程
-        self.script_thread = ScriptRunner(self._run_main_script, self._log_queue, self)
+        # 创建脚本运行线程（传递设备配置）
+        self.script_thread = ScriptRunner(self._run_main_script, self._log_queue, self, device_config=self._device_config)
         self.script_thread.status_signal.connect(self.update_status)
         self.script_thread.stats_signal.connect(self.update_stats)
 
@@ -695,6 +663,59 @@ class ShadowverseUI(QMainWindow):
             self.status_label.setText("连接失败")
             self.status_label.setStyleSheet("color: #FF5555;")
             self.append_log(f"设备连接失败: {adb_port}")
+
+    def _save_device_config_to_file(self, adb_port, is_global, deep_color, gala_mode, auto_pass):
+        """保存设备配置到配置文件（供下次启动读取）"""
+        try:
+            config_path = get_config_path()
+            repo = ConfigRepository(config_path)
+            existing, _, parse_err = repo.load_existing(allow_default_on_error=False)
+            
+            if existing is None:
+                self.append_log(f"保存配置失败: config.json解析错误: {str(parse_err or '')}")
+                return
+
+            device_update = {
+                "name": f"模拟器-{adb_port}",
+                "serial": adb_port,
+                "is_global": is_global,
+                "screenshot_deep_color": deep_color,
+                "gala_mode": gala_mode,
+            }
+
+            existing_devices = existing.get("devices", [])
+            if not isinstance(existing_devices, list):
+                existing_devices = []
+
+            # 更新或添加设备
+            updated_devices = []
+            found = False
+            for d in existing_devices:
+                if isinstance(d, dict) and d.get("serial") == adb_port:
+                    merged = dict(d)
+                    deep_update_dict(merged, device_update)
+                    updated_devices.append(merged)
+                    found = True
+                else:
+                    updated_devices.append(d)
+
+            if not found:
+                updated_devices.append(device_update)
+
+            res = repo.update(
+                {"devices": updated_devices, "game": {"enable_auto_pass": auto_pass}},
+                refuse_on_parse_error=True,
+                indent=4,
+                ensure_ascii=False,
+            )
+
+            if res.ok:
+                self.append_log("设备配置已保存到 config.json")
+            else:
+                raise RuntimeError(res.error or "config write failed")
+
+        except Exception as e:
+            self.append_log(f"保存配置文件失败: {str(e)}")
 
     def _check_device_connection(self, serial: str) -> bool:
         """检查设备是否能成功连接"""

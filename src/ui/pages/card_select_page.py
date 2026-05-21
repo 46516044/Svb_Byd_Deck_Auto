@@ -61,6 +61,7 @@ class CardSelectPage(QWidget):
         self.filtered_cards = []  # 筛选后的卡片
         self.card_categories = []  # 卡片分类
         self.current_category = None  # 当前选择的分类
+        self.strategy_config = {}  # 存储当前卡组的策略配置（不写入配置文件）
         if self.deck_store is not None:
             try:
                 self.deck_store.decks_changed.connect(self._on_decks_changed)
@@ -388,9 +389,11 @@ class CardSelectPage(QWidget):
         self.display_page(self.current_page)
 
     def get_card_cost(self, card_file):
-        """从文件名提取费用数字"""
+        """从文件名提取基础费用（不包含爆能费用）"""
         try:
-            return int(card_file.split("_")[0])
+            cost_part = card_file.split("_")[0]
+            base_cost = int(cost_part.split("@")[0])
+            return base_cost
         except Exception:
             return 0
 
@@ -607,6 +610,26 @@ class CardSelectPage(QWidget):
             if hasattr(self.parent, "my_deck_page"):
                 self.parent.my_deck_page.load_deck()
 
+            self._save_to_saved_decks()
+
+    def _save_to_saved_decks(self):
+        """将当前选择保存到已保存卡组"""
+        try:
+            deck_file = self.saved_decks_combo.itemData(
+                self.saved_decks_combo.currentIndex()
+            )
+            if deck_file:
+                deck_name = self.saved_decks_combo.currentText()
+                self.save_named_deck(deck_name)
+            else:
+                deck_name, ok = QInputDialog.getText(
+                    self, "保存卡组", "请输入卡组名称:"
+                )
+                if ok and deck_name.strip():
+                    self.save_named_deck(deck_name.strip())
+        except Exception as e:
+            self.parent.log_output.append(f"[卡组] 保存到已保存卡组失败: {str(e)}")
+
     def load_selected_deck(self):
         """加载选中的已保存卡组"""
         try:
@@ -677,16 +700,10 @@ class CardSelectPage(QWidget):
                     )
 
                 if isinstance(sc, dict) and sc:
-                    config_path = get_config_path()
-                    repo = ConfigRepository(config_path)
-                    existing, _, _ = repo.load_existing(allow_default_on_error=True)
-                    existing_cfg = existing if isinstance(existing, dict) else {}
-                    merged = apply_strategy_config(existing_cfg, strategy_config=sc)
-                    res = repo.replace_with_snapshot(merged, ensure_ascii=False, indent=2)
-                    if not res.ok:
-                        raise RuntimeError(res.error or "config write failed")
+                    # 将策略配置保存在内存中，不写入配置文件
+                    self.strategy_config = sc
                     self.parent.log_output.append(
-                        f"[卡组] 已应用卡组 '{deck_data.get('name')}' 的策略配置"
+                        f"[卡组] 已加载卡组 '{deck_data.get('name')}' 的策略配置"
                     )
 
                 QMessageBox.information(
