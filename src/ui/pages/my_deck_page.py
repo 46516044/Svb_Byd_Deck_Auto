@@ -369,7 +369,14 @@ class MyDeckPage(QWidget):
                 if hasattr(self.parent, "card_priority_page"):
                     self.parent.card_priority_page.refresh_card_priority()
 
+                # 更新 card_select_page 的 current_deck_file
+                if hasattr(self.parent, "card_select_page"):
+                    self.parent.card_select_page.current_deck_file = deck_file
+
         except Exception as e:
+            # 加载失败时清除 current_deck_file
+            if hasattr(self.parent, "card_select_page"):
+                self.parent.card_select_page.current_deck_file = None
             QMessageBox.warning(self, "错误", f"加载卡组失败: {str(e)}")
             self.parent.log_output.append(f"[卡组] 加载卡组失败: {str(e)}")
 

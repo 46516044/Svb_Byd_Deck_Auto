@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 from typing import Any
@@ -624,5 +625,70 @@ class CardPriorityPage(QWidget):
                     log_output.append("[配置] 卡牌设置已更新")
             except Exception:
                 pass
+
+            # 保存到当前卡组文件
+            self._save_to_current_deck(high_priority_cards, evolve_priority_cards)
+
         except Exception as e:
             QMessageBox.warning(self, "保存失败", f"保存卡牌设置失败: {str(e)}")
+
+    def _save_to_current_deck(
+        self, high_priority_cards: dict, evolve_priority_cards: dict
+    ) -> None:
+        """将优先级设置保存到当前卡组文件"""
+        if not high_priority_cards and not evolve_priority_cards:
+            return
+
+        try:
+            # 获取主窗口
+            parent = self.parent_widget
+
+            while parent:
+                if hasattr(parent, "card_select_page"):
+                    card_select_page = parent.card_select_page
+                    break
+                parent = getattr(parent, "parent_widget", None) or getattr(
+                    parent, "parent", None
+                )
+            else:
+                return
+
+            # 获取当前选中的卡组文件（使用新的 current_deck_file 属性）
+            deck_file = getattr(card_select_page, "current_deck_file", None)
+            if not deck_file:
+                return
+
+            # 读取卡组文件
+            decks_dir = os.path.join(os.path.dirname(get_config_path()), "saved_decks")
+            deck_path = os.path.join(decks_dir, deck_file)
+
+            if not os.path.exists(deck_path):
+                return
+
+            with open(deck_path, "r", encoding="utf-8") as f:
+                deck_data = json.load(f)
+
+            # 更新 strategy_config
+            sc = deck_data.get("strategy_config")
+            if not isinstance(sc, dict):
+                sc = {}
+                deck_data["strategy_config"] = sc
+
+            # 保存高优先级卡牌
+            if high_priority_cards:
+                sc["high_priority_cards"] = high_priority_cards
+            elif "high_priority_cards" in sc:
+                del sc["high_priority_cards"]
+
+            # 保存进化优先级
+            if evolve_priority_cards:
+                sc["evolve_priority_cards"] = evolve_priority_cards
+            elif "evolve_priority_cards" in sc:
+                del sc["evolve_priority_cards"]
+
+            # 写回卡组文件
+            with open(deck_path, "w", encoding="utf-8") as f:
+                json.dump(deck_data, f, ensure_ascii=False, indent=2)
+
+        except Exception:
+            pass

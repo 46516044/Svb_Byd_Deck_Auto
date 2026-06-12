@@ -62,6 +62,7 @@ class CardSelectPage(QWidget):
         self.card_categories = []  # 卡片分类
         self.current_category = None  # 当前选择的分类
         self.strategy_config = {}  # 存储当前卡组的策略配置（不写入配置文件）
+        self.current_deck_file = None  # 当前选中的卡组文件
         if self.deck_store is not None:
             try:
                 self.deck_store.decks_changed.connect(self._on_decks_changed)
@@ -99,7 +100,9 @@ class CardSelectPage(QWidget):
         """
         )
         self.saved_decks_combo.addItem("选择卡组", None)
-        self.saved_decks_combo.currentIndexChanged.connect(self.load_saved_deck)
+        self.saved_decks_combo.currentIndexChanged.connect(
+            self.on_deck_selection_changed
+        )
         deck_layout.addWidget(self.saved_decks_combo)
 
         self.refresh_saved_decks()  # 加载已保存的卡组列表
@@ -851,8 +854,8 @@ class CardSelectPage(QWidget):
         finally:
             self.saved_decks_combo.blockSignals(False)
 
-    def load_saved_deck(self, index):
-        """加载选中的已保存卡组"""
+    def on_deck_selection_changed(self, index):
+        """响应卡组选择变化，预览选中的卡组"""
         try:
             if getattr(self.parent, "is_script_running", lambda: False)():
                 QMessageBox.warning(
@@ -871,6 +874,7 @@ class CardSelectPage(QWidget):
 
         deck_file = self.saved_decks_combo.itemData(index)
         if not deck_file:
+            self.current_deck_file = None
             return
 
         try:
@@ -916,9 +920,13 @@ class CardSelectPage(QWidget):
                     f"[卡组] 已应用卡组 '{deck_data.get('name')}' 的策略配置"
                 )
 
+            # 保存当前卡组文件路径
+            self.current_deck_file = deck_file
+
             QMessageBox.information(self, "成功", f"已加载卡组 '{deck_data.get('name')}'")
             self.parent.log_output.append(f"[卡组] 已加载卡组 '{deck_data.get('name')}'")
 
         except Exception as e:
+            self.current_deck_file = None
             QMessageBox.warning(self, "错误", f"加载卡组失败: {str(e)}")
             self.parent.log_output.append(f"[卡组] 加载卡组失败: {str(e)}")

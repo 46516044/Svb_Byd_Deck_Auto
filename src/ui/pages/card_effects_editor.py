@@ -30,6 +30,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+import json
+import os
+
 from src.config.config_repository import ConfigRepository
 from src.config.effects_registry import (
     CONTEXT_HAND_CARD,
@@ -631,6 +634,7 @@ class CardEffectsDialog(QDialog):
         is_enhance: bool,
     ):
         super().__init__(parent)
+        self.parent_widget = parent
         self.base_name = str(base_name or "")
         self.config_key = str(config_key or base_name or "")
         self.display_name = str(display_name or base_name or "")
@@ -781,6 +785,7 @@ class CardEffectsDialog(QDialog):
                     pass
 
     def _save(self) -> None:
+        # 1. 首先更新全局配置（保持原有行为）
         cfg, parse_ok, err = self.repo.load_existing(allow_default_on_error=False)
         if cfg is None:
             QMessageBox.warning(self, "保存失败", f"config.json解析失败: {str(err or '')}")
@@ -795,6 +800,8 @@ class CardEffectsDialog(QDialog):
             effects = {}
             strategy["effects"] = effects
 
+        # 收集要保存的效果数据
+        effects_to_save = {}
         for tid, cb in list(self.trig_checks.items()):
             key = self._key_for_trigger(tid)
             card_eff = effects.get(key)
@@ -816,14 +823,84 @@ class CardEffectsDialog(QDialog):
 
             if card_eff:
                 effects[key] = card_eff
+                effects_to_save[key] = card_eff
             else:
                 if key in effects:
                     del effects[key]
 
+        # 2. 保存到全局配置
         res = self.repo.replace_with_snapshot(cfg, indent=4, ensure_ascii=False)
         if not res.ok:
             QMessageBox.warning(self, "保存失败", f"保存失败: {str(res.error or '')}")
             return
 
+        # 3. 尝试保存到当前卡组文件
+        self._save_to_current_deck(effects_to_save)
+
         QMessageBox.information(self, "成功", "特殊效果已保存")
         self.accept()
+
+    def _save_to_current_deck(self, effects_to_save: dict) -> None:
+        """将效果保存到当前卡组文件"""
+        if not effects_to_save:
+            return
+
+        try:
+            # 获取主窗口
+            parent = self.parent_widget
+
+            while parent:
+                if hasattr(parent, "card_select_page"):
+                    card_select_page = parent.card_select_page
+                    break
+                parent = getattr(parent, "parent_widget", None) or getattr(
+                    parent, "parent", None
+                )
+            else:
+                return
+
+            # 获取当前选中的卡组文件（使用新的 current_deck_file 属性）
+            deck_file = getattr(card_select_page, "current_deck_file", None)
+            if not deck_file:
+                return
+
+            # 读取卡组文件
+            decks_dir = os.path.join(os.path.dirname(get_config_path()), "saved_decks")
+            deck_path = os.path.join(decks_dir, deck_file)
+
+            if not os.path.exists(deck_path):
+                return
+
+            with open(deck_path, "r", encoding="utf-8") as f:
+                deck_data = json.load(f)
+
+            # 更新 strategy_config
+            sc = deck_data.get("strategy_config")
+            if not isinstance(sc, dict):
+                sc = {}
+                deck_data["strategy_config"] = sc
+
+            # 获取或创建 strategy.effects
+            strategy = sc.get("strategy")
+            if not isinstance(strategy, dict):
+                strategy = {}
+                sc["strategy"] = strategy
+
+            deck_effects = strategy.get("effects")
+            if not isinstance(deck_effects, dict):
+                deck_effects = {}
+                strategy["effects"] = deck_effects
+
+            # 合并效果数据
+            for key, card_eff in effects_to_save.items():
+                if card_eff:
+                    deck_effects[key] = card_eff
+                elif key in deck_effects:
+                    del deck_effects[key]
+
+            # 写回卡组文件
+            with open(deck_path, "w", encoding="utf-8") as f:
+                json.dump(deck_data, f, ensure_ascii=False, indent=2)
+
+        except Exception:
+            pass
