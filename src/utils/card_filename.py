@@ -47,16 +47,16 @@ def _find_csv_path() -> str:
     app_root = _get_app_root()
 
     possible_paths = [
-        os.path.join(app_root, "quanka", "SV_WB_Cards.csv"),
+        os.path.join(app_root, "quanka\SV_WB_Cards", "SV_WB_Cards.csv"),
         os.path.join(app_root, "SV_WB_Cards.csv"),
-        os.path.join(os.path.dirname(app_root), "quanka", "SV_WB_Cards.csv"),
+        os.path.join(os.path.dirname(app_root), "quanka\SV_WB_Cards", "SV_WB_Cards.csv"),
     ]
 
     if getattr(sys, "frozen", False):
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         possible_paths.extend(
             [
-                os.path.join(exe_dir, "quanka", "SV_WB_Cards.csv"),
+                os.path.join(exe_dir, "quanka\SV_WB_Cards", "SV_WB_Cards.csv"),
                 os.path.join(exe_dir, "SV_WB_Cards.csv"),
             ]
         )

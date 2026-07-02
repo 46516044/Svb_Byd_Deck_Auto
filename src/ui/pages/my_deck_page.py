@@ -307,7 +307,7 @@ class MyDeckPage(QWidget):
                     print(f"删除文件失败: {file_path} - {e}")
 
             # 复制卡片到当前卡组
-            source_dir = os.path.join(get_exe_dir(), "quanka")
+            source_dir = os.path.join(get_exe_dir(), "quanka\SV_WB_Cards")
             exact_index, stem_index = build_card_source_index(source_dir)
             variant_index = build_card_variant_index(source_dir)
             success_count = 0

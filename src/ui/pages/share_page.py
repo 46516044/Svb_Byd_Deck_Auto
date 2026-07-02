@@ -281,7 +281,7 @@ class SharePage(QWidget):
         for f in os.listdir(card_dir):
             os.remove(os.path.join(card_dir, f))
 
-        source_dir = os.path.join(get_exe_dir(), "quanka")
+        source_dir = os.path.join(get_exe_dir(), "quanka\SV_WB_Cards")
         exact_index, stem_index = build_card_source_index(source_dir)
         variant_index = build_card_variant_index(source_dir)
         for card_file in filter_non_evo_cards(list(share_data.get("cards", []))):
@@ -360,7 +360,7 @@ class SharePage(QWidget):
         for f in os.listdir(card_dir):
             os.remove(os.path.join(card_dir, f))
 
-        source_dir = os.path.join(get_exe_dir(), "quanka")
+        source_dir = os.path.join(get_exe_dir(), "quanka\SV_WB_Cards")
         id_to_files = {}
         if os.path.isdir(source_dir):
             all_files = []

@@ -277,7 +277,7 @@ class CardSelectPage(QWidget):
 
     def load_cards(self):
         """加载所有卡片和分类"""
-        card_dir = os.path.join(get_exe_dir(), "quanka")
+        card_dir = os.path.join(get_exe_dir(), "quanka\SV_WB_Cards")
         self.all_cards = []
         self.card_categories = []
 
@@ -433,7 +433,7 @@ class CardSelectPage(QWidget):
         row, col = 0, 0
         for i in range(start_index, end_index):
             card_data = self.filtered_cards[i]
-            card_path = os.path.join(get_exe_dir(), "quanka", card_data["path"])
+            card_path = os.path.join(get_exe_dir(), "quanka\SV_WB_Cards", card_data["path"])
 
             card_container = QWidget()
             card_container.setStyleSheet(
@@ -580,7 +580,7 @@ class CardSelectPage(QWidget):
 
         success_count = 0
         selected_base_count = 0
-        source_dir = os.path.join(get_exe_dir(), "quanka")
+        source_dir = os.path.join(get_exe_dir(), "quanka\SV_WB_Cards")
         exact_index, stem_index = build_card_source_index(source_dir)
         variant_index = build_card_variant_index(source_dir)
         for card_file in self.selected_cards:
@@ -667,7 +667,7 @@ class CardSelectPage(QWidget):
                 except Exception as e:
                     print(f"删除文件失败: {file_path} - {e}")
 
-            source_dir = os.path.join(get_exe_dir(), "quanka")
+            source_dir = os.path.join(get_exe_dir(), "quanka\SV_WB_Cards")
             exact_index, stem_index = build_card_source_index(source_dir)
             variant_index = build_card_variant_index(source_dir)
             success_count = 0
@@ -885,7 +885,7 @@ class CardSelectPage(QWidget):
                 deck_data = json.load(f)
 
             self.selected_cards = []
-            source_dir = os.path.join(get_exe_dir(), "quanka")
+            source_dir = os.path.join(get_exe_dir(), "quanka\SV_WB_Cards")
             exact_index, stem_index = build_card_source_index(source_dir)
 
             for card_file in filter_non_evo_cards(list(deck_data.get("cards", []))):

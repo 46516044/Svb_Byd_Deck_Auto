@@ -62,7 +62,7 @@ Write-Host ""
 Write-Host "[3/3] 复制资源目录..." -ForegroundColor Yellow
 
 $requiredDirs = @(
-    "quanka",
+    "quanka\SV_WB_Cards",
     "Image",
     "templates",
     "templates_global",

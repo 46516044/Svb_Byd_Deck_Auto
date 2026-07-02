@@ -116,7 +116,7 @@ config.json
 /.claude
 claude.md
 /debug*
-/quanka
+#/quanka
 
 # 免责声明
 consent.txt
