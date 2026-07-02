@@ -1,65 +1,65 @@
-<#
+ï»¿<#
 .SYNOPSIS
-Ó°Ö®Ê«×Ô¶¯¶ÔÕ½½Å±¾ - ´ò°ü½Å±¾
+å½±ä¹‹è¯—è‡ªåŠ¨å¯¹æˆ˜è„šæœ¬ - æ‰“åŒ…è„šæœ¬
 
 .DESCRIPTION
-Ê¹ÓÃ PyInstaller ´ò°üÏîÄ¿£¬²¢×Ô¶¯¸´ÖÆËùĞè×ÊÔ´Ä¿Â¼
+ä½¿ç”¨ PyInstaller æ‰“åŒ…é¡¹ç›®ï¼Œå¹¶è‡ªåŠ¨å¤åˆ¶æ‰€éœ€èµ„æºç›®å½•
 #>
 
 param(
     [string]$DistDir = "dist\Svb_Byd_Deck_Auto"
 )
 
-# ÉèÖÃ¿ØÖÆÌ¨±àÂë
+# è®¾ç½®æ§åˆ¶å°ç¼–ç 
 $OutputEncoding = [console]::InputEncoding = [console]::OutputEncoding = New-Object System.Text.UTF8Encoding
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Ó°Ö®Ê«×Ô¶¯¶ÔÕ½½Å±¾ - ´ò°ü½Å±¾" -ForegroundColor Cyan
+Write-Host "  å½±ä¹‹è¯—è‡ªåŠ¨å¯¹æˆ˜è„šæœ¬ - æ‰“åŒ…è„šæœ¬" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ¼ì²éĞéÄâ»·¾³ÊÇ·ñ´æÔÚ
+# æ£€æŸ¥è™šæ‹Ÿç¯å¢ƒæ˜¯å¦å­˜åœ¨
 $venvPath = ".venv\Scripts\activate"
 if (-not (Test-Path $venvPath)) {
-    Write-Host "´íÎó: ĞéÄâ»·¾³²»´æÔÚ - $venvPath" -ForegroundColor Red
-    Read-Host "°´»Ø³µ¼üÍË³ö..."
+    Write-Host "é”™è¯¯: è™šæ‹Ÿç¯å¢ƒä¸å­˜åœ¨ - $venvPath" -ForegroundColor Red
+    Read-Host "æŒ‰å›è½¦é”®é€€å‡º..."
     exit 1
 }
 
-# ½øÈëĞéÄâ»·¾³
-Write-Host "[1/3] ¼¤»îĞéÄâ»·¾³..." -ForegroundColor Yellow
+# è¿›å…¥è™šæ‹Ÿç¯å¢ƒ
+Write-Host "[1/3] æ¿€æ´»è™šæ‹Ÿç¯å¢ƒ..." -ForegroundColor Yellow
 try {
     & $venvPath
     if (-not $?) {
-        throw "¼¤»îĞéÄâ»·¾³Ê§°Ü"
+        throw "æ¿€æ´»è™šæ‹Ÿç¯å¢ƒå¤±è´¥"
     }
-    Write-Host "ĞéÄâ»·¾³ÒÑ¼¤»î" -ForegroundColor Green
+    Write-Host "è™šæ‹Ÿç¯å¢ƒå·²æ¿€æ´»" -ForegroundColor Green
 }
 catch {
-    Write-Host "´íÎó: $_" -ForegroundColor Red
-    Read-Host "°´»Ø³µ¼üÍË³ö..."
+    Write-Host "é”™è¯¯: $_" -ForegroundColor Red
+    Read-Host "æŒ‰å›è½¦é”®é€€å‡º..."
     exit 1
 }
 
-# Ö´ĞĞ´ò°ü
+# æ‰§è¡Œæ‰“åŒ…
 Write-Host ""
-Write-Host "[2/3] Ö´ĞĞ PyInstaller ´ò°ü..." -ForegroundColor Yellow
+Write-Host "[2/3] æ‰§è¡Œ PyInstaller æ‰“åŒ…..." -ForegroundColor Yellow
 try {
     pyinstaller main.spec
     if (-not $?) {
-        throw "PyInstaller Ö´ĞĞÊ§°Ü"
+        throw "PyInstaller æ‰§è¡Œå¤±è´¥"
     }
-    Write-Host "´ò°üÍê³É" -ForegroundColor Green
+    Write-Host "æ‰“åŒ…å®Œæˆ" -ForegroundColor Green
 }
 catch {
-    Write-Host "´íÎó: $_" -ForegroundColor Red
-    Read-Host "°´»Ø³µ¼üÍË³ö..."
+    Write-Host "é”™è¯¯: $_" -ForegroundColor Red
+    Read-Host "æŒ‰å›è½¦é”®é€€å‡º..."
     exit 1
 }
 
-# ¸´ÖÆ×ÊÔ´Ä¿Â¼µ½ dist Ä¿Â¼
+# å¤åˆ¶èµ„æºç›®å½•åˆ° dist ç›®å½•
 Write-Host ""
-Write-Host "[3/3] ¸´ÖÆ×ÊÔ´Ä¿Â¼..." -ForegroundColor Yellow
+Write-Host "[3/3] å¤åˆ¶èµ„æºç›®å½•..." -ForegroundColor Yellow
 
 $requiredDirs = @(
     "quanka\SV_WB_Cards",
@@ -67,7 +67,8 @@ $requiredDirs = @(
     "templates",
     "templates_global",
     "card_cost",
-    "shadowverse_cards_cost"
+    "shadowverse_cards_cost",
+    "è¯´æ˜æ–‡æ¡£ï¼ˆå¿…çœ‹ï¼‰"
 )
 
 foreach ($dir in $requiredDirs) {
@@ -75,23 +76,23 @@ foreach ($dir in $requiredDirs) {
     $destPath = "$DistDir\$dir"
     
     if (Test-Path $sourcePath) {
-        # ´´½¨Ä¿±êÄ¿Â¼
+        # åˆ›å»ºç›®æ ‡ç›®å½•
         if (-not (Test-Path $destPath)) {
             New-Item -ItemType Directory -Path $destPath | Out-Null
         }
         
-        # ¸´ÖÆÄ¿Â¼ÄÚÈİ
+        # å¤åˆ¶ç›®å½•å†…å®¹
         Copy-Item -Path "$sourcePath\*" -Destination $destPath -Recurse -Force
-        Write-Host "ÒÑ¸´ÖÆ: $dir" -ForegroundColor Green
+        Write-Host "å·²å¤åˆ¶: $dir" -ForegroundColor Green
     }
     else {
-        Write-Host "¾¯¸æ: $dir Ä¿Â¼²»´æÔÚ" -ForegroundColor Yellow
+        Write-Host "è­¦å‘Š: $dir ç›®å½•ä¸å­˜åœ¨" -ForegroundColor Yellow
     }
 }
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  ´ò°üÍê³É!" -ForegroundColor Green
-Write-Host "  ¿ÉÖ´ĞĞÎÄ¼şÎ»ÖÃ: $DistDir\Svb_Byd_Deck_Auto.exe" -ForegroundColor Cyan
+Write-Host "  æ‰“åŒ…å®Œæˆ!" -ForegroundColor Green
+Write-Host "  å¯æ‰§è¡Œæ–‡ä»¶ä½ç½®: $DistDir\Svb_Byd_Deck_Auto.exe" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
-Read-Host "°´»Ø³µ¼üÍË³ö..."
+Read-Host "æŒ‰å›è½¦é”®é€€å‡º..."

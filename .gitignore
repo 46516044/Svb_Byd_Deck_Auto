@@ -75,11 +75,11 @@ debug/
 !src/templates/**/*.png
 
 # 允许quanka文件夹中的图片文件
-# !quanka/**/*.png
-# !quanka/**/*.jpg
-# !quanka/**/*.jpeg
-# !quanka/**/*.gif
-# !quanka/**/*.bmp
+!quanka/**/*.png
+!quanka/**/*.jpg
+!quanka/**/*.jpeg
+!quanka/**/*.gif
+!quanka/**/*.bmp
 
 # 临时文件
 *.tmp
@@ -120,3 +120,6 @@ claude.md
 
 # 免责声明
 consent.txt
+
+# 允许说明文档文件夹中的文件
+!说明文档（必看）/*
