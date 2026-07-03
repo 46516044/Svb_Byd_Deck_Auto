@@ -245,6 +245,8 @@ def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
         for idx in range(1, len(parts) - 1):
             seg = parts[idx]
             try:
+                if seg.isdigit() and len(seg) == 8:
+                    break
                 enhance_raw.append(int(seg))
                 name_start = idx + 1
                 continue
