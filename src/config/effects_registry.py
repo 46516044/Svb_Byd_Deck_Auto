@@ -280,11 +280,27 @@ OPERATIONS: List[Dict[str, Any]] = [
     {
         "op_id": "add_cost_bonus",
         "label": "增加费用",
-        "supported_context_kinds": [CONTEXT_HAND_CARD],
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
         "params_schema": [
             {
                 "name": "amount",
                 "label": "费用+",
+                "type": "int",
+                "default": 1,
+                "min": -10,
+                "max": 10,
+                "compact": True,
+            }
+        ],
+    },
+    {
+        "op_id": "increase_cost_cap",
+        "label": "跳费(增加费用上限)",
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
+        "params_schema": [
+            {
+                "name": "amount",
+                "label": "上限+",
                 "type": "int",
                 "default": 1,
                 "min": -10,
