@@ -767,6 +767,7 @@ class DeviceState:
         self.current_round_count = 1
         self.evolution_point = 2
         self.super_evolution_point = 2
+        self.cost_cap_bonus = 0
 
     def save_round_statistics(self):
         """保存回合统计数据到文件"""
@@ -980,6 +981,7 @@ class DeviceState:
         self.extra_cost_remaining_uses = 0
         self.last_round_cost_used = 0
         self.last_round_available_cost = 0
+        self.cost_cap_bonus = 0
         self.cost_history.clear()
         self.mulligan_done_this_match = False
 
