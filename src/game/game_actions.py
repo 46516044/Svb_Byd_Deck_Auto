@@ -2487,7 +2487,8 @@ class GameActions:
         self._play_phase_enemy_affected = False
         # 获取当前回合可用费用
         current_round = self.device_state.current_round_count
-        available_cost = min(10, current_round)  # 基础费用 = 当前回合数（最大10）
+        cost_cap_bonus = getattr(self.device_state, 'cost_cap_bonus', 0)
+        available_cost = min(10, current_round + cost_cap_bonus)
         
         # 第一回合检查是否有额外费用点
         if current_round == 1 and self.device_state.extra_cost_available_this_match is None:

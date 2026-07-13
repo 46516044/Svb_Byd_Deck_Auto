@@ -257,6 +257,21 @@ class OperationExecutor:
         return True
 
     @staticmethod
+    def increase_cost_cap(ctx: Any, *, amount: Any) -> bool:
+        ds = getattr(ctx, "device_state", None)
+        if ds is None:
+            return False
+        val = _safe_int(amount, 0)
+        prev = _safe_int(getattr(ds, "cost_cap_bonus", 0), 0)
+        new_total = prev + val
+        ds.cost_cap_bonus = new_total
+        try:
+            ds.logger.info(f"[Effect] increase_cost_cap amount={val} total_cap_bonus={new_total}")
+        except Exception:
+            pass
+        return True
+
+    @staticmethod
     def buff(
         ctx: Any,
         *,

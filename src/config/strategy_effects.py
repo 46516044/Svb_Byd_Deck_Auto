@@ -282,6 +282,10 @@ def _step_effect_signature(step: Dict[str, Any]) -> Optional[tuple[Any, ...]]:
         return ("cancel_action",)
     if op == "disallow_empty_evolve":
         return ("disallow_empty_evolve",)
+    if op == "add_cost_bonus":
+        return ("add_cost_bonus",)
+    if op == "increase_cost_cap":
+        return ("increase_cost_cap",)
     if op == "legacy_target_type":
         return ("legacy_target_type", str(step.get("target_type") or ""))
     if op == "legacy_action":

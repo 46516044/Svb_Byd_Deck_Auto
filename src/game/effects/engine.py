@@ -133,6 +133,11 @@ class EffectEngine:
                 ctx,
                 amount=step.get("amount", 0),
             )
+        if op_id == "increase_cost_cap":
+            return OperationExecutor.increase_cost_cap(
+                ctx,
+                amount=step.get("amount", 0),
+            )
         if op_id == "buff":
             stat_ok = OperationExecutor.buff(
                 ctx,
