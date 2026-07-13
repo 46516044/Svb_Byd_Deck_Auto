@@ -118,7 +118,7 @@ config.json
 claude.md
 /debug*
 #/quanka
-
+.gitignore
 # OpenCode deepwork session notes
 .slim/deepwork/
 
