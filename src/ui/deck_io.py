@@ -74,6 +74,25 @@ def filter_non_evo_cards(cards: List[str]) -> List[str]:
     return out
 
 
+def extract_deck_strategy_config(deck_data: Any) -> Dict[str, Any]:
+    """Read portable strategy data from current or legacy deck payloads."""
+
+    if not isinstance(deck_data, dict):
+        return {}
+
+    strategy_config = deck_data.get("strategy_config")
+    if isinstance(strategy_config, dict):
+        return copy.deepcopy(strategy_config)
+
+    legacy_config = deck_data.get("config")
+    if isinstance(legacy_config, dict):
+        return extract_strategy_config(
+            legacy_config,
+            cards=list(deck_data.get("cards") or []),
+        )
+    return {}
+
+
 def build_card_variant_index(source_dir: str) -> Dict[Tuple[int, str], Dict[str, List[str]]]:
     """Build an index for base/evo variant lookup under ``source_dir``."""
 
@@ -366,6 +385,7 @@ def save_deck_snapshot(
     cards: List[str],
     decks_dir: str,
     config_path: Optional[str] = None,
+    strategy_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Save a deck snapshot json and return its file path."""
 
@@ -384,7 +404,9 @@ def save_deck_snapshot(
         "timestamp": int(time.time()),
     }
 
-    if config_path and os.path.exists(config_path):
+    if isinstance(strategy_config, dict):
+        deck_data["strategy_config"] = copy.deepcopy(strategy_config)
+    elif config_path and os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
         if isinstance(cfg, dict):

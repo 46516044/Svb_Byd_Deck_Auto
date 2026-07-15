@@ -25,18 +25,22 @@ def _command_listener(
     command_queue: "queue.Queue[str]",
     device_manager: "DeviceManager",
     logger: logging.Logger,
+    stop_event: threading.Event,
 ) -> None:
     """命令监听线程（广播到所有设备）。"""
 
     logger.info("命令监听线程启动")
     logger.info("可用命令: 'p'暂停, 'r'恢复, 'e'退出, 's'统计")
 
-    while True:
+    while not stop_event.is_set():
         try:
             try:
                 cmd = command_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
+
+            if stop_event.is_set():
+                break
 
             # Apply pause/resume immediately (do not wait for device loop).
             if cmd == "p":
@@ -93,6 +97,8 @@ def run_cli(
     from src.device.device_manager import DeviceManager
     from src.ui.notification_manager import NotificationManager
 
+    command_stop_event: Optional[threading.Event] = None
+    command_thread: Optional[threading.Thread] = None
     try:
         # 初始化配置管理器
         config_manager = ConfigManager()
@@ -190,9 +196,10 @@ def run_cli(
 
         # 启动命令监听线程
         if enable_command_listener:
+            command_stop_event = threading.Event()
             command_thread = threading.Thread(
                 target=_command_listener,
-                args=(command_queue, device_manager, logger),
+                args=(command_queue, device_manager, logger, command_stop_event),
                 daemon=True,
             )
             command_thread.start()
@@ -211,6 +218,11 @@ def run_cli(
         logger.exception(f"程序运行出错: {str(e)}")
         print(f"程序崩溃: {str(e)}")
         traceback.print_exc()
+    finally:
+        if command_stop_event is not None:
+            command_stop_event.set()
+        if command_thread is not None and command_thread.is_alive():
+            command_thread.join()
 
 
 def run_gui(argv: Optional[list[str]] = None) -> int:

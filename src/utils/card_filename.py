@@ -48,16 +48,26 @@ def _find_csv_path() -> str:
     app_root = _get_app_root()
 
     possible_paths = [
-        os.path.join(app_root, "quanka\SV_WB_Cards", "SV_WB_Cards.csv"),
+        os.path.join(app_root, "quanka", "SV_WB_Cards", "SV_WB_Cards.csv"),
         os.path.join(app_root, "SV_WB_Cards.csv"),
-        os.path.join(os.path.dirname(app_root), "quanka\SV_WB_Cards", "SV_WB_Cards.csv"),
+        os.path.join(
+            os.path.dirname(app_root),
+            "quanka",
+            "SV_WB_Cards",
+            "SV_WB_Cards.csv",
+        ),
     ]
 
     if getattr(sys, "frozen", False):
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         possible_paths.extend(
             [
-                os.path.join(exe_dir, "quanka\SV_WB_Cards", "SV_WB_Cards.csv"),
+                os.path.join(
+                    exe_dir,
+                    "quanka",
+                    "SV_WB_Cards",
+                    "SV_WB_Cards.csv",
+                ),
                 os.path.join(exe_dir, "SV_WB_Cards.csv"),
             ]
         )
@@ -294,6 +304,13 @@ def _resolve_card_name(card_name: str) -> Optional[str]:
     card_name = str(card_name or "").strip()
     if not card_name:
         return None
+
+    # Evolved templates append ``_evo`` to the card ID. Resolve the base ID
+    # first, then preserve the suffix so downstream normalization can pair the
+    # base and evolved images under the same card name.
+    if card_name.lower().endswith("_evo"):
+        resolved_base = _resolve_card_name(card_name[:-4])
+        return f"{resolved_base}_evo" if resolved_base else None
 
     # Check if it looks like a card ID (8-digit number)
     if card_name.isdigit() and len(card_name) == 8:

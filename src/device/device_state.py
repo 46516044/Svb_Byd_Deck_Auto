@@ -19,6 +19,7 @@ from src.utils.resource_utils import ensure_directory
 from src.core.logging_utils import QueueHandler
 from src.core.json_io import write_json_atomic
 from src.core.run_control import PauseRequested, StopRequested
+from src.config.paths import get_app_root
 
 if TYPE_CHECKING:
     from src.game.game_manager import GameManager
@@ -771,7 +772,10 @@ class DeviceState:
 
     def save_round_statistics(self):
         """保存回合统计数据到文件"""
-        stats_file = f"round_stats_{self.serial.replace(':', '_')}.json"
+        stats_file = os.path.join(
+            get_app_root(),
+            f"round_stats_{self.serial.replace(':', '_')}.json",
+        )
         try:
             write_json_atomic(stats_file, self.match_history, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -779,7 +783,12 @@ class DeviceState:
 
     def load_round_statistics(self):
         """从文件加载回合统计数据"""
-        stats_file = f"round_stats_{self.serial.replace(':', '_')}.json"
+        filename = f"round_stats_{self.serial.replace(':', '_')}.json"
+        stats_file = os.path.join(get_app_root(), filename)
+        if not os.path.exists(stats_file) and os.path.abspath(filename) != os.path.abspath(
+            stats_file
+        ):
+            stats_file = filename
         if not os.path.exists(stats_file):
             return
 

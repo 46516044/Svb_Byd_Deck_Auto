@@ -4,19 +4,22 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Tuple
 
-from PyQt5.QtCore import Qt as _Qt
+from PyQt5.QtCore import Qt as _Qt, pyqtSignal
+from PyQt5.QtGui import QDoubleValidator, QIntValidator
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +33,8 @@ Qt: Any = _Qt
 
 
 class ConfigPage(QWidget):
+    config_saved = pyqtSignal(dict)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_widget: Any = parent
@@ -37,66 +42,232 @@ class ConfigPage(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(15)
+        self.setObjectName("SettingsPage")
+        self.setProperty("pageRoot", True)
 
-        # 标题
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(24, 22, 24, 20)
+        main_layout.setSpacing(16)
+
         title_label = QLabel("参数设置")
-        title_label.setStyleSheet(
-            "font-size: 20px; color: #88AAFF; font-weight: bold;"
-        )
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setObjectName("PageTitle")
+        title_label.setProperty("heading", "page")
         main_layout.addWidget(title_label)
 
-        # 拖拽速度设置
-        drag_group = QGroupBox("拖拽速度设置 (单位:秒)")
-        drag_layout = QGridLayout(drag_group)
+        subtitle_label = QLabel("统一管理操作速度、运行限制和换牌策略")
+        subtitle_label.setObjectName("PageSubtitle")
+        subtitle_label.setProperty("muted", True)
+        main_layout.addWidget(subtitle_label)
 
-        # 获取当前拖拽速度设置 - 修复1: 确保正确读取配置
-        drag_range = [0.10, 0.13]  # 默认值
-        if (
-            "game" in self.config_data
-            and "human_like_drag_duration_range" in self.config_data["game"]
-        ):
-            drag_range = self.config_data["game"]["human_like_drag_duration_range"]
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setObjectName("SettingsScrollArea")
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setFrameShape(QFrame.NoFrame)
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.settings_scroll.setAutoFillBackground(False)
+        self.settings_scroll.viewport().setAutoFillBackground(False)
 
-        drag_layout.addWidget(QLabel("最小拖拽时间:"), 0, 0)
-        self.min_drag_input = QLineEdit(str(drag_range[0]))
-        self.min_drag_input.setStyleSheet(
-            "background-color: rgba(80, 80, 120, 180); color: white;"
+        settings_content = QWidget()
+        settings_content.setObjectName("SettingsContent")
+        settings_content.setProperty("pageRoot", True)
+        content_layout = QVBoxLayout(settings_content)
+        content_layout.setContentsMargins(0, 0, 8, 0)
+        content_layout.setSpacing(14)
+
+        drag_range = self._read_drag_range()
+        basic_panel, basic_layout = self._create_section(
+            "基础设置",
+            "调整模拟点击拖拽的持续时间。数值越小操作越快，稳定性也会相应降低。",
+            "BasicSettingsPanel",
         )
-        drag_layout.addWidget(self.min_drag_input, 0, 1)
+        basic_form = QGridLayout()
+        self._configure_form_layout(basic_form)
 
-        drag_layout.addWidget(QLabel("最大拖拽时间:"), 1, 0)
-        self.max_drag_input = QLineEdit(str(drag_range[1]))
-        self.max_drag_input.setStyleSheet(
-            "background-color: rgba(80, 80, 120, 180); color: white;"
+        drag_validator = QDoubleValidator(0.0, 999999.0, 3, self)
+        drag_validator.setNotation(QDoubleValidator.StandardNotation)
+
+        self.min_drag_input = self._create_line_edit(
+            str(drag_range[0]), "MinDragDurationInput"
         )
-        drag_layout.addWidget(self.max_drag_input, 1, 1)
+        self.min_drag_input.setValidator(drag_validator)
+        self.max_drag_input = self._create_line_edit(
+            str(drag_range[1]), "MaxDragDurationInput"
+        )
+        max_drag_validator = QDoubleValidator(0.0, 999999.0, 3, self)
+        max_drag_validator.setNotation(QDoubleValidator.StandardNotation)
+        self.max_drag_input.setValidator(max_drag_validator)
 
-        drag_layout.addWidget(
-            QLabel("说明: 设置更小的值会使操作更快，但可能被检测为脚本"), 2, 0, 1, 2
+        self._add_form_row(
+            basic_form,
+            0,
+            "最小拖拽时间",
+            self.min_drag_input,
+            "秒",
+            "每次拖拽采用区间内的随机时长。",
+        )
+        self._add_form_row(
+            basic_form,
+            2,
+            "最大拖拽时间",
+            self.max_drag_input,
+            "秒",
+            "必须大于或等于最小拖拽时间。",
+        )
+        basic_layout.addLayout(basic_form)
+        content_layout.addWidget(basic_panel)
+
+        self._load_run_values()
+        run_panel, run_layout = self._create_section(
+            "运行设置",
+            "控制异常阶段恢复、重启次数以及脚本单次运行上限。",
+            "RunSettingsPanel",
         )
 
-        main_layout.addWidget(drag_group)
+        restart_header = QHBoxLayout()
+        restart_header.setSpacing(12)
+        self.restart_enabled_checkbox = QCheckBox("启用自动重启")
+        self.restart_enabled_checkbox.setObjectName("AutoRestartCheckBox")
+        self.restart_enabled_checkbox.setChecked(self.auto_restart_enabled)
+        restart_header.addWidget(self.restart_enabled_checkbox)
+        restart_header.addStretch(1)
+        restart_note = QLabel("长时间没有进入新阶段时尝试恢复游戏")
+        restart_note.setObjectName("SettingsInlineHint")
+        restart_note.setProperty("muted", True)
+        restart_header.addWidget(restart_note)
+        run_layout.addLayout(restart_header)
 
-        # 运行设置
-        run_group = QGroupBox("运行设置")
-        run_layout = QVBoxLayout(run_group)
+        run_form = QGridLayout()
+        self._configure_form_layout(run_form)
+        self.restart_time_input = self._create_line_edit(
+            str(self.stage_timeout), "RestartIntervalInput"
+        )
+        self.restart_time_input.setValidator(QIntValidator(1, 120, self))
+        self.restart_count_input = self._create_line_edit(
+            str(self.max_restarts), "RestartCountInput"
+        )
+        self.restart_count_input.setValidator(QIntValidator(1, 20, self))
+        self.runtime_limit_input = self._create_line_edit(
+            str(self.max_run_duration_minutes), "RuntimeLimitInput"
+        )
+        self.runtime_limit_input.setValidator(QIntValidator(0, 10080, self))
 
-        # 自动重启设置子区域
-        auto_restart_layout = QGridLayout()
+        self._add_form_row(
+            run_form,
+            0,
+            "无新阶段重启间隔",
+            self.restart_time_input,
+            "分钟",
+            "允许范围 1-120 分钟。",
+        )
+        self._add_form_row(
+            run_form,
+            2,
+            "自动重启最大次数",
+            self.restart_count_input,
+            "次",
+            "达到次数后再次触发将停止脚本，允许范围 1-20 次。",
+        )
+        self._add_form_row(
+            run_form,
+            4,
+            "脚本运行总时长",
+            self.runtime_limit_input,
+            "分钟",
+            "0 表示不限制；达到上限后会等待当前对战结束再停止。",
+        )
+        run_layout.addLayout(run_form)
+        content_layout.addWidget(run_panel)
 
-        # 获取当前自动重启设置
+        strategy_panel, strategy_layout = self._create_section(
+            "策略设置",
+            "选择自动换牌使用的费用曲线。策略变更将在重启软件后完整生效。",
+            "StrategySettingsPanel",
+        )
+        strategy_row = QHBoxLayout()
+        strategy_row.setSpacing(12)
+        strategy_label = QLabel("换牌策略")
+        strategy_label.setObjectName("SettingsFieldLabel")
+        strategy_row.addWidget(strategy_label)
+
+        self.strategy_combo = QComboBox()
+        self.strategy_combo.setObjectName("ReplacementStrategyCombo")
+        self.strategy_combo.addItems(["3费档次", "4费档次", "5费档次"])
+        self.strategy_combo.setMinimumWidth(220)
+        current_strategy = self.config_data.get("game", {}).get(
+            "card_replacement_strategy", "3费档次"
+        )
+        index = self.strategy_combo.findText(current_strategy)
+        if index >= 0:
+            self.strategy_combo.setCurrentIndex(index)
+        strategy_row.addWidget(self.strategy_combo)
+
+        self.strategy_help_btn = QPushButton("查看规则")
+        self.strategy_help_btn.setObjectName("SecondaryButton")
+        self.strategy_help_btn.clicked.connect(self.show_strategy_help)
+        strategy_row.addWidget(self.strategy_help_btn)
+        strategy_row.addStretch(1)
+        strategy_layout.addLayout(strategy_row)
+        content_layout.addWidget(strategy_panel)
+        content_layout.addStretch(1)
+
+        self.settings_scroll.setWidget(settings_content)
+        main_layout.addWidget(self.settings_scroll, 1)
+
+        footer = QFrame()
+        footer.setObjectName("SettingsFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 4, 0, 0)
+        footer_layout.setSpacing(12)
+        save_hint = QLabel("设置只会在点击保存后写入 config.json")
+        save_hint.setObjectName("SettingsSaveHint")
+        save_hint.setProperty("muted", True)
+        footer_layout.addWidget(save_hint)
+        footer_layout.addStretch(1)
+        self.save_btn = QPushButton("保存设置")
+        self.save_btn.setObjectName("PrimaryButton")
+        self.save_btn.setProperty("variant", "primary")
+        self.save_btn.setMinimumWidth(120)
+        self.save_btn.clicked.connect(self.save_config)
+        footer_layout.addWidget(self.save_btn)
+        main_layout.addWidget(footer)
+
+        self.restart_enabled_checkbox.stateChanged.connect(
+            self.on_restart_enabled_changed
+        )
+        self.on_restart_enabled_changed()
+
+        self.setTabOrder(self.min_drag_input, self.max_drag_input)
+        self.setTabOrder(self.max_drag_input, self.restart_enabled_checkbox)
+        self.setTabOrder(self.restart_enabled_checkbox, self.restart_time_input)
+        self.setTabOrder(self.restart_time_input, self.restart_count_input)
+        self.setTabOrder(self.restart_count_input, self.runtime_limit_input)
+        self.setTabOrder(self.runtime_limit_input, self.strategy_combo)
+        self.setTabOrder(self.strategy_combo, self.strategy_help_btn)
+        self.setTabOrder(self.strategy_help_btn, self.save_btn)
+
+    def _read_drag_range(self) -> Tuple[float, float]:
+        drag_range = self.config_data.get("game", {}).get(
+            "human_like_drag_duration_range", [0.10, 0.13]
+        )
+        try:
+            return float(drag_range[0]), float(drag_range[1])
+        except (IndexError, TypeError, ValueError):
+            return 0.10, 0.13
+
+    def _load_run_values(self) -> None:
         auto_restart_config = self.config_data.get("auto_restart", {})
-        self.auto_restart_enabled = auto_restart_config.get("enabled", True)
-        stage_timeout_seconds = auto_restart_config.get("stage_timeout", 300)
-        self.stage_timeout = int(stage_timeout_seconds) // 60
+        self.auto_restart_enabled = bool(auto_restart_config.get("enabled", True))
+        try:
+            self.stage_timeout = int(
+                auto_restart_config.get("stage_timeout", 300)
+            ) // 60
+        except (TypeError, ValueError):
+            self.stage_timeout = 5
         if self.stage_timeout <= 0:
             self.stage_timeout = 5
         try:
             self.max_restarts = int(auto_restart_config.get("max_restarts", 3))
-        except Exception:
+        except (TypeError, ValueError):
             self.max_restarts = 3
 
         run_settings = self.config_data.get("run_settings", {})
@@ -104,122 +275,69 @@ class ConfigPage(QWidget):
             self.max_run_duration_minutes = int(
                 run_settings.get("max_run_duration", 0) or 0
             ) // 60
-        except Exception:
+        except (TypeError, ValueError):
             self.max_run_duration_minutes = 0
 
-        # 启用/禁用复选框
-        self.restart_enabled_checkbox = QCheckBox("启用自动重启功能")
-        self.restart_enabled_checkbox.setChecked(self.auto_restart_enabled)
-        self.restart_enabled_checkbox.setStyleSheet("color: #FFFFFF;")
-        auto_restart_layout.addWidget(self.restart_enabled_checkbox, 0, 0, 1, 2)
+    def _create_section(
+        self, title: str, description: str, object_name: str
+    ) -> Tuple[QFrame, QVBoxLayout]:
+        panel = QFrame()
+        panel.setObjectName(object_name)
+        panel.setProperty("card", True)
+        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(12)
 
-        # 无新阶段重启时间输入
-        auto_restart_layout.addWidget(QLabel("无新阶段自动重启时间 (分钟):"), 1, 0)
-        self.restart_time_input = QLineEdit(str(self.stage_timeout))
-        self.restart_time_input.setStyleSheet(
-            "background-color: rgba(80, 80, 120, 180); color: white;"
-        )
-        self.restart_time_input.setEnabled(self.auto_restart_enabled)
-        auto_restart_layout.addWidget(self.restart_time_input, 1, 1)
+        title_label = QLabel(title)
+        title_label.setObjectName("SettingsSectionTitle")
+        title_label.setProperty("heading", "section")
+        description_label = QLabel(description)
+        description_label.setObjectName("SettingsSectionDescription")
+        description_label.setProperty("muted", True)
+        description_label.setWordWrap(True)
+        layout.addWidget(title_label)
+        layout.addWidget(description_label)
+        return panel, layout
 
-        # 自动重启最大次数输入
-        auto_restart_layout.addWidget(QLabel("自动重启最大次数:"), 2, 0)
-        self.restart_count_input = QLineEdit(str(self.max_restarts))
-        self.restart_count_input.setStyleSheet(
-            "background-color: rgba(80, 80, 120, 180); color: white;"
-        )
-        self.restart_count_input.setEnabled(self.auto_restart_enabled)
-        auto_restart_layout.addWidget(self.restart_count_input, 2, 1)
+    @staticmethod
+    def _configure_form_layout(layout: QGridLayout) -> None:
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(5)
+        layout.setColumnMinimumWidth(0, 180)
+        layout.setColumnMinimumWidth(1, 180)
+        layout.setColumnStretch(3, 1)
 
-        # 连接复选框状态变化信号
-        self.restart_enabled_checkbox.stateChanged.connect(self.on_restart_enabled_changed)
+    def _create_line_edit(self, text: str, object_name: str) -> QLineEdit:
+        line_edit = QLineEdit(text)
+        line_edit.setObjectName(object_name)
+        line_edit.setMaximumWidth(220)
+        line_edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        return line_edit
 
-        # 添加说明
-        auto_restart_layout.addWidget(
-            QLabel(
-                "说明: 设置无新阶段自动重启间隔与最大重启次数；达到次数后再次触发将停止脚本。"
-            ),
-            3,
-            0,
-            1,
-            2,
-        )
-
-        # 将自动重启设置添加到运行设置中
-        auto_restart_widget = QWidget()
-        auto_restart_widget.setLayout(auto_restart_layout)
-        run_layout.addWidget(auto_restart_widget)
-
-        # 脚本总时长设置
-        runtime_limit_layout = QGridLayout()
-        runtime_limit_layout.addWidget(QLabel("脚本运行总时长 (分钟):"), 0, 0)
-        self.runtime_limit_input = QLineEdit(str(self.max_run_duration_minutes))
-        self.runtime_limit_input.setStyleSheet(
-            "background-color: rgba(80, 80, 120, 180); color: white;"
-        )
-        runtime_limit_layout.addWidget(self.runtime_limit_input, 0, 1)
-        runtime_limit_layout.addWidget(
-            QLabel("说明: 到达总时长后不会立刻中断，会在当前对战结束后自动停止。0表示不限制。"),
-            1,
-            0,
-            1,
-            2,
-        )
-
-        runtime_limit_widget = QWidget()
-        runtime_limit_widget.setLayout(runtime_limit_layout)
-        run_layout.addWidget(runtime_limit_widget)
-
-        main_layout.addWidget(run_group)
-
-        # 出牌设置
-        play_group = QGroupBox("出牌设置")
-        play_layout = QVBoxLayout(play_group)
-
-        # 换牌策略设置
-        strategy_selection_layout = QHBoxLayout()
-        strategy_selection_layout.addWidget(QLabel("选择换牌策略:"))
-        self.strategy_combo = QComboBox()
-        self.strategy_combo.addItems(["3费档次", "4费档次", "5费档次"])
-        self.strategy_combo.setStyleSheet(
-            "background-color: rgba(80, 80, 120, 180); color: white;"
-        )
-
-        current_strategy = self.config_data.get("game", {}).get(
-            "card_replacement_strategy", "3费档次"
-        )
-        index = self.strategy_combo.findText(current_strategy)
-        if index >= 0:
-            self.strategy_combo.setCurrentIndex(index)
-        strategy_selection_layout.addWidget(self.strategy_combo)
-
-        self.strategy_help_btn = QPushButton("帮助")
-        self.strategy_help_btn.clicked.connect(self.show_strategy_help)
-        strategy_selection_layout.addWidget(self.strategy_help_btn)
-
-        play_layout.addLayout(strategy_selection_layout)
-
-        strategy_desc = QLabel(
-            "说明: 根据费用档次策略自动换牌，确保关键回合能准时展开，每次切换换牌策略后，需重启软件才能生效。"
-        )
-        strategy_desc.setStyleSheet("font-size: 12px; color: #AACCFF;")
-        play_layout.addWidget(strategy_desc)
-
-        main_layout.addWidget(play_group)
-
-        # 操作按钮
-        btn_layout = QHBoxLayout()
-        self.save_btn = QPushButton("保存设置")
-        self.save_btn.clicked.connect(self.save_config)
-        self.back_btn = QPushButton("返回主界面")
-        self.back_btn.clicked.connect(self._go_back)
-
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.save_btn)
-        btn_layout.addWidget(self.back_btn)
-        btn_layout.addStretch()
-
-        main_layout.addLayout(btn_layout)
+    @staticmethod
+    def _add_form_row(
+        layout: QGridLayout,
+        row: int,
+        label_text: str,
+        editor: QWidget,
+        unit_text: str,
+        hint_text: str,
+    ) -> None:
+        label = QLabel(label_text)
+        label.setObjectName("SettingsFieldLabel")
+        unit = QLabel(unit_text)
+        unit.setObjectName("SettingsUnitLabel")
+        unit.setProperty("muted", True)
+        hint = QLabel(hint_text)
+        hint.setObjectName("SettingsFieldHint")
+        hint.setProperty("dim", True)
+        hint.setWordWrap(True)
+        layout.addWidget(label, row, 0)
+        layout.addWidget(editor, row, 1)
+        layout.addWidget(unit, row, 2)
+        layout.addWidget(hint, row + 1, 1, 1, 3)
 
     def _go_back(self) -> None:
         try:
@@ -229,7 +347,7 @@ class ConfigPage(QWidget):
         except Exception:
             pass
 
-    def on_restart_enabled_changed(self):
+    def on_restart_enabled_changed(self, *_args):
         """处理自动重启功能启用/禁用状态变化"""
 
         self.restart_time_input.setEnabled(self.restart_enabled_checkbox.isChecked())
@@ -354,6 +472,7 @@ class ConfigPage(QWidget):
                 QMessageBox.information(self, "成功", "配置已保存！")
             else:
                 QMessageBox.information(self, "成功", "配置已保存（原config.json解析失败，已重建）")
+            self.config_saved.emit(dict(self.config_data))
             try:
                 log_output = getattr(self.parent_widget, "log_output", None)
                 if log_output is not None and hasattr(log_output, "append"):
@@ -368,36 +487,16 @@ class ConfigPage(QWidget):
 
         self.config_data = self.load_config()
 
-        drag_range = [0.10, 0.13]
-        if (
-            "game" in self.config_data
-            and "human_like_drag_duration_range" in self.config_data["game"]
-        ):
-            drag_range = self.config_data["game"]["human_like_drag_duration_range"]
+        drag_range = self._read_drag_range()
         self.min_drag_input.setText(str(drag_range[0]))
         self.max_drag_input.setText(str(drag_range[1]))
 
-        auto_restart_config = self.config_data.get("auto_restart", {})
-        self.auto_restart_enabled = auto_restart_config.get("enabled", True)
-        stage_timeout_seconds = auto_restart_config.get("stage_timeout", 300)
-        self.stage_timeout = int(stage_timeout_seconds) // 60
-        if self.stage_timeout <= 0:
-            self.stage_timeout = 5
-        self.max_restarts = auto_restart_config.get("max_restarts", 3)
+        self._load_run_values()
         self.restart_enabled_checkbox.setChecked(self.auto_restart_enabled)
         self.restart_time_input.setText(str(self.stage_timeout))
         self.restart_count_input.setText(str(self.max_restarts))
-        self.restart_time_input.setEnabled(self.auto_restart_enabled)
-        self.restart_count_input.setEnabled(self.auto_restart_enabled)
-
-        run_settings = self.config_data.get("run_settings", {})
-        try:
-            self.max_run_duration_minutes = int(
-                run_settings.get("max_run_duration", 0) or 0
-            ) // 60
-        except Exception:
-            self.max_run_duration_minutes = 0
         self.runtime_limit_input.setText(str(self.max_run_duration_minutes))
+        self.on_restart_enabled_changed()
 
         current_strategy = self.config_data.get("game", {}).get(
             "card_replacement_strategy", "3费档次"

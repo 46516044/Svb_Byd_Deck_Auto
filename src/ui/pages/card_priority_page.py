@@ -14,12 +14,15 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -62,59 +65,60 @@ class CardPriorityPage(QWidget):
 
     def init_ui(self):
         self.setObjectName("CardPriorityPage")
+        self.setProperty("pageRoot", True)
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(24, 22, 24, 24)
+        main_layout.setSpacing(16)
 
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(12)
+        heading_layout = QVBoxLayout()
+        heading_layout.setSpacing(3)
         title_label = QLabel("卡牌设置")
-        title_label.setStyleSheet("font-size: 20px; color: #88AAFF; font-weight: bold;")
-        title_label.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(title_label)
-
-        # 说明文字和帮助按钮
-        desc_layout = QHBoxLayout()
-        desc_label = QLabel(
-            "为卡组中的卡片设置优先级、进化优先级与留牌。特殊效果/特殊交互请点击右侧“特殊效果...”进入二级编辑器。"
-        )
-        desc_label.setStyleSheet("font-size: 12px; color: #AACCFF;")
-        desc_layout.addWidget(desc_label)
-        desc_layout.addStretch()
+        title_label.setObjectName("PageTitle")
+        title_label.setProperty("heading", "page")
+        heading_layout.addWidget(title_label)
+        desc_label = QLabel("当前卡组的出牌、进化、留牌与特殊效果配置")
+        desc_label.setObjectName("SubtleText")
+        desc_label.setProperty("muted", True)
+        heading_layout.addWidget(desc_label)
+        header_layout.addLayout(heading_layout)
+        header_layout.addStretch()
         self.help_btn = QPushButton("帮助")
+        self.help_btn.setObjectName("SecondaryButton")
         self.help_btn.clicked.connect(self.show_card_settings_help)
-        desc_layout.addWidget(self.help_btn)
-        main_layout.addLayout(desc_layout)
+        header_layout.addWidget(self.help_btn)
+        main_layout.addLayout(header_layout)
 
         self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("PriorityScrollArea")
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_content = QWidget()
+        self.scroll_content.setObjectName("PriorityScrollContent")
         self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 6, 0)
+        self.scroll_layout.setSpacing(10)
         self.scroll_area.setWidget(self.scroll_content)
-        self.scroll_content.setObjectName("ScrollContent")
         main_layout.addWidget(self.scroll_area)
 
-        # 设置滚动区域样式与主窗口一致
-        self.scroll_area.setStyleSheet(
-            """
-            QScrollArea {
-                background-color: transparent;
-                border: none;
-            }
-            QWidget#ScrollContent {
-                background-color: transparent;
-            }
-        """
-        )
-        self.scroll_content.setObjectName("ScrollContent")
-
-        btn_layout = QHBoxLayout()
+        action_panel = QFrame()
+        action_panel.setObjectName("SurfacePanel")
+        action_panel.setProperty("card", True)
+        btn_layout = QHBoxLayout(action_panel)
+        btn_layout.setContentsMargins(14, 10, 14, 10)
+        btn_layout.setSpacing(10)
+        btn_layout.addStretch()
         self.save_btn = QPushButton("保存设置")
+        self.save_btn.setObjectName("PrimaryButton")
+        self.save_btn.setProperty("variant", "primary")
         self.save_btn.clicked.connect(self.save_config)
         self.back_btn = QPushButton("返回主界面")
+        self.back_btn.setObjectName("SecondaryButton")
         self.back_btn.clicked.connect(self._go_back)
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.back_btn)
-        btn_layout.addStretch()
-        main_layout.addLayout(btn_layout)
+        btn_layout.addWidget(self.save_btn)
+        main_layout.addWidget(action_panel)
 
         self.load_card_priority_settings()
 
@@ -230,28 +234,6 @@ class CardPriorityPage(QWidget):
         msg_box.setText(help_text)
         msg_box.setIcon(QMessageBox.Information)
         msg_box.addButton(QMessageBox.Ok)
-
-        msg_box.setStyleSheet(
-            """
-            QMessageBox {
-                background-color: white;
-            }
-            QMessageBox QLabel {
-                color: black;
-                font-size: 12px;
-            }
-            QPushButton {
-                background-color: #4A4A7F;
-                color: white;
-                border-radius: 5px;
-                padding: 5px 15px;
-            }
-            QPushButton:hover {
-                background-color: #5A5A8F;
-            }
-        """
-        )
-
         msg_box.exec_()
 
     def load_config(self):
@@ -261,10 +243,8 @@ class CardPriorityPage(QWidget):
 
     def load_card_priority_settings(self):
         # 清空现有内容
-        for i in reversed(range(self.scroll_layout.count())):
-            item = self.scroll_layout.itemAt(i)
-            if item is None:
-                continue
+        while self.scroll_layout.count():
+            item = self.scroll_layout.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.deleteLater()
@@ -274,10 +254,12 @@ class CardPriorityPage(QWidget):
 
         card_dir = get_card_cost_dir(ensure=True)
         if not os.path.exists(card_dir):
-            no_card_label = QLabel("未找到卡组卡片，请先在'卡组选择'页面选择卡片")
-            no_card_label.setStyleSheet("color: #FF8888; font-size: 14px;")
+            no_card_label = QLabel("未找到卡组卡片，请先在卡组工作区选择并应用卡牌")
+            no_card_label.setObjectName("EmptyState")
+            no_card_label.setProperty("status", "warning")
             no_card_label.setAlignment(Qt.AlignCenter)
             self.scroll_layout.addWidget(no_card_label)
+            self.scroll_layout.addStretch()
             return
 
         card_files = [
@@ -287,10 +269,12 @@ class CardPriorityPage(QWidget):
             and not is_evo_card_name(f)
         ]
         if not card_files:
-            no_card_label = QLabel("没有找到卡片，请先在'卡组选择'页面选择卡片")
-            no_card_label.setStyleSheet("color: #FF8888; font-size: 14px;")
+            no_card_label = QLabel("没有找到卡片，请先在卡组工作区选择并应用卡牌")
+            no_card_label.setObjectName("EmptyState")
+            no_card_label.setProperty("status", "warning")
             no_card_label.setAlignment(Qt.AlignCenter)
             self.scroll_layout.addWidget(no_card_label)
+            self.scroll_layout.addStretch()
             return
 
         # Build display entries (base + enhance tiers) from filenames.
@@ -346,18 +330,24 @@ class CardPriorityPage(QWidget):
             is_enhance = bool(entry.get("is_enhance"))
             variant_cost = int(entry.get("variant_cost", 0))
 
-            card_row = QWidget()
-            card_row.setStyleSheet(
-                "background-color: rgba(60, 60, 90, 150); border-radius: 10px;"
-            )
+            card_row = QFrame()
+            card_row.setObjectName("SurfacePanel")
+            card_row.setProperty("card", True)
+            card_row.setProperty("enhance", is_enhance)
+            card_row.setMinimumHeight(126)
+            card_row.setMaximumHeight(142)
+            card_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             row_layout = QHBoxLayout(card_row)
-            row_layout.setContentsMargins(10, 5, 10, 5)
+            row_layout.setContentsMargins(14, 12, 14, 12)
+            row_layout.setSpacing(14)
 
             card_label = QLabel()
+            card_label.setObjectName("CardArtwork")
+            card_label.setFixedSize(72, 102)
             card_path = os.path.join(card_dir, card_file)
             pixmap = QPixmap(card_path)
             if not pixmap.isNull():
-                pixmap = pixmap.scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pixmap = pixmap.scaled(68, 98, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 card_label.setPixmap(pixmap)
             card_label.setAlignment(Qt.AlignCenter)
             row_layout.addWidget(card_label)
@@ -367,33 +357,62 @@ class CardPriorityPage(QWidget):
             else:
                 display_name = f"{base_name}"
 
+            identity_widget = QWidget()
+            identity_widget.setMinimumWidth(170)
+            identity_widget.setMaximumWidth(230)
+            identity_layout = QVBoxLayout(identity_widget)
+            identity_layout.setContentsMargins(0, 0, 0, 0)
+            identity_layout.setSpacing(5)
             name_label = QLabel(display_name)
-            name_label.setStyleSheet("color: #FFFFFF; font-weight: bold; min-width: 140px;")
-            name_label.setAlignment(Qt.AlignCenter)
-            row_layout.addWidget(name_label)
+            name_label.setObjectName("CardName")
+            name_label.setProperty("heading", "section")
+            name_label.setWordWrap(True)
+            name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            identity_layout.addWidget(name_label)
+            variant_label = QLabel(
+                f"爆能档位 · {variant_cost} 费"
+                if is_enhance
+                else f"基础卡 · {variant_cost} 费"
+            )
+            variant_label.setObjectName("SubtleText")
+            variant_label.setProperty("muted", True)
+            identity_layout.addWidget(variant_label)
+            identity_layout.addStretch()
+            row_layout.addWidget(identity_widget)
 
             # 出牌优先级（进化前/进化后） - key is base or enhance-variant.
             high_priority = self.config_data.get("high_priority_cards", {}).get(config_key, {})
 
-            row_layout.addWidget(QLabel("出牌(进化前):"))
+            settings_layout = QGridLayout()
+            settings_layout.setContentsMargins(0, 0, 0, 0)
+            settings_layout.setHorizontalSpacing(12)
+            settings_layout.setVerticalSpacing(7)
+
+            pre_label = QLabel("出牌 · 进化前")
+            pre_label.setObjectName("FieldLabel")
+            pre_label.setProperty("muted", True)
+            settings_layout.addWidget(pre_label, 0, 0)
             play_priority_pre_input = QLineEdit()
-            play_priority_pre_input.setStyleSheet(
-                "background-color: rgba(80, 80, 120, 180); color: white;"
-            )
-            play_priority_pre_input.setMaximumWidth(50)
+            play_priority_pre_input.setObjectName("PriorityInput")
+            play_priority_pre_input.setFixedWidth(76)
+            play_priority_pre_input.setAlignment(Qt.AlignCenter)
+            play_priority_pre_input.setPlaceholderText("0-999")
             if isinstance(high_priority, dict):
                 pre_priority = high_priority.get(
                     "priority_pre_evolution", high_priority.get("priority", "")
                 )
                 play_priority_pre_input.setText(str(pre_priority) if pre_priority != "" else "")
-            row_layout.addWidget(play_priority_pre_input)
+            settings_layout.addWidget(play_priority_pre_input, 1, 0)
 
-            row_layout.addWidget(QLabel("出牌(进化后):"))
+            post_label = QLabel("出牌 · 进化后")
+            post_label.setObjectName("FieldLabel")
+            post_label.setProperty("muted", True)
+            settings_layout.addWidget(post_label, 0, 1)
             play_priority_post_input = QLineEdit()
-            play_priority_post_input.setStyleSheet(
-                "background-color: rgba(80, 80, 120, 180); color: white;"
-            )
-            play_priority_post_input.setMaximumWidth(50)
+            play_priority_post_input.setObjectName("PriorityInput")
+            play_priority_post_input.setFixedWidth(76)
+            play_priority_post_input.setAlignment(Qt.AlignCenter)
+            play_priority_post_input.setPlaceholderText("0-999")
             if isinstance(high_priority, dict):
                 post_priority = high_priority.get(
                     "priority_post_evolution", high_priority.get("priority", "")
@@ -401,7 +420,7 @@ class CardPriorityPage(QWidget):
                 play_priority_post_input.setText(
                     str(post_priority) if post_priority != "" else ""
                 )
-            row_layout.addWidget(play_priority_post_input)
+            settings_layout.addWidget(play_priority_post_input, 1, 1)
 
             force_keep_checkbox = None
             evolve_priority_input = None
@@ -409,29 +428,32 @@ class CardPriorityPage(QWidget):
 
             if not is_enhance:
                 # 强制留牌（仅基础卡）
-                row_layout.addWidget(QLabel("必留:"))
-                force_keep_checkbox = QCheckBox()
-                force_keep_checkbox.setStyleSheet(
-                    "QCheckBox::indicator { width: 18px; height: 18px; }"
-                )
+                keep_label = QLabel("换牌")
+                keep_label.setObjectName("FieldLabel")
+                keep_label.setProperty("muted", True)
+                settings_layout.addWidget(keep_label, 0, 3)
+                force_keep_checkbox = QCheckBox("必留")
                 base_cfg = self.config_data.get("high_priority_cards", {}).get(base_name, {})
                 if isinstance(base_cfg, dict) and base_cfg.get("force_keep") is True:
                     force_keep_checkbox.setChecked(True)
-                row_layout.addWidget(force_keep_checkbox)
+                settings_layout.addWidget(force_keep_checkbox, 1, 3)
 
                 # 进化优先级（仅基础卡）
-                row_layout.addWidget(QLabel("进化优先级:"))
+                evolve_label = QLabel("进化优先级")
+                evolve_label.setObjectName("FieldLabel")
+                evolve_label.setProperty("muted", True)
+                settings_layout.addWidget(evolve_label, 0, 2)
                 evolve_priority_input = QLineEdit()
-                evolve_priority_input.setStyleSheet(
-                    "background-color: rgba(80, 80, 120, 180); color: white;"
-                )
-                evolve_priority_input.setMaximumWidth(50)
+                evolve_priority_input.setObjectName("PriorityInput")
+                evolve_priority_input.setFixedWidth(76)
+                evolve_priority_input.setAlignment(Qt.AlignCenter)
+                evolve_priority_input.setPlaceholderText("0-999")
                 evolve_priority = self.config_data.get("evolve_priority_cards", {}).get(
                     base_name, {}
                 )
                 if isinstance(evolve_priority, dict):
                     evolve_priority_input.setText(str(evolve_priority.get("priority", "")))
-                row_layout.addWidget(evolve_priority_input)
+                settings_layout.addWidget(evolve_priority_input, 1, 2)
 
                 # Keep enhance rows in sync with this base evolve priority input.
                 self._base_evolve_priority_inputs[base_name] = evolve_priority_input
@@ -441,12 +463,14 @@ class CardPriorityPage(QWidget):
 
             else:
                 # 爆能档位不支持独立进化优先级（进化按随从名判定）。这里显示共用值，避免误解。
-                row_layout.addWidget(QLabel("进化优先级(共用):"))
+                evolve_label = QLabel("进化优先级 · 共用")
+                evolve_label.setObjectName("FieldLabel")
+                evolve_label.setProperty("muted", True)
+                settings_layout.addWidget(evolve_label, 0, 2)
                 evolve_priority_view = QLineEdit()
-                evolve_priority_view.setStyleSheet(
-                    "background-color: rgba(80, 80, 120, 120); color: white;"
-                )
-                evolve_priority_view.setMaximumWidth(50)
+                evolve_priority_view.setObjectName("SharedPriorityInput")
+                evolve_priority_view.setFixedWidth(76)
+                evolve_priority_view.setAlignment(Qt.AlignCenter)
                 evolve_priority_view.setReadOnly(True)
                 evolve_priority_view.setToolTip("进化优先级按随从名共用，请在基础卡行设置")
                 evolve_priority = self.config_data.get("evolve_priority_cards", {}).get(
@@ -454,7 +478,7 @@ class CardPriorityPage(QWidget):
                 )
                 if isinstance(evolve_priority, dict):
                     evolve_priority_view.setText(str(evolve_priority.get("priority", "")))
-                row_layout.addWidget(evolve_priority_view)
+                settings_layout.addWidget(evolve_priority_view, 1, 2)
 
                 self._enhance_evolve_priority_views.setdefault(base_name, []).append(
                     evolve_priority_view
@@ -466,18 +490,32 @@ class CardPriorityPage(QWidget):
                 except Exception:
                     pass
 
-            # Step3A: special effects go to a 2nd-level editor.
-            effects_tag = self._build_effects_tag(base_name, config_key, is_enhance)
-            tag_label = QLabel(effects_tag if effects_tag else "")
-            tag_label.setStyleSheet("color: #AACCFF; font-size: 11px; min-width: 80px;")
-            tag_label.setAlignment(Qt.AlignCenter)
-            row_layout.addWidget(tag_label)
+            settings_layout.setColumnStretch(4, 1)
+            row_layout.addLayout(settings_layout, 1)
 
-            effects_btn = QPushButton("特殊效果...")
-            effects_btn.setStyleSheet(
-                "background-color: rgba(80, 80, 120, 180); color: white;"
-            )
-            effects_btn.setMaximumWidth(90)
+            # Step3A: special effects go to a 2nd-level editor.
+            effects_layout = QVBoxLayout()
+            effects_layout.setContentsMargins(0, 0, 0, 0)
+            effects_layout.setSpacing(7)
+            effects_title = QLabel("特殊效果")
+            effects_title.setObjectName("FieldLabel")
+            effects_title.setProperty("muted", True)
+            effects_layout.addWidget(effects_title)
+            effects_tag = self._build_effects_tag(base_name, config_key, is_enhance)
+            tag_label = QLabel(effects_tag if effects_tag else "未配置")
+            tag_label.setObjectName("EffectSummary")
+            tag_label.setProperty("configured", bool(effects_tag))
+            tag_label.setProperty("muted", not bool(effects_tag))
+            if effects_tag:
+                tag_label.setProperty("status", "success")
+            tag_label.setMinimumWidth(104)
+            tag_label.setMaximumWidth(148)
+            tag_label.setWordWrap(True)
+            effects_layout.addWidget(tag_label)
+
+            effects_btn = QPushButton("编辑特殊效果")
+            effects_btn.setObjectName("SecondaryButton")
+            effects_btn.setMinimumWidth(104)
             effects_btn.clicked.connect(
                 lambda _=False,
                 b=base_name,
@@ -485,7 +523,9 @@ class CardPriorityPage(QWidget):
                 d=display_name,
                 enh=is_enhance: self.open_effects_editor(b, k, d, enh)
             )
-            row_layout.addWidget(effects_btn)
+            effects_layout.addWidget(effects_btn)
+            effects_layout.addStretch()
+            row_layout.addLayout(effects_layout)
 
             self.card_widgets.append(
                 {
