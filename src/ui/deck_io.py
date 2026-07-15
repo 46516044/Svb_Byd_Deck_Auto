@@ -1,7 +1,7 @@
-"""Shared deck IO helpers.
+"""卡组共用 IO 辅助函数。
 
-Saved decks are intended to be portable across machines/emulators, so we only
-persist deck cards + strategy/effects (not device/ADB settings).
+已保存卡组需要能在不同机器和模拟器间迁移，因此只持久化卡牌、策略与效果，
+不保存设备或 ADB 设置。
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import copy
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.core.json_io import write_json_atomic
 from src.utils.card_filename import (
@@ -28,10 +28,13 @@ SUPPORTED_CARD_IMAGE_EXTENSIONS: Tuple[str, ...] = (
     ".jpeg",
     ".webp",
 )
+DECK_SCHEMA_VERSION = 5
+MAX_DECK_SIZE = 40
+MAX_CARD_COPIES = 3
 
 
 def _card_ref_from_value(value: Any) -> str:
-    """Convert card filename/path to a stable deck card reference (stem only)."""
+    """将卡牌文件名或路径转为只含主文件名的稳定卡组引用。"""
 
     raw = os.path.basename(str(value or "").strip())
     if not raw:
@@ -41,41 +44,172 @@ def _card_ref_from_value(value: Any) -> str:
     return str(stem or raw)
 
 
-def normalize_deck_cards(cards: List[str]) -> List[str]:
-    """Normalize persisted deck cards to extension-free references."""
+def normalize_deck_card_records(cards: Iterable[Any]) -> List[Dict[str, Any]]:
+    """把新旧卡组条目规范为 ``card_id + count`` 记录。
 
-    out: List[str] = []
+    旧格式的字符串在此处仍保留为可解析引用，真正保存时再统一解析为卡牌 ID。
+    """
+
+    records: List[Dict[str, Any]] = []
+    positions: Dict[str, int] = {}
+    for item in list(cards or []):
+        if isinstance(item, dict):
+            reference = (
+                item.get("card_id")
+                or item.get("card_ref")
+                or item.get("file")
+                or item.get("filename")
+            )
+            raw_count = item.get("count", 1)
+        else:
+            reference = item
+            raw_count = 1
+
+        ref = _card_ref_from_value(reference)
+        if not ref or is_evo_card_name(ref):
+            continue
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if count <= 0:
+            continue
+
+        key = ref.casefold()
+        if key in positions:
+            records[positions[key]]["count"] += count
+            continue
+        positions[key] = len(records)
+        records.append({"card_id": ref, "count": count})
+    return records
+
+
+def serialize_deck_card_records(
+    cards: Iterable[Any],
+    *,
+    resource_root: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """将卡组条目解析成可持久化的稳定卡牌 ID，并校验数量限制。"""
+
+    from src.ui.card_catalog import (
+        get_card_resource_root,
+        load_card_catalog,
+        resolve_card_entry,
+    )
+
+    records = normalize_deck_card_records(cards)
+    resolved_root = resource_root or get_card_resource_root()
+    catalog = load_card_catalog(resolved_root)
+    serialized: List[Dict[str, Any]] = []
+    positions: Dict[str, int] = {}
+    for record in records:
+        reference = str(record.get("card_id") or "")
+        entry = resolve_card_entry(reference, catalog, resolved_root)
+        if entry is None:
+            raise ValueError(f"无法解析卡牌引用: {reference}")
+        card_id = str(entry.card_id)
+        key = card_id.casefold()
+        count = int(record.get("count") or 0)
+        if key in positions:
+            serialized[positions[key]]["count"] += count
+        else:
+            positions[key] = len(serialized)
+            serialized.append({"card_id": card_id, "count": count})
+
+    copy_groups: Dict[str, int] = {}
+    for record in serialized:
+        count = int(record["count"])
+        if count > MAX_CARD_COPIES:
+            raise ValueError(
+                f"卡牌 {record['card_id']} 数量为 {count}，单卡最多 {MAX_CARD_COPIES} 张"
+            )
+        base_id = str(record["card_id"]).split("@", 1)[0]
+        copy_groups[base_id] = copy_groups.get(base_id, 0) + count
+        if copy_groups[base_id] > MAX_CARD_COPIES:
+            raise ValueError(
+                f"卡牌 {base_id} 及其异画合计超过 {MAX_CARD_COPIES} 张上限"
+            )
+    total = sum(int(record["count"]) for record in serialized)
+    if total > MAX_DECK_SIZE:
+        raise ValueError(f"卡组共有 {total} 张，最多允许 {MAX_DECK_SIZE} 张")
+    return serialized
+
+
+def normalize_derived_card_records(cards: Iterable[Any]) -> List[Dict[str, str]]:
+    """将衍生物卡牌规范为不含数量的唯一 ``card_id`` 记录。"""
+
+    records: List[Dict[str, str]] = []
     seen = set()
     for item in list(cards or []):
-        ref = _card_ref_from_value(item)
-        if not ref:
+        if isinstance(item, dict):
+            reference = (
+                item.get("card_id")
+                or item.get("card_ref")
+                or item.get("file")
+                or item.get("filename")
+            )
+        else:
+            reference = item
+        ref = _card_ref_from_value(reference)
+        key = ref.casefold()
+        if not ref or is_evo_card_name(ref) or key in seen:
             continue
-        if is_evo_card_name(ref):
-            continue
-        key = ref.lower()
+        seen.add(key)
+        records.append({"card_id": ref})
+    return records
+
+
+def serialize_derived_card_records(
+    cards: Iterable[Any],
+    *,
+    resource_root: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """把衍生物解析成稳定卡牌 ID；衍生物不受数量和总张数限制。"""
+
+    from src.ui.card_catalog import (
+        get_card_resource_root,
+        load_card_catalog,
+        resolve_card_entry,
+    )
+
+    resolved_root = resource_root or get_card_resource_root()
+    catalog = load_card_catalog(resolved_root)
+    serialized: List[Dict[str, str]] = []
+    seen = set()
+    for record in normalize_derived_card_records(cards):
+        reference = str(record.get("card_id") or "")
+        entry = resolve_card_entry(reference, catalog, resolved_root)
+        if entry is None:
+            raise ValueError(f"无法解析衍生物卡牌引用: {reference}")
+        card_id = str(entry.card_id)
+        key = card_id.casefold()
         if key in seen:
             continue
         seen.add(key)
-        out.append(ref)
-    return out
+        serialized.append({"card_id": card_id})
+    return serialized
 
 
-def filter_non_evo_cards(cards: List[str]) -> List[str]:
-    """Return card refs/filenames with ``_evo`` variants removed."""
+def normalize_deck_cards(cards: List[Any]) -> List[str]:
+    """将持久化卡牌规范为不带扩展名的引用。"""
 
-    out: List[str] = []
-    for item in list(cards or []):
-        raw = os.path.basename(str(item or "").strip())
-        if not raw:
-            continue
-        if is_evo_card_name(raw):
-            continue
-        out.append(raw)
-    return out
+    return [
+        str(record["card_id"])
+        for record in normalize_deck_card_records(cards)
+    ]
+
+
+def filter_non_evo_cards(cards: List[Any]) -> List[str]:
+    """返回移除 ``_evo`` 进化变体后的卡牌引用或文件名。"""
+
+    return [
+        str(record["card_id"])
+        for record in normalize_deck_card_records(cards)
+    ]
 
 
 def extract_deck_strategy_config(deck_data: Any) -> Dict[str, Any]:
-    """Read portable strategy data from current or legacy deck payloads."""
+    """从当前或旧版卡组数据中读取可迁移的策略配置。"""
 
     if not isinstance(deck_data, dict):
         return {}
@@ -94,7 +228,7 @@ def extract_deck_strategy_config(deck_data: Any) -> Dict[str, Any]:
 
 
 def build_card_variant_index(source_dir: str) -> Dict[Tuple[int, str], Dict[str, List[str]]]:
-    """Build an index for base/evo variant lookup under ``source_dir``."""
+    """为 ``source_dir`` 下的基础与进化变体建立查询索引。"""
 
     out: Dict[Tuple[int, str], Dict[str, List[str]]] = {}
     if not os.path.isdir(source_dir):
@@ -127,7 +261,7 @@ def build_card_variant_index(source_dir: str) -> Dict[Tuple[int, str], Dict[str,
 
 
 def build_card_source_index(source_dir: str) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """Build exact/stem lookup indices for cards under a source directory."""
+    """为源目录中的卡牌建立完整文件名和主文件名索引。"""
 
     exact: Dict[str, str] = {}
     stem: Dict[str, str] = {}
@@ -147,6 +281,18 @@ def build_card_source_index(source_dir: str) -> Tuple[Dict[str, str], Dict[str, 
             if name_key:
                 stem.setdefault(name_key, full)
 
+    # v4 卡组只保存 card_id，因此索引还需支持直接按稳定 ID 查找图片。
+    try:
+        from src.ui.card_catalog import load_card_catalog
+
+        for entry in load_card_catalog(source_dir):
+            card_id_key = str(entry.card_id or "").casefold()
+            if card_id_key:
+                exact.setdefault(card_id_key, entry.source_path)
+                stem.setdefault(card_id_key, entry.source_path)
+    except Exception:
+        pass
+
     return exact, stem
 
 
@@ -157,9 +303,9 @@ def resolve_source_card_path(
     exact_index: Optional[Dict[str, str]] = None,
     stem_index: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
-    """Resolve a card reference to a concrete source image path.
+    """将卡牌引用解析为实际源图片路径。
 
-    Supports both legacy filename refs (with extension) and new stem refs.
+    同时支持带扩展名的旧文件引用和只含主文件名的新引用。
     """
 
     raw = os.path.basename(str(card_ref or "").strip())
@@ -189,7 +335,7 @@ def resolve_runtime_card_paths(
     stem_index: Optional[Dict[str, str]] = None,
     variant_index: Optional[Dict[Tuple[int, str], Dict[str, List[str]]]] = None,
 ) -> List[str]:
-    """Resolve runtime templates: base image plus companion ``_evo`` images."""
+    """解析运行时模板，包括基础图及配套的 ``_evo`` 进化图。"""
 
     resolved = resolve_source_card_path(
         source_dir,
@@ -248,9 +394,10 @@ def resolve_runtime_card_paths(
     return out
 
 
-def _deck_base_names(cards: List[str]) -> List[str]:
+def _deck_base_names(cards: List[Any]) -> List[str]:
     names: List[str] = []
-    for fn in list(cards or []):
+    for record in normalize_deck_card_records(cards):
+        fn = str(record.get("card_id") or "")
         try:
             _base_cost, _enh, name = parse_card_filename(fn)
         except Exception:
@@ -262,14 +409,11 @@ def _deck_base_names(cards: List[str]) -> List[str]:
 
 
 def extract_strategy_config(
-    cfg: Dict[str, Any], *, cards: List[str]
+    cfg: Dict[str, Any], *, cards: List[Any]
 ) -> Dict[str, Any]:
-    """Extract a portable subset of config for a given deck.
+    """提取指定卡组可迁移的配置子集。
 
-    This intentionally excludes:
-    - devices/adb settings
-    - UI/runtime flags
-    - other machine-specific configuration
+    有意排除设备与 ADB 设置、界面与运行时标记，以及其他机器相关配置。
     """
 
     if not isinstance(cfg, dict):
@@ -328,7 +472,7 @@ def extract_strategy_config(
 def apply_strategy_config(
     base_config: Dict[str, Any], *, strategy_config: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Apply a strategy_config onto an existing config, replacing sections."""
+    """将 ``strategy_config`` 应用到现有配置并替换对应区段。"""
 
     cfg = copy.deepcopy(base_config) if isinstance(base_config, dict) else {}
     sc = strategy_config if isinstance(strategy_config, dict) else {}
@@ -355,9 +499,9 @@ def apply_strategy_config(
     if isinstance(sc.get("evolve_priority_cards"), dict):
         cfg["evolve_priority_cards"] = _normalize_mapping_keys(sc["evolve_priority_cards"])
 
-    # Allow both shapes:
-    # - {"strategy": {"effects": {...}}}
-    # - {"effects": {...}}
+    # 同时兼容以下两种结构：
+    # 完整策略结构：{"strategy": {"effects": {...}}}
+    # 仅包含效果的结构：{"effects": {...}}
     effects = None
     if isinstance(sc.get("strategy"), dict) and isinstance(sc["strategy"].get("effects"), dict):
         effects = sc["strategy"]["effects"]
@@ -382,12 +526,13 @@ def apply_strategy_config(
 def save_deck_snapshot(
     *,
     deck_name: str,
-    cards: List[str],
+    cards: List[Any],
+    derived_cards: Optional[List[Any]] = None,
     decks_dir: str,
     config_path: Optional[str] = None,
     strategy_config: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Save a deck snapshot json and return its file path."""
+    """保存卡组快照 JSON，并返回文件路径。"""
 
     name = (deck_name or "").strip()
     if not name:
@@ -395,12 +540,16 @@ def save_deck_snapshot(
 
     os.makedirs(decks_dir, exist_ok=True)
 
-    normalized_cards = normalize_deck_cards(list(cards or []))
+    normalized_cards = serialize_deck_card_records(list(cards or []))
+    normalized_derived_cards = serialize_derived_card_records(
+        list(derived_cards or [])
+    )
 
     deck_data: Dict[str, Any] = {
-        "version": 3,
+        "version": DECK_SCHEMA_VERSION,
         "name": name,
         "cards": list(normalized_cards or []),
+        "derived_cards": list(normalized_derived_cards or []),
         "timestamp": int(time.time()),
     }
 

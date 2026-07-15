@@ -1,10 +1,8 @@
-"""Global visual theme for the PyQt5 interface.
+"""PyQt5 界面的全局视觉主题。
 
-The palette mirrors the dark, compact control-center style from the UI demo.
-Widgets can opt into semantic variants with dynamic properties, for example::
-
-    button.setProperty("variant", "primary")
-    frame.setProperty("card", True)
+配色沿用演示界面的紧凑深色控制中心风格。组件可通过动态属性选择语义变体，例如
+``button.setProperty("variant", "primary")`` 或
+``frame.setProperty("card", True)``。
 """
 
 from __future__ import annotations
@@ -45,8 +43,12 @@ QWidget {
     letter-spacing: 0;
 }
 
-QWidget#AppRoot, QWidget[pageRoot="true"] {
+QWidget#AppRoot {
     background-color: #1e1e2e;
+}
+
+QStackedWidget#PageStack, QWidget[pageRoot="true"] {
+    background: transparent;
 }
 
 QFrame#Sidebar {
@@ -474,8 +476,15 @@ QScrollArea,
 QScrollArea QWidget#qt_scrollarea_viewport,
 QWidget#PriorityScrollContent,
 QWidget#SettingsContent {
-    background-color: #1e1e2e;
+    background: transparent;
     border: 0;
+}
+
+QLabel#BackgroundPreview {
+    color: #6c7086;
+    background-color: #181825;
+    border: 1px solid #3a3a4a;
+    border-radius: 6px;
 }
 
 QProgressBar {
@@ -574,23 +583,23 @@ QTextEdit#LiveLog {
 }
 """
 
-# Backward-friendly aliases for callers that prefer a descriptive constant name.
+# 为偏好描述性常量名的旧调用方保留兼容别名。
 GLOBAL_QSS = APP_STYLESHEET
 
 
 def build_stylesheet() -> str:
-    """Return the complete application stylesheet."""
+    """返回完整应用样式表。"""
 
     return APP_STYLESHEET
 
 
 def apply_theme(application: QApplication) -> None:
-    """Apply the shared Fusion palette, font, and stylesheet to an app."""
+    """向应用统一应用 Fusion 风格、字体和样式表。"""
 
     application.setStyle("Fusion")
     application.setFont(QFont("Microsoft YaHei UI", 9))
     application.setStyleSheet(APP_STYLESHEET)
 
 
-# Alternative name used by the application bootstrap/main-window layer.
+# 启动编排层和主窗口使用的别名。
 apply_app_theme = apply_theme

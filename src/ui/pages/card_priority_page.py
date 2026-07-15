@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Card priority and mode options page."""
+"""卡牌优先级与模式选项页面。"""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ from src.utils.card_filename import (
 )
 
 
-# PyQt5 stubs vary across environments; keep Qt attribute access flexible.
+# 不同环境的 PyQt5 类型桩存在差异，因此保持 Qt 属性访问方式兼容。
 Qt: Any = _Qt
 
 
@@ -50,7 +50,7 @@ class CardPriorityPage(QWidget):
         self.parent_widget: Any = parent
         self.config_data = self.load_config()
         self.card_widgets = []
-        # Enhance rows share evolve priority with the base card row.
+        # 爆能行与基础卡牌行共用进化优先级。
         self._base_evolve_priority_inputs = {}
         self._enhance_evolve_priority_views = {}
         self.init_ui()
@@ -143,8 +143,7 @@ class CardPriorityPage(QWidget):
             if not tid:
                 continue
 
-            # on_play is keyed by hand-card config key (enhance-aware);
-            # follower triggers are keyed by base follower name.
+        # ``on_play`` 按支持爆能的手牌配置键索引；随从触发器按基础随从名索引。
             if tid == "on_play":
                 key = str(config_key or base_name)
             else:
@@ -277,7 +276,7 @@ class CardPriorityPage(QWidget):
             self.scroll_layout.addStretch()
             return
 
-        # Build display entries (base + enhance tiers) from filenames.
+        # 从文件名构建基础卡与爆能层级显示条目。
         entries = []
         for card_file in card_files:
             try:
@@ -380,7 +379,7 @@ class CardPriorityPage(QWidget):
             identity_layout.addStretch()
             row_layout.addWidget(identity_widget)
 
-            # 出牌优先级（进化前/进化后） - key is base or enhance-variant.
+            # 出牌优先级按基础卡或爆能变体键分别保存。
             high_priority = self.config_data.get("high_priority_cards", {}).get(config_key, {})
 
             settings_layout = QGridLayout()
@@ -455,7 +454,7 @@ class CardPriorityPage(QWidget):
                     evolve_priority_input.setText(str(evolve_priority.get("priority", "")))
                 settings_layout.addWidget(evolve_priority_input, 1, 2)
 
-                # Keep enhance rows in sync with this base evolve priority input.
+        # 爆能行的进化优先级与该基础卡输入保持同步。
                 self._base_evolve_priority_inputs[base_name] = evolve_priority_input
                 evolve_priority_input.textChanged.connect(
                     lambda text, n=base_name: self._sync_enhance_evolve_priority_views(n, text)
@@ -493,7 +492,7 @@ class CardPriorityPage(QWidget):
             settings_layout.setColumnStretch(4, 1)
             row_layout.addLayout(settings_layout, 1)
 
-            # Step3A: special effects go to a 2nd-level editor.
+        # Step3A 特殊效果交由二级编辑器处理。
             effects_layout = QVBoxLayout()
             effects_layout.setContentsMargins(0, 0, 0, 0)
             effects_layout.setSpacing(7)
@@ -714,7 +713,7 @@ class CardPriorityPage(QWidget):
             else:
                 return
 
-            # 获取当前选中的卡组文件（使用新的 current_deck_file 属性）
+        # 通过新的 ``current_deck_file`` 属性获取当前卡组文件。
             deck_file = getattr(card_select_page, "current_deck_file", None)
             if not deck_file:
                 return
@@ -729,7 +728,7 @@ class CardPriorityPage(QWidget):
             with open(deck_path, "r", encoding="utf-8") as f:
                 deck_data = json.load(f)
 
-            # 更新 strategy_config
+        # 更新 ``strategy_config``。
             sc = deck_data.get("strategy_config")
             if not isinstance(sc, dict):
                 sc = {}

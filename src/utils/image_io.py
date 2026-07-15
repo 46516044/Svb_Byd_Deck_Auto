@@ -1,7 +1,7 @@
-"""OpenCV image I/O helpers with Unicode-path fallback.
+"""带 Unicode 路径回退的 OpenCV 图片 IO 辅助函数。
 
-Windows builds of OpenCV may fail on non-ASCII paths when using ``cv2.imread``.
-This module provides a robust fallback via ``np.fromfile + cv2.imdecode``.
+Windows 版 OpenCV 使用 ``cv2.imread`` 时可能无法读取非 ASCII 路径，因此这里
+通过 ``np.fromfile + cv2.imdecode`` 提供稳定回退。
 """
 
 from __future__ import annotations
@@ -14,11 +14,10 @@ import numpy as np
 
 
 def safe_imread(path: str, flags: int = cv2.IMREAD_COLOR) -> Any | None:
-    """Read image from any path, including Unicode paths on Windows.
+    """读取任意路径的图片，包括 Windows 下的 Unicode 路径。
 
-    Order:
-    1) Try ``cv2.imread`` first.
-    2) Fallback to ``np.fromfile + cv2.imdecode`` when direct read fails.
+    首先尝试 ``cv2.imread``，直接读取失败后回退到
+    ``np.fromfile + cv2.imdecode``。
     """
 
     try:

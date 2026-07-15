@@ -1,7 +1,4 @@
-"""Domain models.
-
-This package is intentionally lightweight: dataclasses only, no IO.
-"""
+"""领域模型包，刻意只包含数据类，不执行 IO。"""
 
 from .models import Action, FollowerRuntimeState, GameRules, ObservedGameState, TargetSpec
 

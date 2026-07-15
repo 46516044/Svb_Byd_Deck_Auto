@@ -1,6 +1,6 @@
-"""Screen state machine.
+"""画面状态机。
 
-Move the main "detect screen -> decide -> act" loop out of DeviceManager.
+将“检测画面、决策、执行动作”的主循环从 ``DeviceManager`` 中独立出来。
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 class GameStateMachine:
     def process(self, device_state: "DeviceState", game_manager: "GameManager", skip_buttons: List[str]):
-        """Process one frame of the game loop."""
+        """处理游戏主循环的一帧。"""
 
         out_of_match_keys = {
             "war",
@@ -39,7 +39,7 @@ class GameStateMachine:
             "gala_BackPark",
         }
 
-        # Allow immediate pause/stop to unwind.
+        # 允许即时暂停或停止快速退出调用栈。
         device_state.check_interrupt()
 
         u2_device = device_state.get_u2_device()
@@ -169,7 +169,7 @@ class GameStateMachine:
                         # 等待换牌界面卡牌动画完成
                         device_state.sleep(0.4)
 
-                        # Step3D: runtime keeps a single canonical mulligan path.
+                        # Step3D 运行时只保留一条规范换牌路径。
                         success = game_manager.game_actions._detect_change_card_sift()
 
                         if not success:

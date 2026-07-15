@@ -1,12 +1,8 @@
-"""Target selection helpers.
+"""目标选择辅助函数。
 
-This module centralizes legacy target picking logic so card/evolve special actions
-don't each re-implement `max(valid_targets, ...)` variants.
-
-Design goals:
-- Pure functions (no device/cv/config IO)
-- Accept legacy data shapes used by the current codebase
-- Preserve existing selection semantics as much as possible
+集中旧版目标选择逻辑，避免卡牌和进化特殊动作各自重复实现
+``max(valid_targets, ...)`` 变体。函数保持纯粹，不执行设备、视觉或配置 IO；兼容
+当前代码使用的旧数据形态，并尽量维持原有选择语义。
 """
 
 from __future__ import annotations
@@ -24,7 +20,7 @@ def _safe_int(v: Any, default: int = 0) -> int:
 
 
 def _enemy_hp_key(follower: Sequence[Any]) -> int:
-    # Legacy enemy follower tuple: (x, y, type, hp_str)
+    # 旧版敌方随从元组结构：``(x, y, type, hp_str)``。
     try:
         hp = follower[3]
     except Exception:
@@ -40,13 +36,13 @@ def _follower_xy(follower: Sequence[Any]) -> Tuple[int, int]:
 
 
 class TargetSelector:
-    """Legacy-friendly selector library."""
+    """兼容旧数据形态的选择器集合。"""
 
     @staticmethod
     def enemy_follower_highest_hp(enemy_followers: Sequence[Sequence[Any]]) -> Optional[Sequence[Any]]:
-        """Pick the enemy follower with the highest HP.
+        """选择生命值最高的敌方随从。
 
-        Legacy semantics: non-digit HP counts as 0; if all keys tie, keep the first.
+        沿用旧语义：非数字生命值按 0 处理；所有排序键相同时保留首个目标。
         """
 
         if not enemy_followers:
@@ -60,7 +56,7 @@ class TargetSelector:
         *,
         x_tolerance: int = 50,
     ) -> List[Sequence[Any]]:
-        """Filter enemy followers that match ward positions by x-axis proximity."""
+        """按横轴距离筛选与守护位置匹配的敌方随从。"""
 
         if not enemy_followers or not ward_positions:
             return []
@@ -92,7 +88,7 @@ class TargetSelector:
         *,
         x_tolerance: int = 50,
     ) -> Optional[Sequence[Any]]:
-        """Pick highest HP follower among ward followers only."""
+        """只在守护随从中选择生命值最高者。"""
 
         ward_followers = TargetSelector.enemy_followers_in_wards(
             enemy_followers,
@@ -110,7 +106,7 @@ class TargetSelector:
         n: int = 2,
         distinct_xy: bool = True,
     ) -> List[Sequence[Any]]:
-        """Pick top-N enemy followers by HP (descending)."""
+        """按生命值降序选择前 N 个敌方随从。"""
 
         if not enemy_followers:
             return []
@@ -138,7 +134,7 @@ class TargetSelector:
         *,
         x_tolerance: int = 50,
     ) -> Optional[Sequence[Any]]:
-        """Pick highest HP ward follower first; fallback to highest HP follower."""
+        """优先选生命值最高的守护随从，否则回退到生命值最高的普通随从。"""
 
         ward_pick = TargetSelector.enemy_follower_highest_hp_in_wards(
             enemy_followers,
@@ -155,9 +151,9 @@ class TargetSelector:
         *,
         max_hp: int,
     ) -> Optional[Sequence[Any]]:
-        """Pick the enemy follower with highest HP among those with hp <= max_hp.
+        """在生命值不高于 ``max_hp`` 的目标中选择生命值最高者。
 
-        Only digit HP values are considered eligible (preserve existing filters).
+        为保持现有筛选语义，只接受生命值为纯数字的目标。
         """
 
         if not enemy_followers:
@@ -186,7 +182,7 @@ class TargetSelector:
         max_hp: int,
         n: int = 2,
     ) -> List[Sequence[Any]]:
-        """Pick top-N by HP among those with hp <= max_hp."""
+        """在生命值不高于 ``max_hp`` 的目标中按生命值选择前 N 个。"""
 
         limit = _safe_int(max_hp, 0)
         candidates: List[Sequence[Any]] = []
@@ -210,12 +206,11 @@ class TargetSelector:
         exclude_names: Iterable[str] = (),
         evolve_priority_cards: Optional[Dict[str, Any]] = None,
     ) -> Optional[Sequence[Any]]:
-        """Pick a friendly follower by configured evolve priority.
+        """按配置的进化优先级选择我方随从。
 
-        Legacy semantics (used by EvolutionSpecialActions):
-        - Prefer named followers (name != None) excluding given names
-        - Among named: sort by config priority (smaller is better), then x
-        - Fallback: first unnamed follower (name is None)
+        沿用 ``EvolutionSpecialActions`` 的旧语义：排除指定名称后优先选择有名称的
+        随从，按配置优先级从小到大、再按横坐标排序；没有合适命名随从时回退到
+        首个未识别名称的随从。
         """
 
         if not our_followers:

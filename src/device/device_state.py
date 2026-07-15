@@ -33,7 +33,7 @@ def _safe_int(value: Any, default: int) -> int:
 
 
 class U2DeviceLike(Protocol):
-    """Minimal uiautomator2 device protocol used in this project."""
+    """项目实际使用的最小 uiautomator2 设备协议。"""
 
     def click(self, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -47,14 +47,13 @@ class U2DeviceLike(Protocol):
 
 
 class _U2DeviceProxy:
-    """Proxy for uiautomator2 Device with pause gating."""
+    """带暂停门控的 uiautomator2 设备代理。"""
 
     def __init__(self, device_state: "DeviceState", raw_device: U2DeviceLike):
         self._device_state = device_state
         self._raw = raw_device
 
-        # Only gate operations that can affect user manual control.
-        # Read-only queries (e.g. screenshot, dump_hierarchy) are allowed.
+        # 只门控会影响用户手动控制的操作；截图、层级转储等只读查询仍可执行。
         self._gated_methods = {
             "click",
             "swipe",
@@ -66,12 +65,12 @@ class _U2DeviceProxy:
             "send_keys",
             "set_text",
             "clear_text",
-            # App lifecycle operations definitely affect user control.
+        # 应用生命周期操作一定会影响用户控制，必须经过暂停门控。
             "app_start",
             "app_stop",
             "app_stop_all",
             "app_clear",
-            # Shell can change app/UI state (force-stop, input, etc.).
+        # Shell 可能通过强停、输入等命令改变应用或界面状态。
             "shell",
         }
 
@@ -124,7 +123,7 @@ class DeviceState:
         self.script_running = True
         self.script_paused = False
 
-        # Immediate pause control (settable from other threads)
+        # 可由其他线程设置的即时暂停控制状态。
         self.pause_event = threading.Event()
         self._resume_advance_round_pending = False
 
@@ -186,7 +185,7 @@ class DeviceState:
         self.stop_reason = ""
 
         # 设备对象
-        # Kept as `Any` (not Optional) to avoid pervasive None-check noise.
+        # 保持为 ``Any`` 而非 ``Optional``，避免在全链路增加无意义的空值检查。
         self.u2_device: Optional[U2DeviceLike] = None
         self.u2_device_raw: Optional[U2DeviceLike] = None
         self.adb_device: Any = None
@@ -262,19 +261,19 @@ class DeviceState:
         """
         return self._screenshot_method()
 
-    # ===== Run control: cooperative pause/stop =====
+        # ===== 运行控制：协作式暂停与停止 =====
 
     def is_paused(self) -> bool:
         return bool(self.script_paused or self.pause_event.is_set())
 
     def request_pause(self, *, reason: str = "") -> None:
-        """Request an immediate pause (thread-safe)."""
+        """线程安全地请求立即暂停。"""
 
         already = self.is_paused()
         self.script_paused = True
         self.pause_event.set()
 
-        # Resume policy: treat the current turn as ended.
+            # 恢复策略按当前回合已经结束处理。
         if getattr(self, "in_match", False):
             self._resume_advance_round_pending = True
 
@@ -287,7 +286,7 @@ class DeviceState:
                 pass
 
     def request_resume(self, *, reason: str = "") -> None:
-        """Resume from pause (thread-safe)."""
+        """线程安全地从暂停状态恢复。"""
 
         was_paused = self.is_paused()
         self.script_paused = False
@@ -304,7 +303,7 @@ class DeviceState:
                 pass
 
     def record_stage_detection(self, stage_key: Any) -> None:
-        """Record detected UI stage; timeout only advances on stage changes."""
+        """记录检测到的界面阶段；只有阶段变化才推进超时基准。"""
 
         key = str(stage_key or "")
         if not key:
@@ -318,7 +317,7 @@ class DeviceState:
             self.last_stage_change_time = now
 
     def click_blank_before_restart(self) -> bool:
-        """Try a single blank click before auto-restart."""
+        """自动重启前先尝试一次空白区域点击。"""
 
         try:
             from src.config.game_constants import BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
@@ -347,11 +346,11 @@ class DeviceState:
             return False
 
     def request_stop(self, *, reason: str = "manual") -> None:
-        """Request script stop without forcing app shutdown by default."""
+        """请求脚本停止，默认不强制关闭应用。"""
 
         self.stop_reason = str(reason or "manual")
 
-        # Runtime-limit stop should also close game app(s) on device.
+            # 达到运行时长上限时，还需要关闭设备上的游戏应用。
         if self.stop_reason == "runtime_limit":
             try:
                 self.stop_shadowverse_apps(trigger=self.stop_reason)
@@ -360,7 +359,7 @@ class DeviceState:
 
         self.script_running = False
 
-        # Ensure paused loops can unwind quickly.
+        # 唤醒暂停循环，使其能快速退出调用栈。
         self.script_paused = False
         self.pause_event.clear()
 
@@ -372,7 +371,7 @@ class DeviceState:
             pass
 
     def _find_shadowverse_packages(self) -> List[str]:
-        """Find installed package names related to Shadowverse/Byd."""
+        """查找与 Shadowverse/Byd 相关的已安装包名。"""
 
         if self.adb_device is None:
             return []
@@ -418,7 +417,7 @@ class DeviceState:
         return all(tok.isdigit() for tok in tokens)
 
     def _get_foreground_package(self) -> str:
-        """Get current foreground package name (best effort)."""
+        """尽力获取当前前台应用包名。"""
 
         for dev in (self.u2_device_raw, self.u2_device):
             if dev is None:
@@ -452,7 +451,7 @@ class DeviceState:
         return ""
 
     def ensure_shadowverse_apps_running(self, *, launch_delay_seconds: float = 3.0) -> bool:
-        """Ensure Shadowverse app is running; auto-start when not running."""
+        """确保 Shadowverse 正在运行，未运行时自动启动。"""
 
         target_pkgs = self._find_shadowverse_packages()
         if not target_pkgs:
@@ -512,7 +511,7 @@ class DeviceState:
         return started
 
     def stop_shadowverse_apps(self, *, trigger: str = "") -> bool:
-        """Stop Shadowverse-related app(s) on device via adb/u2."""
+        """通过 adb/u2 停止设备上的 Shadowverse 相关应用。"""
 
         target_pkgs = self._find_shadowverse_packages()
         if not target_pkgs:
@@ -541,20 +540,20 @@ class DeviceState:
         return stopped_any
 
     def check_interrupt(self) -> None:
-        """Raise if paused/stopped so callers can unwind quickly."""
+        """暂停或停止时抛出控制异常，使调用方快速退出调用栈。"""
 
         if not getattr(self, "script_running", True):
             raise StopRequested("script stopped")
 
         if self.script_paused and not self.pause_event.is_set():
-            # Keep legacy flag in sync.
+        # 同步旧版兼容标记。
             self.pause_event.set()
 
         if self.pause_event.is_set() or self.script_paused:
             raise PauseRequested("paused")
 
     def sleep(self, seconds: float, *, step: float = 0.05) -> None:
-        """Interruptible sleep: raises PauseRequested/StopRequested when needed."""
+        """可中断休眠；需要时抛出 ``PauseRequested`` 或 ``StopRequested``。"""
 
         try:
             total = float(seconds)
@@ -573,16 +572,16 @@ class DeviceState:
             time.sleep(min(float(step), remain))
 
     def wait_while_paused(self, *, poll: float = 0.2) -> None:
-        """Block until resumed; then apply resume policy."""
+        """阻塞至恢复，然后应用恢复策略。"""
 
         while self.is_paused() and getattr(self, "script_running", True):
             time.sleep(float(poll))
 
-        # Apply "new turn" semantics after a pause cycle.
+            # 完成一次暂停周期后应用“新回合”语义。
         self.apply_resume_policy_if_needed()
 
     def apply_resume_policy_if_needed(self) -> None:
-        """After resume, treat the paused turn as ended and reset minimal state."""
+        """恢复后将暂停时的回合视为结束，并重置最小必要状态。"""
 
         if self.is_paused() or not getattr(self, "script_running", True):
             return
@@ -591,8 +590,7 @@ class DeviceState:
 
         self._resume_advance_round_pending = False
 
-        # Only advance turn counter inside an active battle phase.
-        # In pre-battle pages (war/decision), do not advance turn.
+        # 仅在有效对战阶段推进回合计数；备战或抉择等战前页面不得推进。
         phase_key = str(getattr(self, "current_stage_key", "") or "")
         should_advance_turn = bool(
             getattr(self, "in_match", False)
@@ -606,7 +604,7 @@ class DeviceState:
                 prev = 1
             self.current_round_count = max(1, prev + 1)
 
-        # Reset per-turn state that is known to be stale after manual intervention.
+        # 手动介入后，重置已确定失效的逐回合状态。
         try:
             self.has_clicked_plus_this_round = False
         except Exception:
@@ -621,7 +619,7 @@ class DeviceState:
         except Exception:
             pass
 
-        # Let GameActions drop per-round caches.
+        # 通知 ``GameActions`` 清理逐回合缓存。
         try:
             gm = getattr(self, "game_manager", None)
             if gm is not None and hasattr(gm, "game_actions"):
@@ -646,12 +644,12 @@ class DeviceState:
             pass
 
     def get_u2_device(self) -> Optional[U2DeviceLike]:
-        """Get current wrapped u2 device (if connected)."""
+        """设备已连接时返回当前包装后的 u2 设备。"""
 
         return self.u2_device
 
     def require_u2_device(self) -> U2DeviceLike:
-        """Get wrapped u2 device or raise a descriptive runtime error."""
+        """返回包装后的 u2 设备；不可用时抛出含明确信息的运行时错误。"""
 
         dev = self.u2_device
         if dev is None:
@@ -659,12 +657,12 @@ class DeviceState:
         return dev
 
     def wrap_u2_device(self, u2_device: Optional[U2DeviceLike]) -> Optional[U2DeviceLike]:
-        """Wrap uiautomator2 device to gate click/swipe on pause."""
+        """包装 uiautomator2 设备，使点击和滑动受暂停状态门控。"""
 
         if u2_device is None:
             return u2_device
         try:
-            # Keep a reference to the raw device for cleanup paths.
+        # 保留原始设备引用，供不受代理影响的清理路径使用。
             self.u2_device_raw = u2_device
             return _U2DeviceProxy(self, u2_device)
         except Exception:
@@ -910,7 +908,7 @@ class DeviceState:
 
     def restart_emulator(self) -> bool:
         """重启所有包名包含 'Shadowverse' 或 'com.netease.yzs' 的应用，不重启模拟器"""
-        # Do not issue disruptive device commands while paused/stopped.
+        # 暂停或停止期间不得发送会扰动设备状态的命令。
         try:
             self.check_interrupt()
         except PauseRequested:

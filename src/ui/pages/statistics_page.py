@@ -1,4 +1,4 @@
-"""Dark statistics page for persisted and live battle metrics."""
+"""展示持久化与实时对战指标的深色统计页面。"""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from src.ui.statistics import (
 
 
 class DailyBattleChart(QWidget):
-    """Small dependency-free bar chart for daily battle counts."""
+    """无额外依赖的轻量每日对战次数柱状图。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -165,7 +165,7 @@ class MetricCard(QFrame):
 
 
 class StatisticsPage(QWidget):
-    """Statistics view backed by ``round_stats_*.json`` files."""
+    """由 ``round_stats_*.json`` 文件驱动的统计视图。"""
 
     def __init__(
         self,
@@ -254,7 +254,7 @@ class StatisticsPage(QWidget):
         root_layout.addWidget(run_panel)
 
     def refresh_stats(self) -> StatisticsSnapshot:
-        """Reload persisted statistics and update every metric."""
+        """重新加载持久化统计并更新全部指标。"""
 
         self._snapshot = load_statistics(
             app_root=self._app_root,
@@ -297,7 +297,7 @@ class StatisticsPage(QWidget):
         return snapshot
 
     def set_live_stats(self, runtime_seconds: float, battle_count: int) -> None:
-        """Inject current process runtime and battle count from the controller."""
+        """由控制器注入当前进程运行时长和对战次数。"""
 
         try:
             self._live_runtime_seconds = max(0, int(runtime_seconds))
@@ -316,7 +316,7 @@ class StatisticsPage(QWidget):
         self.refresh_stats()
 
     def begin_run(self, started_at: Optional[datetime] = None) -> None:
-        """Reset the live summary and wait for the first persisted run ID."""
+        """重置实时摘要，并等待首个持久化运行 ID。"""
 
         self._current_run_started_at = started_at or datetime.now()
         self._current_run_id = "__pending__"

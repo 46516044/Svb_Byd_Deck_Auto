@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Config page (parameters/settings)."""
+"""参数配置页面。"""
 
 from __future__ import annotations
 
+import os
 from typing import Any, Tuple
 
 from PyQt5.QtCore import Qt as _Qt, pyqtSignal
-from PyQt5.QtGui import QDoubleValidator, QIntValidator
+from PyQt5.QtGui import QDoubleValidator, QIntValidator, QPixmap
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -19,6 +21,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSlider,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -26,9 +29,18 @@ from PyQt5.QtWidgets import (
 
 from src.config.paths import get_config_path
 from src.config.config_repository import ConfigRepository
+from src.ui.background import (
+    BACKGROUND_OPACITY_DEFAULT,
+    BACKGROUND_OPACITY_MAX,
+    BACKGROUND_OPACITY_MIN,
+    clamp_background_opacity,
+    render_background_preview,
+    resolve_background_path,
+    serialize_background_path,
+)
 
 
-# PyQt5 stubs vary across environments; keep Qt attribute access flexible.
+# 不同环境的 PyQt5 类型桩存在差异，因此保持 Qt 属性访问方式兼容。
 Qt: Any = _Qt
 
 
@@ -54,7 +66,7 @@ class ConfigPage(QWidget):
         title_label.setProperty("heading", "page")
         main_layout.addWidget(title_label)
 
-        subtitle_label = QLabel("统一管理操作速度、运行限制和换牌策略")
+        subtitle_label = QLabel("统一管理操作速度、运行限制、界面背景和换牌策略")
         subtitle_label.setObjectName("PageSubtitle")
         subtitle_label.setProperty("muted", True)
         main_layout.addWidget(subtitle_label)
@@ -116,6 +128,74 @@ class ConfigPage(QWidget):
         basic_layout.addLayout(basic_form)
         content_layout.addWidget(basic_panel)
 
+        self._load_background_values()
+        appearance_panel, appearance_layout = self._create_section(
+            "外观设置",
+            "为主内容区设置本地背景图片。侧边栏、卡片和日志区域会保持实色。",
+            "AppearanceSettingsPanel",
+        )
+        appearance_row = QHBoxLayout()
+        appearance_row.setSpacing(18)
+
+        self.background_preview = QLabel("未选择背景")
+        self.background_preview.setObjectName("BackgroundPreview")
+        self.background_preview.setAlignment(Qt.AlignCenter)
+        self.background_preview.setFixedSize(260, 146)
+        appearance_row.addWidget(self.background_preview, 0, Qt.AlignTop)
+
+        background_controls = QVBoxLayout()
+        background_controls.setSpacing(10)
+        self.background_enabled_checkbox = QCheckBox("启用自定义背景")
+        self.background_enabled_checkbox.setObjectName("CustomBackgroundCheckBox")
+        background_controls.addWidget(self.background_enabled_checkbox)
+
+        path_label = QLabel("背景图片")
+        path_label.setObjectName("SettingsFieldLabel")
+        background_controls.addWidget(path_label)
+
+        path_row = QHBoxLayout()
+        path_row.setSpacing(8)
+        self.background_path_input = QLineEdit()
+        self.background_path_input.setObjectName("BackgroundPathInput")
+        self.background_path_input.setReadOnly(True)
+        self.background_path_input.setPlaceholderText("请选择 JPG、PNG、WebP 或 BMP 图片")
+        path_row.addWidget(self.background_path_input, 1)
+        self.background_browse_btn = QPushButton("选择图片")
+        self.background_browse_btn.setObjectName("SecondaryButton")
+        path_row.addWidget(self.background_browse_btn)
+        self.background_clear_btn = QPushButton("清除")
+        self.background_clear_btn.setObjectName("SecondaryButton")
+        path_row.addWidget(self.background_clear_btn)
+        background_controls.addLayout(path_row)
+
+        opacity_row = QHBoxLayout()
+        opacity_row.setSpacing(10)
+        opacity_label = QLabel("背景强度")
+        opacity_label.setObjectName("SettingsFieldLabel")
+        opacity_row.addWidget(opacity_label)
+        self.background_opacity_slider = QSlider(Qt.Horizontal)
+        self.background_opacity_slider.setObjectName("BackgroundOpacitySlider")
+        self.background_opacity_slider.setRange(
+            BACKGROUND_OPACITY_MIN,
+            BACKGROUND_OPACITY_MAX,
+        )
+        opacity_row.addWidget(self.background_opacity_slider, 1)
+        self.background_opacity_value = QLabel()
+        self.background_opacity_value.setObjectName("SettingsUnitLabel")
+        self.background_opacity_value.setMinimumWidth(42)
+        opacity_row.addWidget(self.background_opacity_value)
+        background_controls.addLayout(opacity_row)
+
+        background_hint = QLabel("建议使用 16:9 图片；强度上限已限制，以保证文字可读性。")
+        background_hint.setObjectName("SettingsFieldHint")
+        background_hint.setProperty("dim", True)
+        background_hint.setWordWrap(True)
+        background_controls.addWidget(background_hint)
+        background_controls.addStretch(1)
+        appearance_row.addLayout(background_controls, 1)
+        appearance_layout.addLayout(appearance_row)
+        content_layout.addWidget(appearance_panel)
+
         self._load_run_values()
         run_panel, run_layout = self._create_section(
             "运行设置",
@@ -123,17 +203,18 @@ class ConfigPage(QWidget):
             "RunSettingsPanel",
         )
 
-        restart_header = QHBoxLayout()
-        restart_header.setSpacing(12)
+        restart_header = QVBoxLayout()
+        restart_header.setSpacing(4)
         self.restart_enabled_checkbox = QCheckBox("启用自动重启")
         self.restart_enabled_checkbox.setObjectName("AutoRestartCheckBox")
         self.restart_enabled_checkbox.setChecked(self.auto_restart_enabled)
         restart_header.addWidget(self.restart_enabled_checkbox)
-        restart_header.addStretch(1)
-        restart_note = QLabel("长时间没有进入新阶段时尝试恢复游戏")
-        restart_note.setObjectName("SettingsInlineHint")
-        restart_note.setProperty("muted", True)
-        restart_header.addWidget(restart_note)
+        self.restart_note = QLabel("长时间没有进入新阶段时尝试恢复游戏")
+        self.restart_note.setObjectName("SettingsInlineHint")
+        self.restart_note.setProperty("muted", True)
+        self.restart_note.setWordWrap(True)
+        self.restart_note.setContentsMargins(24, 0, 0, 0)
+        restart_header.addWidget(self.restart_note)
         run_layout.addLayout(restart_header)
 
         run_form = QGridLayout()
@@ -234,10 +315,23 @@ class ConfigPage(QWidget):
         self.restart_enabled_checkbox.stateChanged.connect(
             self.on_restart_enabled_changed
         )
+        self.background_enabled_checkbox.stateChanged.connect(
+            self._on_background_enabled_changed
+        )
+        self.background_browse_btn.clicked.connect(self.choose_background_image)
+        self.background_clear_btn.clicked.connect(self.clear_background_image)
+        self.background_opacity_slider.valueChanged.connect(
+            self._on_background_opacity_changed
+        )
+        self._sync_background_controls()
         self.on_restart_enabled_changed()
 
         self.setTabOrder(self.min_drag_input, self.max_drag_input)
-        self.setTabOrder(self.max_drag_input, self.restart_enabled_checkbox)
+        self.setTabOrder(self.max_drag_input, self.background_enabled_checkbox)
+        self.setTabOrder(self.background_enabled_checkbox, self.background_browse_btn)
+        self.setTabOrder(self.background_browse_btn, self.background_clear_btn)
+        self.setTabOrder(self.background_clear_btn, self.background_opacity_slider)
+        self.setTabOrder(self.background_opacity_slider, self.restart_enabled_checkbox)
         self.setTabOrder(self.restart_enabled_checkbox, self.restart_time_input)
         self.setTabOrder(self.restart_time_input, self.restart_count_input)
         self.setTabOrder(self.restart_count_input, self.runtime_limit_input)
@@ -277,6 +371,108 @@ class ConfigPage(QWidget):
             ) // 60
         except (TypeError, ValueError):
             self.max_run_duration_minutes = 0
+
+    def _load_background_values(self) -> None:
+        ui_config = self.config_data.get("ui", {})
+        if not isinstance(ui_config, dict):
+            ui_config = {}
+        background = ui_config.get("custom_background", {})
+        if not isinstance(background, dict):
+            background = {}
+        self.background_enabled = bool(background.get("enabled", False))
+        self.background_path = resolve_background_path(background.get("path", ""))
+        self.background_opacity = clamp_background_opacity(
+            background.get("opacity", BACKGROUND_OPACITY_DEFAULT)
+        )
+
+    def _sync_background_controls(self) -> None:
+        self.background_enabled_checkbox.blockSignals(True)
+        self.background_enabled_checkbox.setChecked(self.background_enabled)
+        self.background_enabled_checkbox.blockSignals(False)
+        self.background_opacity_slider.blockSignals(True)
+        self.background_opacity_slider.setValue(self.background_opacity)
+        self.background_opacity_slider.blockSignals(False)
+        self.background_path_input.setText(
+            os.path.normpath(self.background_path) if self.background_path else ""
+        )
+        self._on_background_opacity_changed(self.background_opacity)
+        self._on_background_enabled_changed()
+        self._update_background_preview()
+
+    def _background_is_valid(self) -> bool:
+        return bool(
+            self.background_path
+            and os.path.isfile(self.background_path)
+            and not QPixmap(self.background_path).isNull()
+        )
+
+    def _update_background_preview(self) -> None:
+        if not self._background_is_valid():
+            self.background_preview.clear()
+            self.background_preview.setText(
+                "背景文件不可用" if self.background_path else "未选择背景"
+            )
+            return
+        self.background_preview.setText("")
+        self.background_preview.setPixmap(
+            render_background_preview(
+                self.background_path,
+                self.background_preview.size(),
+                self.background_opacity_slider.value(),
+            )
+        )
+
+    def _on_background_enabled_changed(self, *_args) -> None:
+        has_path = bool(self.background_path)
+        active = self.background_enabled_checkbox.isChecked() and has_path
+        self.background_opacity_slider.setEnabled(active)
+        self.background_clear_btn.setEnabled(has_path)
+
+    def _on_background_opacity_changed(self, value: int) -> None:
+        self.background_opacity = clamp_background_opacity(value)
+        self.background_opacity_value.setText(f"{self.background_opacity}%")
+        self._update_background_preview()
+
+    def _set_background_path(self, path: object) -> bool:
+        resolved = resolve_background_path(path)
+        if not resolved or not os.path.isfile(resolved) or QPixmap(resolved).isNull():
+            return False
+        self.background_path = resolved
+        self.background_path_input.setText(os.path.normpath(resolved))
+        self.background_enabled_checkbox.setChecked(True)
+        self._on_background_enabled_changed()
+        self._update_background_preview()
+        return True
+
+    def choose_background_image(self) -> None:
+        start_dir = os.path.dirname(self.background_path) if self.background_path else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择自定义背景",
+            start_dir,
+            "图片文件 (*.jpg *.jpeg *.png *.webp *.bmp);;所有文件 (*)",
+        )
+        if path and not self._set_background_path(path):
+            QMessageBox.warning(self, "背景不可用", "无法读取所选图片，请选择其他文件。")
+
+    def clear_background_image(self) -> None:
+        self.background_path = ""
+        self.background_path_input.clear()
+        self.background_enabled_checkbox.setChecked(False)
+        self._on_background_enabled_changed()
+        self._update_background_preview()
+
+    def _background_config(self) -> dict:
+        enabled = self.background_enabled_checkbox.isChecked()
+        if enabled and not self._background_is_valid():
+            raise ValueError("启用自定义背景前，请先选择有效的图片文件")
+        return {
+            "enabled": enabled,
+            "path": serialize_background_path(self.background_path),
+            "opacity": clamp_background_opacity(
+                self.background_opacity_slider.value()
+            ),
+        }
 
     def _create_section(
         self, title: str, description: str, object_name: str
@@ -461,6 +657,14 @@ class ConfigPage(QWidget):
             self.config_data["game"] = {}
         self.config_data["game"]["card_replacement_strategy"] = strategy
 
+        try:
+            if "ui" not in self.config_data or not isinstance(self.config_data["ui"], dict):
+                self.config_data["ui"] = {}
+            self.config_data["ui"]["custom_background"] = self._background_config()
+        except ValueError as e:
+            QMessageBox.warning(self, "背景设置错误", str(e))
+            return
+
         config_path = get_config_path()
         try:
             repo = ConfigRepository(config_path)
@@ -497,6 +701,9 @@ class ConfigPage(QWidget):
         self.restart_count_input.setText(str(self.max_restarts))
         self.runtime_limit_input.setText(str(self.max_run_duration_minutes))
         self.on_restart_enabled_changed()
+
+        self._load_background_values()
+        self._sync_background_controls()
 
         current_strategy = self.config_data.get("game", {}).get(
             "card_replacement_strategy", "3费档次"

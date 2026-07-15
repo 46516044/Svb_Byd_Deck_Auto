@@ -1,4 +1,4 @@
-"""Step3A effects runtime engine."""
+"""Step3A 效果运行时引擎。"""
 
 from .context import FollowerContext, HandCardContext
 from .engine import EffectEngine, EffectRunResult

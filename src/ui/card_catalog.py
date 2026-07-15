@@ -1,4 +1,4 @@
-"""Card catalog model backed by the external ``quanka`` resources."""
+"""由外部 ``quanka`` 资源驱动的卡牌目录模型。"""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ _CARD_FILENAME_RE = re.compile(
 
 @dataclass(frozen=True)
 class CardEntry:
-    """One selectable, non-evolved card image in the catalog."""
+    """目录中一张可选择的非进化卡图。"""
 
     key: str
     card_id: str
@@ -51,7 +51,7 @@ class CardEntry:
 
     @property
     def filename(self) -> str:
-        """Return the concrete source filename used by deck IO."""
+        """返回卡组 IO 使用的实际源文件名。"""
 
         return os.path.basename(self.source_path)
 
@@ -65,11 +65,10 @@ def _looks_like_resource_root(path: str) -> bool:
 
 
 def get_card_resource_root(app_root: Optional[str] = None) -> str:
-    """Return the card resource root for source and packaged runs.
+    """返回源码或打包运行时的卡牌资源根目录。
 
-    The current submodule layout is ``quanka/SV_WB_Cards``. Older releases
-    placed the CSV and category directories directly under ``quanka``; that
-    location is used only when the current layout is absent.
+    当前子模块结构为 ``quanka/SV_WB_Cards``。旧版本曾将 CSV 和职业目录直接放在
+    ``quanka`` 下，仅当当前结构不存在时才使用旧位置。
     """
 
     root = os.path.abspath(app_root or get_app_root())
@@ -114,7 +113,7 @@ def _category_sort_key(category: str) -> Tuple[int, str]:
 
 
 def load_card_catalog(resource_root: Optional[str] = None) -> List[CardEntry]:
-    """Read metadata and return all selectable, non-evolved card images."""
+    """读取元数据并返回全部可选择的非进化卡图。"""
 
     root = os.path.abspath(resource_root or get_card_resource_root())
     if not os.path.isdir(root):
@@ -202,11 +201,10 @@ def resolve_card_entry(
     catalog: Optional[Iterable[CardEntry]] = None,
     resource_root: Optional[str] = None,
 ) -> Optional[CardEntry]:
-    """Resolve a persisted/UI card reference to one catalog entry.
+    """将持久化或界面卡牌引用解析为一个目录条目。
 
-    Stable keys, relative paths, absolute source paths, filenames, filename
-    stems, and card IDs are accepted. Ambiguous display names are deliberately
-    not used as references.
+    支持稳定键、相对路径、绝对源路径、文件名、主文件名和卡牌 ID；显示名称可能
+    存在歧义，因此特意不将其作为引用依据。
     """
 
     if isinstance(reference, CardEntry):

@@ -1,11 +1,8 @@
-"""Card priority helpers.
+"""卡牌优先级辅助函数。
 
-Configuration is the single source of truth.
-
-This module should not perform disk IO or maintain its own divergent cache.
-Callers should pass a config dict explicitly (preferred). For backward
-compatibility, `reload_config(config)` can be called at startup to inject a
-process-wide runtime config used when call sites don't pass one.
+配置对象是唯一可信数据源。本模块不执行磁盘 IO，也不维护可能与配置分叉的缓存。
+调用方应优先显式传入配置字典；为兼容旧调用方式，启动时也可通过
+``reload_config(config)`` 注入进程级运行配置，供未传配置的调用点使用。
 """
 
 from __future__ import annotations
@@ -28,23 +25,20 @@ _runtime_config: Optional[Dict[str, Any]] = None
 
 
 def set_runtime_config(config: Optional[Dict[str, Any]]) -> None:
-    """Inject a runtime config dict (e.g. ConfigManager.config)."""
+    """注入运行时配置字典，例如 ``ConfigManager.config``。"""
 
     global _runtime_config
     _runtime_config = config if isinstance(config, dict) else None
 
 
 def reload_config(config: Optional[Dict[str, Any]] = None) -> None:
-    """Backward-compatible entrypoint used by bootstrap.
-
-    Note: no disk read occurs here.
-    """
+    """供启动编排层使用的兼容入口；此处不会读取磁盘。"""
 
     if config is not None:
         set_runtime_config(config)
         logger.info("卡牌优先级配置已注入(运行期配置)")
     else:
-        # Keep behavior safe: do not silently read from disk.
+    # 未注入配置时保持安全默认值，不在这里隐式读取磁盘。
         logger.info("卡牌优先级配置 reload 被调用(未提供config)，将使用已注入的运行期配置")
 
 
@@ -100,7 +94,7 @@ def _name_candidates(card_name: str) -> list[str]:
 
 
 def get_high_priority_cards(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Return mapping: card_name -> config dict."""
+    """返回 ``卡牌名 -> 配置字典`` 映射。"""
 
     return _get_mapping(config, "high_priority_cards")
 
@@ -111,7 +105,7 @@ def is_high_priority_card(card_name: str, config: Optional[Dict[str, Any]] = Non
 
 
 def get_evolve_priority_cards(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Return mapping: card_name -> config dict."""
+    """返回 ``卡牌名 -> 配置字典`` 映射。"""
 
     return _get_mapping(config, "evolve_priority_cards")
 
@@ -122,7 +116,7 @@ def is_evolve_priority_card(card_name: str, config: Optional[Dict[str, Any]] = N
 
 
 def get_card_priority_pre_evolution(card_name: str, config: Optional[Dict[str, Any]] = None) -> int:
-    """Get play priority for pre-evolution stage (smaller is higher priority)."""
+    """获取进化前出牌优先级，数值越小优先级越高。"""
 
     mapping = get_high_priority_cards(config)
     for key in _name_candidates(str(card_name)):
@@ -136,7 +130,7 @@ def get_card_priority_pre_evolution(card_name: str, config: Optional[Dict[str, A
 
 
 def get_card_priority_post_evolution(card_name: str, config: Optional[Dict[str, Any]] = None) -> int:
-    """Get play priority for post-evolution stage (smaller is higher priority)."""
+    """获取进化后出牌优先级，数值越小优先级越高。"""
 
     mapping = get_high_priority_cards(config)
     for key in _name_candidates(str(card_name)):
@@ -150,7 +144,7 @@ def get_card_priority_post_evolution(card_name: str, config: Optional[Dict[str, 
 
 
 def get_evolve_priority(card_name: str, config: Optional[Dict[str, Any]] = None) -> int:
-    """Get evolve priority (smaller is higher priority)."""
+    """获取进化优先级，数值越小优先级越高。"""
 
     mapping = get_evolve_priority_cards(config)
     for key in _name_candidates(str(card_name)):
@@ -164,7 +158,7 @@ def get_evolve_priority(card_name: str, config: Optional[Dict[str, Any]] = None)
 
 
 def is_evolution_unlocked(device_state) -> bool:
-    """Determine if evolve is unlocked based on current round + first/second."""
+    """根据当前回合以及先后手判断是否已解锁进化。"""
 
     if getattr(device_state, "extra_cost_available_this_match", None) is None:
         return False

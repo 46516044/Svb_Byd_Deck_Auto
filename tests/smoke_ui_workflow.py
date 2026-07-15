@@ -1,3 +1,5 @@
+import base64
+import json
 import logging
 import os
 import queue
@@ -5,13 +7,14 @@ import sys
 import tempfile
 import threading
 import time
+import zlib
 from pathlib import Path
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PyQt5.QtCore import QThread
+from PyQt5.QtCore import QThread, Qt
 from PyQt5.QtWidgets import QApplication
 
 from src.app.bootstrap import _command_listener
@@ -109,6 +112,10 @@ def test_deck_apply_is_transactional() -> None:
             assert (target / "1_10201110_1_1.webp").exists()
             assert (target / "1_10201110_evo.webp").exists()
 
+            copied, missing = page._apply_entries([entry, entry], {})
+            assert copied == 2
+            assert not missing
+
             fake_entry = CardEntry(
                 key="fake/99999999",
                 card_id="99999999",
@@ -163,23 +170,88 @@ def test_main_window_workflow() -> None:
     window.show()
     _process_events(app)
 
+    dashboard = window.dashboard_page
+    workspace = window.deck_workspace_page
+    assert workspace.workspace_is_applied() is True
+
+    window.state.set_device(connected=False)
+    window.state.set_run_status("disconnected")
+    dashboard.adb_input.clear()
+    assert not dashboard.connect_button.isEnabled()
+    assert not dashboard.start_button.isEnabled()
+    dashboard.adb_input.setText("device-a")
+    dashboard.server_combo.setCurrentText("国际服")
+    assert dashboard.connect_button.isEnabled()
+    assert dashboard.start_button.isEnabled()
+
+    connect_requests = []
+    original_connect_device = window.connect_device
+    window.connect_device = lambda *, start_after_connect=False: connect_requests.append(
+        bool(start_after_connect)
+    )
+    try:
+        window.start_script()
+    finally:
+        window.connect_device = original_connect_device
+    assert connect_requests == [True]
+
     window.state.set_run_status("connecting")
-    assert not window.dashboard_page.adb_input.isEnabled()
+    assert not dashboard.adb_input.isEnabled()
+    assert not dashboard.start_button.isEnabled()
     window._device_config = {"serial": "device-a", "is_global": False}
-    window.dashboard_page.adb_input.setText("device-b")
+    start_requests = []
+    original_start_script = window.start_script
+    window.start_script = lambda: start_requests.append(True)
+    window._start_after_connect = True
+    window._on_device_connection_checked(False, "failed", {})
+    assert not start_requests
+    assert window._start_after_connect is False
+
+    window._start_after_connect = True
     window._on_device_connection_checked(True, "connected", {})
+    assert start_requests == [True]
+    assert window._start_after_connect is False
+    window._start_after_connect = False
+    window._on_device_connection_checked(True, "connected", {})
+    assert start_requests == [True]
+    window.start_script = original_start_script
     assert window.state.device["serial"] == "device-a"
-    assert window.dashboard_page.adb_input.isEnabled()
+    assert dashboard.adb_input.isEnabled()
+
+    dashboard.cost_curve.set_costs(
+        {0: 1, 1: 3, 8: 2, 9: 4, 10: 5, -1: 9, "invalid": 2}
+    )
+    assert dashboard.cost_curve._costs == {0: 1, 1: 3, 8: 11}
+    assert sum(dashboard.cost_curve._costs.values()) == 15
+    curve_image = dashboard.cost_curve.grab().toImage()
+    assert not curve_image.isNull()
+    green_pixels = 0
+    for y in range(max(0, curve_image.height() - 36), curve_image.height()):
+        for x in range(curve_image.width()):
+            color = curve_image.pixelColor(x, y)
+            if color.green() > color.red() + 12 and color.green() > color.blue() + 12:
+                green_pixels += 1
+    assert green_pixels > 40
 
     for key in ("dashboard", "deck", "cards", "stats", "settings", "logs"):
         window.navigate(key)
         _process_events(app, 2)
         assert window.stacked_widget.currentWidget() is window.pages[key]
 
-    workspace = window.deck_workspace_page
-    assert len(workspace.catalog) == 957
-    assert workspace.library_list.count() == 957
-    assert workspace.workspace_is_applied() is True
+    assert all(button.icon().isNull() for button in window.nav_buttons.values())
+    settings = window.config_page
+    assert settings.restart_note.y() > settings.restart_enabled_checkbox.y()
+    background_path = Path(__file__).resolve().parents[1] / "Image" / "ui背景.jpg"
+    assert settings._set_background_path(str(background_path))
+    settings.background_opacity_slider.setValue(30)
+    background_config = settings._background_config()
+    assert background_config["path"] == "Image/ui背景.jpg"
+    assert window._apply_custom_background({"ui": {"custom_background": background_config}})
+    assert window.app_root.has_background()
+    assert window.app_root.background_opacity == 30
+
+    assert len(workspace.catalog) == 970
+    assert workspace.library_list.count() == 970
 
     scroll = workspace.library_list.verticalScrollBar()
     scroll.setValue(scroll.maximum())
@@ -201,7 +273,13 @@ def test_main_window_workflow() -> None:
     scroll.setValue(0)
     _process_events(app, 2)
 
-    first = workspace.catalog[0]
+    initial_count = len(workspace.selected_entries)
+    initial_total = workspace._selected_total_count()
+    first = next(
+        entry
+        for entry in workspace.catalog
+        if entry.key not in workspace.selected_entries
+    )
     workspace._set_category_filter(first.category)
     workspace._set_cost_filter(str(first.cost) if first.cost < 10 else "10+")
     workspace._set_search_filter(first.card_id)
@@ -213,11 +291,41 @@ def test_main_window_workflow() -> None:
 
     workspace.add_card_by_key(first.key)
     workspace.add_card_by_key(first.key)
-    assert len(workspace.selected_entries) == 1
+    assert len(workspace.selected_entries) == initial_count + 1
+    assert workspace.selected_counts[first.key] == 2
+    assert workspace._selected_total_count() == initial_total + 2
+    for index in range(workspace.current_list.count()):
+        item = workspace.current_list.item(index)
+        if item.data(Qt.UserRole) == first.key:
+            workspace.current_list.setCurrentItem(item)
+            break
+    workspace.remove_selected_current_card()
+    assert workspace.selected_counts[first.key] == 1
+    workspace.increase_selected_current_card()
+    assert workspace.selected_counts[first.key] == 2
+    derived = next(
+        entry
+        for entry in workspace.catalog
+        if entry.key not in workspace.derived_entries and entry.key != first.key
+    )
+    workspace.deck_list_tabs.setCurrentIndex(1)
+    workspace.add_card_by_key(derived.key)
+    workspace.add_card_by_key(derived.key)
+    assert list(workspace.derived_entries) == [derived.key]
+    assert workspace._selected_total_count() == initial_total + 2
+    workspace.deck_list_tabs.setCurrentIndex(0)
     assert workspace.workspace_is_applied() is False
     assert window.dashboard_page.deck_state_label.text() == "待应用"
     workspace.generate_share_code()
-    assert workspace.share_output.toPlainText().strip()
+    share_code = workspace.share_output.toPlainText().strip()
+    assert share_code
+    share_payload = json.loads(
+        zlib.decompress(base64.b64decode(share_code.encode("ascii"))).decode("utf-8")
+    )
+    assert share_payload["version"] == 5
+    shared = {record["card_id"]: record["count"] for record in share_payload["cards"]}
+    assert shared[first.card_id] == 2
+    assert share_payload["derived_cards"] == [{"card_id": derived.card_id}]
 
     window.append_log("[ERROR] workflow smoke")
     window.append_log("[对战开始] 第3场对战")

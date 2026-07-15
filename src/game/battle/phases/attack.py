@@ -1,4 +1,4 @@
-"""Attack phase wrapper."""
+"""攻击阶段包装器。"""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ class AttackPhase:
         ds = self.actions.device_state
         ds.logger.info("[Phase] attack")
 
-        # Attack phase prefers a fresh strict scan to avoid stale-cache misses.
-        # Baseline: 3-shot sampling with names, retry handled by lower layer.
+    # 攻击阶段优先执行全新严格扫描，避免旧缓存造成漏检；基础策略为三帧带名称采样，
+    # 重试由下层实现。
         our_followers = self.actions._refresh_our_followers(
             sort_desc=True,
             extra_shots=2,
@@ -21,7 +21,7 @@ class AttackPhase:
             allow_cached_fallback=False,
         )
 
-        # Only use cached followers as a last fallback when strict scan returns nothing.
+    # 严格扫描完全无结果时，才把缓存随从作为最后回退。
         if not our_followers:
             try:
                 fm = getattr(self.actions, "follower_manager", None)

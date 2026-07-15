@@ -1,7 +1,7 @@
-"""Effect spec helpers.
+"""效果规格辅助函数。
 
-Note: the actual implementation lives in `src.config.strategy_effects` so the UI
-can import it without pulling in heavy `src.game` modules.
+实际实现位于 ``src.config.strategy_effects``，使界面导入时不必连带加载重量级
+``src.game`` 模块。
 """
 
 from __future__ import annotations

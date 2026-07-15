@@ -76,15 +76,19 @@ DEFAULT_CONFIG = {
         "notification_enabled": True,
         "log_level": "INFO",
         "save_screenshots": False,
-        "debug_mode": False
+        "debug_mode": False,
+        "custom_background": {
+            "enabled": False,
+            "path": "",
+            "opacity": 22
+        }
     },
     "templates": {
         "threshold": 0.85,
         "pyramid_levels": 2,
         "edge_thresholds": [50, 200]
     },
-    # Strategy schema (effects are intentionally empty by default).
-    # Profile schema (deck/strategy can be composed in UI later).
+    # 策略结构默认不预填效果；档案结构预留给界面组合卡组与策略。
     "profiles": {
         "deck": {"name": "inline", "source": "config.json"},
         "strategy": {"name": "inline", "source": "config.json"},
@@ -98,14 +102,14 @@ DEFAULT_CONFIG = {
 # 拖动总时间区间（秒），全局统一，(最小值, 最大值)
 HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT = (0.12, 0.16)
 
-# Optional runtime config injection (avoids repeated disk reads).
+# 可选的运行时配置注入，用于避免重复读取磁盘。
 _runtime_config = None
 _cached_drag_range = None
 _warned_battle_fallback = False
 
 
 def set_runtime_config(config):
-    """Inject a runtime config dict (e.g. ConfigManager.config)."""
+    """注入运行时配置字典，例如 ``ConfigManager.config``。"""
     global _runtime_config
     _runtime_config = config
 
@@ -128,11 +132,11 @@ def _extract_drag_range(config):
     return None
 
 def get_human_like_drag_duration_range():
-    # Prefer in-memory config if provided.
+    # 已注入配置时优先使用内存数据。
     if isinstance(_runtime_config, dict):
         return _extract_drag_range(_runtime_config) or HUMAN_LIKE_DRAG_DURATION_RANGE_DEFAULT
 
-    # In battle hot paths, do not read from disk.
+    # 对战热路径中禁止回退到磁盘读取。
     global _warned_battle_fallback
     if is_in_battle():
         if not _warned_battle_fallback:

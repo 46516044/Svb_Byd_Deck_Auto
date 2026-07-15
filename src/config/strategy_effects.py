@@ -1,7 +1,6 @@
-"""Strategy effects schema helpers.
+"""策略效果结构辅助函数。
 
-Important: this module must stay lightweight because UI imports it.
-It should not import cv/u2/game modules.
+界面层会导入本模块，因此必须保持轻量，不应引入 cv、u2 或 game 模块。
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ def _safe_int(v: Any, default: int = 0) -> int:
 
 
 def convert_legacy_target_type_to_ops(target_type: Any) -> List[Dict[str, Any]]:
-    """Convert legacy ``target_type`` string to canonical Step3A ops."""
+    """将旧 ``target_type`` 字符串转换为规范的 Step3A 操作。"""
 
     tt = str(target_type or "")
     if not tt:
@@ -117,7 +116,7 @@ def convert_legacy_target_type_to_ops(target_type: Any) -> List[Dict[str, Any]]:
 
 
 def convert_legacy_action_to_ops(action: Any) -> List[Dict[str, Any]]:
-    """Convert legacy ``action`` string to canonical Step3A ops."""
+    """将旧 ``action`` 字符串转换为规范的 Step3A 操作。"""
 
     act = str(action or "")
     if not act:
@@ -154,7 +153,7 @@ def convert_legacy_action_to_ops(action: Any) -> List[Dict[str, Any]]:
         ]
 
     if act == "attack_two_enemy_followers_hp_highest":
-        # Preserve legacy runtime behavior: this action historically clicked 1 target.
+        # 保留旧运行行为：该动作历史上只点击一个目标。
         return [
             {
                 "op": "select_targets",
@@ -357,10 +356,8 @@ def get_card_effect_steps(
     if not raw:
         return []
 
-    # Enhance key behavior:
-    # - inherit base trigger effects
-    # - if enhance defines the same effect kind, enhance overrides that effect
-    # - different effects are merged (base first, enhance appended)
+    # 爆能键会继承基础触发效果；若爆能定义了同类效果则覆盖基础效果，
+    # 不同类别则按“基础在前、爆能追加”的顺序合并。
     if "@" in raw:
         base_raw, enhance_cost = split_enhance_key(raw)
         base_name = _base_name_no_suffix(str(base_raw or ""))
@@ -375,7 +372,7 @@ def get_card_effect_steps(
             base_key_candidates.append(base_name)
         base_key_candidates.extend(_effect_key_candidates(str(base_raw or "")))
 
-        # de-dup while preserving order
+    # 保序去重。
         def _dedup(seq: Sequence[str]) -> List[str]:
             seen = set()
             out: List[str] = []
@@ -416,16 +413,11 @@ def get_card_effect_steps(
 
 
 def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
-    """Normalize legacy Step2B steps to Step3A OperationSpec dicts.
+    """将旧 Step2B 步骤规范化为 Step3A ``OperationSpec`` 字典。
 
-    Supported legacy keys:
-    - {"select_option": 1/2/3} -> {"op": "select_option", "index": 1/2/3}
-    - {"target_type": "..."} -> canonical ops (select_targets / select_option_by_our_followers)
-    - {"action": "..."} -> canonical ops (select_targets)
-
-    Legacy op wrappers are also canonicalized:
-    - {"op":"legacy_target_type", ...}
-    - {"op":"legacy_action", ...}
+    支持把 ``select_option``、``target_type`` 和 ``action`` 等旧键转换为
+    ``select_option``、``select_targets``、``select_option_by_our_followers``
+    等规范操作；``legacy_target_type`` 与 ``legacy_action`` 包装形式也会一并转换。
     """
 
     def _norm_select_option(v: Any) -> int | None:
@@ -573,7 +565,7 @@ def card_effect_has_op(
     trigger: str,
     op_id: str,
 ) -> bool:
-    """Return whether a card trigger contains a normalized operation."""
+    """判断卡牌触发器是否包含指定的规范操作。"""
 
     oid = str(op_id or "")
     if not oid:
@@ -585,11 +577,11 @@ def card_effect_has_op(
 
 
 def parse_select_option(steps: Sequence[Any]) -> Optional[int]:
-    """Return 1/2/3 if any step requests option selection."""
+    """若任一步骤请求选择选项，则返回 1、2 或 3。"""
 
     for step in steps:
         if not isinstance(step, dict) or "select_option" not in step:
-            # Step3A op schema
+    # Step3A 操作结构。
             if not isinstance(step, dict) or str(step.get("op") or "") != "select_option":
                 continue
             v = step.get("index")

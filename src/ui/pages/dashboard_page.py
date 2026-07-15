@@ -1,10 +1,10 @@
-"""Dashboard page for device, run controls, deck summary, and live logs."""
+"""展示设备、运行控制、卡组摘要和实时日志的仪表盘。"""
 
 from __future__ import annotations
 
 from typing import Any, Dict
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -20,6 +20,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from src.ui.deck_io import MAX_DECK_SIZE
 
 
 def format_duration(seconds: int) -> str:
@@ -54,11 +56,15 @@ class MetricCard(QFrame):
 
 
 class CostCurveWidget(QWidget):
+    DISPLAY_BUCKETS = tuple(range(1, 9))
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._costs: Dict[int, int] = {}
-        self.setMinimumHeight(100)
+        self.setFixedHeight(124)
+        self.setMinimumWidth(260)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setToolTip("费用 8 及以上合并为 8+；0 费卡会在总数区域单独标明")
 
     def set_costs(self, costs: Dict[Any, Any]) -> None:
         normalized: Dict[int, int] = {}
@@ -68,37 +74,156 @@ class CostCurveWidget(QWidget):
                 count = int(value)
             except Exception:
                 continue
-            bucket = 10 if cost >= 10 else max(0, cost)
-            normalized[bucket] = normalized.get(bucket, 0) + max(0, count)
+            if cost < 0 or count <= 0:
+                continue
+            bucket = 8 if cost >= 8 else cost
+            normalized[bucket] = normalized.get(bucket, 0) + count
         self._costs = normalized
         self.update()
 
-    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.rect().adjusted(4, 8, -4, -18)
-        buckets = list(range(0, 11))
-        max_count = max([self._costs.get(i, 0) for i in buckets] or [1])
-        gap = 4
-        width = max(4.0, (rect.width() - gap * (len(buckets) - 1)) / len(buckets))
+        bounds = QRectF(self.rect()).adjusted(3.0, 2.0, -3.0, -2.0)
+        summary_width = 74.0 if bounds.width() >= 320.0 else 64.0
+        summary_gap = 10.0
+        chart_width = max(160.0, bounds.width() - summary_width - summary_gap)
+        chart = QRectF(bounds.left(), bounds.top(), chart_width, bounds.height())
+        summary = QRectF(
+            chart.right() + summary_gap,
+            bounds.top(),
+            max(0.0, bounds.right() - chart.right() - summary_gap),
+            bounds.height(),
+        )
 
-        painter.setPen(QPen(QColor("#3a3a4a"), 1))
-        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        buckets = self.DISPLAY_BUCKETS
+        values = [self._costs.get(cost, 0) for cost in buckets]
+        max_count = max(values or [1]) or 1
+        slot_width = chart.width() / len(buckets)
+        count_height = 18.0
+        badge_size = min(23.0, max(17.0, slot_width - 7.0))
+        badge_top = chart.bottom() - badge_size - 2.0
+        track_top = chart.top() + count_height + 4.0
+        track_bottom = badge_top - 5.0
+        track_height = max(12.0, track_bottom - track_top)
+        track_width = min(15.0, max(8.0, slot_width * 0.38))
+
+        base_font = painter.font()
+        count_font = painter.font()
+        count_font.setPointSize(9)
+        count_font.setBold(True)
+        painter.setFont(count_font)
+
         for index, cost in enumerate(buckets):
             value = self._costs.get(cost, 0)
-            height = 0 if max_count <= 0 else (rect.height() * value / max_count)
-            x = rect.left() + index * (width + gap)
-            bar = rect.adjusted(0, 0, 0, 0)
-            bar.setLeft(int(x))
-            bar.setRight(int(x + width))
-            bar.setTop(int(rect.bottom() - height))
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#89b4fa" if value else "#343446"))
-            painter.drawRoundedRect(bar, 2, 2)
-            painter.setPen(QColor("#6c7086"))
-            label = "10+" if cost == 10 else str(cost)
-            painter.drawText(int(x), self.height() - 2, int(width), 14, Qt.AlignCenter, label)
+            center_x = chart.left() + slot_width * (index + 0.5)
+            count_rect = QRectF(
+                chart.left() + slot_width * index,
+                chart.top(),
+                slot_width,
+                count_height,
+            )
+            painter.setPen(QColor("#cdd6f4" if value else "#6c7086"))
+            painter.drawText(count_rect, int(Qt.AlignHCenter | Qt.AlignVCenter), str(value))
+
+            track = QRectF(
+                center_x - track_width / 2.0,
+                track_top,
+                track_width,
+                track_height,
+            )
+            painter.setPen(QPen(QColor("#39543a"), 1.0))
+            painter.setBrush(QColor("#263b2c"))
+            painter.drawRoundedRect(track, 1.5, 1.5)
+
+            if value > 0:
+                fill_height = max(3.0, track.height() * value / max_count)
+                fill = QRectF(
+                    track.left() + 1.0,
+                    track.bottom() - fill_height + 1.0,
+                    max(1.0, track.width() - 2.0),
+                    min(track.height() - 2.0, fill_height),
+                )
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor("#79b84a"))
+                painter.drawRoundedRect(fill, 1.0, 1.0)
+
+            badge = QRectF(
+                center_x - badge_size / 2.0,
+                badge_top,
+                badge_size,
+                badge_size,
+            )
+            painter.setPen(QPen(QColor("#8bc75b" if value else "#52664c"), 1.5))
+            painter.setBrush(QColor("#31552e" if value else "#29352b"))
+            painter.drawEllipse(badge)
+
+            badge_font = painter.font()
+            badge_font.setPointSize(8 if cost == 8 else 9)
+            badge_font.setBold(True)
+            painter.setFont(badge_font)
+            painter.setPen(QColor("#eff7e8" if value else "#9399b2"))
+            painter.drawText(
+                badge,
+                int(Qt.AlignCenter),
+                "8+" if cost == 8 else str(cost),
+            )
+            painter.setFont(count_font)
+
+        if summary.width() > 0:
+            separator_x = summary.left() - summary_gap / 2.0
+            painter.setPen(QPen(QColor("#3a3a4a"), 1.0))
+            painter.drawLine(
+                int(separator_x),
+                int(bounds.top() + 8.0),
+                int(separator_x),
+                int(bounds.bottom() - 8.0),
+            )
+
+            total = sum(self._costs.values())
+            zero_count = self._costs.get(0, 0)
+            label_font = painter.font()
+            label_font.setPointSize(8)
+            painter.setFont(label_font)
+            painter.setPen(QColor("#9399b2"))
+            painter.drawText(
+                QRectF(summary.left(), summary.top() + 5.0, summary.width(), 18.0),
+                int(Qt.AlignCenter),
+                "总计",
+            )
+
+            total_font = painter.font()
+            total_font.setPointSize(15)
+            total_font.setBold(True)
+            painter.setFont(total_font)
+            painter.setPen(QColor("#cdd6f4"))
+            painter.drawText(
+                QRectF(summary.left(), summary.top() + 25.0, summary.width(), 34.0),
+                int(Qt.AlignCenter),
+                f"{total}/{MAX_DECK_SIZE}",
+            )
+
+            painter.setFont(label_font)
+            painter.setPen(QColor("#9399b2"))
+            painter.drawText(
+                QRectF(summary.left(), summary.top() + 60.0, summary.width(), 17.0),
+                int(Qt.AlignCenter),
+                "张卡牌",
+            )
+            if zero_count:
+                zero_font = painter.font()
+                zero_font.setPointSize(8)
+                zero_font.setBold(True)
+                painter.setFont(zero_font)
+                painter.setPen(QColor("#f9e2af"))
+                painter.drawText(
+                    QRectF(summary.left(), summary.top() + 84.0, summary.width(), 19.0),
+                    int(Qt.AlignCenter),
+                    f"0费  {zero_count}",
+                )
+
+        painter.setFont(base_font)
 
 
 class DashboardPage(QWidget):
@@ -113,6 +238,7 @@ class DashboardPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._run_status = "disconnected"
+        self._device_connected = False
         self._build_ui()
         self.set_run_status("disconnected")
 
@@ -158,7 +284,7 @@ class DashboardPage(QWidget):
         metrics.setSpacing(14)
         self.battles_metric = MetricCard("本次对战次数", "0", "primary")
         self.runtime_metric = MetricCard("运行时长", "00:00:00", "success")
-        self.cards_metric = MetricCard("当前卡组模板", "0", "warning")
+        self.cards_metric = MetricCard("当前卡组卡牌", "0", "warning")
         self.status_metric = MetricCard("脚本状态", "未连接", "neutral")
         for card in (
             self.battles_metric,
@@ -204,6 +330,8 @@ class DashboardPage(QWidget):
         self.adb_input = QLineEdit("127.0.0.1:16384")
         self.server_combo = QComboBox()
         self.server_combo.addItems(["国服", "国际服"])
+        self.adb_input.textChanged.connect(self._refresh_control_states)
+        self.server_combo.currentTextChanged.connect(self._refresh_control_states)
         form.addWidget(QLabel("ADB 地址"), 0, 0)
         form.addWidget(self.adb_input, 0, 1)
         form.addWidget(QLabel("服务器"), 1, 0)
@@ -311,6 +439,7 @@ class DashboardPage(QWidget):
 
     def set_device_info(self, info: Dict[str, Any]) -> None:
         connected = bool(info.get("connected"))
+        self._device_connected = connected
         self.device_dot.setProperty("connected", connected)
         self.device_dot.style().unpolish(self.device_dot)
         self.device_dot.style().polish(self.device_dot)
@@ -328,6 +457,7 @@ class DashboardPage(QWidget):
         else:
             self.device_detail.setText(message or f"ADB: {serial}")
         self.screenshot_button.setEnabled(connected)
+        self._refresh_control_states()
 
     def set_run_status(self, status: str) -> None:
         self._run_status = str(status or "stopped")
@@ -342,18 +472,28 @@ class DashboardPage(QWidget):
             "error": "异常",
         }
         self.status_metric.set_value(labels.get(self._run_status, self._run_status))
-        connected = self._run_status in {"connected", "running", "paused", "stopping", "stopped"}
+        self._refresh_control_states()
+
+    def _refresh_control_states(self, *args) -> None:
+        del args
         running = self._run_status == "running"
         paused = self._run_status == "paused"
         active = running or paused or self._run_status == "stopping"
+        connecting = self._run_status == "connecting"
+        has_serial = bool(self.adb_input.text().strip())
         settings_enabled = self._run_status not in {
             "connecting",
             "running",
             "paused",
             "stopping",
         }
-        self.connect_button.setEnabled(not active and self._run_status != "connecting")
-        self.start_button.setEnabled(connected and not active)
+        self.connect_button.setEnabled(not active and not connecting and has_serial)
+        self.start_button.setEnabled(not active and not connecting and has_serial)
+        self.start_button.setToolTip(
+            ""
+            if self._device_connected
+            else "开始运行时会先连接并检查当前设备"
+        )
         self.pause_button.setEnabled(running)
         self.resume_button.setEnabled(paused)
         self.stop_button.setEnabled(running or paused)
@@ -376,12 +516,13 @@ class DashboardPage(QWidget):
     def set_active_deck(self, data: Dict[str, Any]) -> None:
         name = str(data.get("name") or "未命名卡组")
         count = max(0, int(data.get("count") or 0))
+        distinct_count = max(0, int(data.get("distinct_count") or count))
         applied = bool(data.get("applied", True))
         self.deck_name_label.setText(name)
         self.deck_count_label.setText(
-            f"已应用 {count} 张不同卡牌"
+            f"已应用 {count} / {MAX_DECK_SIZE} 张 · {distinct_count} 种"
             if applied
-            else f"工作区 {count} 张不同卡牌，尚未应用"
+            else f"工作区 {count} / {MAX_DECK_SIZE} 张 · {distinct_count} 种，尚未应用"
         )
         self.deck_state_label.setText("已应用" if applied else "待应用")
         self.deck_state_label.setProperty(
@@ -390,7 +531,7 @@ class DashboardPage(QWidget):
         self.deck_state_label.style().unpolish(self.deck_state_label)
         self.deck_state_label.style().polish(self.deck_state_label)
         self.cards_metric.set_value(
-            str(count), "已应用卡牌" if applied else "工作区待应用"
+            f"{count}/{MAX_DECK_SIZE}", "已应用卡牌" if applied else "工作区待应用"
         )
         self.cost_curve.set_costs(data.get("costs") or {})
 

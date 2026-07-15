@@ -1,7 +1,6 @@
-"""Deck store (UI-side).
+"""界面侧卡组仓储。
 
-Centralizes saved deck discovery and change notification so UI pages don't call
-each other (avoids refresh recursion / hidden coupling).
+集中处理已保存卡组的发现和变更通知，避免页面之间互相调用造成刷新递归或隐式耦合。
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 
 def list_saved_decks(decks_dir: str) -> List[Tuple[str, str]]:
-    """Return [(display_name, filename)] for saved deck json files."""
+    """返回已保存卡组 JSON 的 ``[(显示名, 文件名)]`` 列表。"""
 
     if not decks_dir:
         return []
@@ -38,7 +37,7 @@ def list_saved_decks(decks_dir: str) -> List[Tuple[str, str]]:
         except Exception:
             decks.append((filename[:-5], filename, 0))
 
-    # Stable ordering: newest first by timestamp, then name.
+    # 稳定排序：先按时间戳从新到旧，再按名称排序。
     decks.sort(key=lambda t: (-t[2], t[0]))
     return [(d, f) for d, f, _ in decks]
 

@@ -36,10 +36,10 @@ class CardPlaySpecialActions:
         center_x, center_y = card['center']
         target_x = center_x + 40
         card_name = card.get('name', '')
-        # Enhance variants can use a separate config key.
+        # 爆能变体可以使用独立配置键。
         cfg_key = card.get('_config_key') or card.get('config_key') or card_name
 
-        # Prefer config-driven effects (Step3A op schema; legacy steps will be normalized).
+        # 优先执行配置驱动的 Step3A 效果，旧步骤会在入口处规范化。
         steps = get_card_effect_steps(
             self.device_state.config, card_name=str(cfg_key), trigger="on_play"
         )
@@ -55,7 +55,7 @@ class CardPlaySpecialActions:
             if self._ops_require_pre_action_our_followers(ops):
                 pre_action_followers, pre_action_count = self._scan_pre_action_our_followers()
 
-            # Normal play drag, then run post-play ops.
+        # 先执行普通出牌拖拽，再运行出牌后的效果操作。
             self._default_card_play(center_x, center_y, target_x)
             time.sleep(0.2)
 
@@ -102,9 +102,7 @@ class CardPlaySpecialActions:
                 bonus = 0
             self._extra_cost_bonus = int(bonus)
 
-            # Unified failure policy for enemy_follower targeting:
-            # - no cost consumption
-            # - ignore this card for current round
+            # 敌方随从目标选择失败时统一按“不消耗费用、本回合忽略该卡”处理。
             fail_kinds = list(getattr(ctx, "select_targets_fail_kinds", []) or [])
             success_kinds = set(str(k) for k in list(getattr(ctx, "select_targets_success_kinds", []) or []))
             enemy_target_failed = any(
@@ -141,7 +139,7 @@ class CardPlaySpecialActions:
 
     @staticmethod
     def _ops_require_source_origin(ops) -> bool:
-        """Whether on_play ops need precise source follower position."""
+        """判断 ``on_play`` 操作是否需要精确的来源随从位置。"""
 
         for step in list(ops or []):
             if not isinstance(step, dict):
@@ -190,7 +188,7 @@ class CardPlaySpecialActions:
             return None, None
 
     def _tag_played_follower_origin(self, *, card_name: str, cfg_key: str):
-        """Try to tag the just-played follower with its cfg key."""
+        """尝试用配置键标记刚打出的随从。"""
 
         runtime = getattr(self.device_state, "battle_runtime_state", None)
         game_manager = getattr(self.device_state, "game_manager", None)

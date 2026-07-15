@@ -1,4 +1,4 @@
-"""Runtime board state for Step3B battle decisions."""
+"""Step3B 对战决策使用的运行时场面状态。"""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _parse_hp(v: Any) -> Optional[int]:
 
 
 class BattleRuntimeState:
-    """Tracks lightweight follower runtime states for target/settlement logic."""
+    """跟踪供目标选择与结算逻辑使用的轻量随从运行状态。"""
 
     def __init__(self, *, logger: Any = None):
         self.logger = logger
@@ -141,10 +141,7 @@ class BattleRuntimeState:
         card_name: str,
         cfg_key: str,
     ) -> Optional[Tuple[int, int]]:
-        """Mark the most likely newly played follower with its config key.
-
-        Returns follower position when a target was tagged.
-        """
+        """用配置键标记最可能刚打出的随从，成功时返回随从位置。"""
 
         cfg = str(cfg_key or "")
         if not cfg:
@@ -170,7 +167,7 @@ class BattleRuntimeState:
         if not candidates:
             return None
 
-        # Prefer rightmost, and prefer states without a specific source key yet.
+        # 优先选择最右侧且尚未记录明确来源键的状态。
         picked = sorted(
             candidates,
             key=lambda st: (
@@ -391,7 +388,7 @@ class BattleRuntimeState:
         *,
         round_index: Optional[int] = None,
     ) -> int:
-        """Return allowed attack count for the specified friendly follower in round."""
+        """返回指定我方随从在当前回合允许的攻击次数。"""
 
         st = self._find_state(self.ours, follower_pos)
         if st is None:
@@ -538,7 +535,7 @@ class BattleRuntimeState:
 
         norm_base = normalize_card_base_name(parsed_base)
         if str(side) != "ours":
-            # Enemy slot payload at item[3] is usually HP text, not reliable name.
+            # 敌方槽位 ``item[3]`` 通常是血量文本，不能作为可靠名称。
             norm_base = ""
 
         return {

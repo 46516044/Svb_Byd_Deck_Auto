@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_CARD_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 
-# Shared template cache (read-only) across instances/devices.
+# 多个实例与设备共用的只读模板缓存。
 _TEMPLATE_CACHE: Dict[Tuple[str, float, str], Dict[str, Dict[str, Any]]] = {}
 _TEMPLATE_CACHE_LOCK = threading.Lock()
 CardMatch = Dict[str, Any]
@@ -29,7 +29,7 @@ def _create_sift() -> Any:
 
 
 def _template_dir_signature(card_images_dir: str) -> str:
-    """Build a lightweight signature for cache invalidation."""
+    """构造用于缓存失效判断的轻量签名。"""
 
     try:
         if not os.path.isdir(card_images_dir):
@@ -52,10 +52,7 @@ def _template_dir_signature(card_images_dir: str) -> str:
 
 
 def _build_card_templates(*, card_images_dir: str, scale_factor: float) -> Dict[str, Dict[str, Any]]:
-    """Load card templates from disk and compute SIFT features.
-
-    Returned mapping is intended to be treated as read-only.
-    """
+    """从磁盘加载卡牌模板并计算 SIFT 特征；返回映射应按只读数据使用。"""
 
     templates: Dict[str, Dict[str, Any]] = {}
 
@@ -175,12 +172,12 @@ class SiftCardRecognition:
         """
         初始化SIFT卡牌识别器
         
-        Args:
+        参数：
             card_images_dir: 卡牌图片目录路径
         """
         self.card_images_dir = card_images_dir
-        # Backward compatible: prefer CWD-relative path if it exists, otherwise
-        # resolve relative to app root (source/PyInstaller).
+        # 为兼容旧运行方式，当前工作目录下的相对路径存在时优先使用；否则按源码或
+        # PyInstaller 的应用根目录解析。
         if (
             self.card_images_dir
             and not os.path.isabs(self.card_images_dir)
@@ -200,7 +197,7 @@ class SiftCardRecognition:
         self.min_matches = 4  # 最小匹配点数
         self.match_threshold = 0.01  # 匹配阈值
 
-        # Use a shared, read-only template cache.
+        # 使用跨实例共享的只读模板缓存。
         self.card_templates = _get_shared_card_templates(
             card_images_dir=self.card_images_dir,
             scale_factor=self.scale_factor,
@@ -222,7 +219,7 @@ class SiftCardRecognition:
             else:
                 image = np.array(screenshot)
                 image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            # Accept explicit hand_area; never mutate instance state.
+        # 接受显式 ``hand_area``，且不修改实例状态。
             area = self.hand_area
             if isinstance(hand_area, (list, tuple)) and len(hand_area) == 4:
                 try:
@@ -408,10 +405,10 @@ class SiftCardRecognition:
         """
         根据卡牌名称获取费用
         
-        Args:
+        参数：
             card_name: 卡牌名称
             
-        Returns:
+        返回：
             Optional[int]: 卡牌费用，如果未找到返回None
         """
         for template_name, template_info in self.card_templates.items():
@@ -423,7 +420,7 @@ class SiftCardRecognition:
         """
         获取所有卡牌名称
         
-        Returns:
+        返回：
             List[str]: 所有卡牌名称列表
         """
         return [template_info['name'] for template_info in self.card_templates.values()]
@@ -432,7 +429,7 @@ class SiftCardRecognition:
         """
         获取所有卡牌的费用映射
         
-        Returns:
+        返回：
             Dict[str, int]: 卡牌名称到费用的映射
         """
         return {template_info['name']: template_info['cost'] 

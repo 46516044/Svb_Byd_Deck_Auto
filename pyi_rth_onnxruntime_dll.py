@@ -1,12 +1,11 @@
-"""PyInstaller runtime hook for stable ONNX Runtime DLL loading on Windows.
+"""保证 Windows 下稳定加载 ONNX Runtime DLL 的 PyInstaller 运行时钩子。
 
-Reason:
-- Some machines have a different `onnxruntime.dll` in `%SystemRoot%\\System32`.
-- If that DLL is loaded before our bundled capi DLLs, importing
-  `onnxruntime_pybind11_state` may fail with DLL init errors.
+部分机器的 ``%SystemRoot%\\System32`` 中存在另一个 ``onnxruntime.dll``。
+如果系统版本先于随包发布的 capi DLL 被加载，导入
+``onnxruntime_pybind11_state`` 时可能出现 DLL 初始化错误。
 
-This hook ensures bundled `_internal/onnxruntime/capi` is searched first and
-preloads the intended `onnxruntime.dll`/`onnxruntime_providers_shared.dll`.
+本钩子会优先搜索随包发布的 ``_internal/onnxruntime/capi``，并预加载指定的
+``onnxruntime.dll`` 与 ``onnxruntime_providers_shared.dll``。
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ _DLL_DIR_HANDLES: List[object] = []
 
 
 def _load_win_dll_raw(full_path: str) -> None:
-    """Load DLL via WinAPI directly (avoid PyInstaller ctypes shim)."""
+    """直接通过 WinAPI 加载 DLL，避开 PyInstaller 的 ctypes 适配层。"""
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     load_library = kernel32.LoadLibraryW
@@ -157,8 +156,7 @@ def _main() -> None:
 
     _configure_windows_dll_search(search_dirs)
 
-    # Preload bundled ORT DLLs from capi dir (if present) so pybind binds to
-    # the packaged binaries instead of a global system copy.
+    # 预加载 capi 目录中的 ORT DLL，使 pybind 绑定随包二进制，而非系统全局副本。
     preload_msgs: List[str] = []
     for d in search_dirs:
         if d.lower().endswith(os.path.join("onnxruntime", "capi").lower()):

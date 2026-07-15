@@ -1,4 +1,4 @@
-"""Logging helpers shared by CLI/GUI and internal modules."""
+"""CLI、图形界面及内部模块共用的日志辅助函数。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 
 class QueueHandler(logging.Handler):
-    """A logging handler that forwards formatted messages into a queue."""
+    """将格式化日志转发到队列的日志处理器。"""
 
     def __init__(self, log_queue: "queue.Queue[str]"):
         super().__init__()
@@ -28,7 +28,7 @@ def setup_logging(
     *,
     log_file: str = "main_log.log",
 ) -> logging.Logger:
-    """Setup root logging once and return the root logger."""
+    """只初始化一次根日志配置，并返回根记录器。"""
 
     log_level = getattr(logging, config.get("ui", {}).get("log_level", "INFO").upper())
 

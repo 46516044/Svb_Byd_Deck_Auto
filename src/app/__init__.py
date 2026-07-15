@@ -1,1 +1,1 @@
-"""Application-level composition root."""
+"""应用级组合根。"""

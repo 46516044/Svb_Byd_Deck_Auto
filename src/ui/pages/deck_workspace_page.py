@@ -1,4 +1,4 @@
-"""Unified card library, deck presets, runtime application, and sharing UI."""
+"""统一卡牌库、卡组预设、运行时应用与分享界面。"""
 
 from __future__ import annotations
 
@@ -45,13 +45,17 @@ from src.ui.card_catalog import (
     resolve_card_entry,
 )
 from src.ui.deck_io import (
+    DECK_SCHEMA_VERSION,
+    MAX_CARD_COPIES,
+    MAX_DECK_SIZE,
     apply_strategy_config,
     build_card_source_index,
     build_card_variant_index,
     extract_deck_strategy_config,
     extract_strategy_config,
     filter_non_evo_cards,
-    normalize_deck_cards,
+    normalize_deck_card_records,
+    normalize_derived_card_records,
     resolve_runtime_card_paths,
     save_deck_snapshot,
 )
@@ -94,7 +98,7 @@ class CardLibraryList(QListWidget):
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
 
-    def startDrag(self, supported_actions) -> None:  # noqa: N802 - Qt API
+    def startDrag(self, supported_actions) -> None:  # noqa: N802 - Qt API 命名
         item = self.currentItem()
         if item is None:
             return
@@ -112,11 +116,11 @@ class CardLibraryList(QListWidget):
         drag.setPixmap(item.icon().pixmap(64, 88))
         drag.exec_(Qt.CopyAction)
 
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
         super().resizeEvent(event)
         self.viewport_resized.emit()
 
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
         super().showEvent(event)
         self.viewport_resized.emit()
 
@@ -130,19 +134,19 @@ class CurrentDeckList(QListWidget):
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setAlternatingRowColors(True)
 
-    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
         if event.mimeData().hasFormat(CARD_MIME):
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
-    def dragMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def dragMoveEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
         if event.mimeData().hasFormat(CARD_MIME):
             event.acceptProposedAction()
             return
         super().dragMoveEvent(event)
 
-    def dropEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
         if event.mimeData().hasFormat(CARD_MIME):
             key = bytes(event.mimeData().data(CARD_MIME)).decode("utf-8", errors="ignore")
             if key:
@@ -164,10 +168,12 @@ class DeckWorkspacePage(QWidget):
         self.catalog: List[CardEntry] = load_card_catalog(self.resource_root)
         self.entry_by_key = {entry.key: entry for entry in self.catalog}
         self.selected_entries: Dict[str, CardEntry] = {}
+        self.selected_counts: Dict[str, int] = {}
+        self.derived_entries: Dict[str, CardEntry] = {}
         self.strategy_config: Dict[str, Any] = {}
         self.workspace_deck_file: Optional[str] = None
         self._workspace_is_applied = False
-        # The priority/effects editors use this as the currently applied preset.
+        # 优先级与效果编辑器将其作为当前已应用预设。
         self.current_deck_file: Optional[str] = None
         self._category_filter = "全部"
         self._cost_filter = "全部"
@@ -196,7 +202,10 @@ class DeckWorkspacePage(QWidget):
 
     @property
     def selected_cards(self) -> List[str]:
-        return [entry.filename for entry in self.selected_entries.values()]
+        cards: List[str] = []
+        for key, entry in self.selected_entries.items():
+            cards.extend([entry.filename] * self.selected_counts.get(key, 1))
+        return cards
 
     @selected_cards.setter
     def selected_cards(self, values: Iterable[str]) -> None:
@@ -322,11 +331,11 @@ class DeckWorkspacePage(QWidget):
 
         footer = QHBoxLayout()
         footer.setContentsMargins(12, 8, 12, 10)
-        hint = QLabel("双击或拖拽卡牌到右侧，也可使用添加按钮")
+        hint = QLabel("双击或拖拽卡牌到右侧当前标签，也可使用添加按钮")
         hint.setObjectName("SubtleText")
         footer.addWidget(hint)
         footer.addStretch()
-        add_button = QPushButton("添加到当前卡组")
+        add_button = QPushButton("添加到当前标签")
         add_button.setObjectName("PrimaryButton")
         add_button.clicked.connect(self.add_selected_library_card)
         footer.addWidget(add_button)
@@ -343,8 +352,31 @@ class DeckWorkspacePage(QWidget):
         self.deck_name_input.setObjectName("DeckNameInput")
         self.deck_name_input.textChanged.connect(lambda _text: self._emit_active_deck())
         layout.addWidget(self.deck_name_input)
+        self.deck_list_tabs = QTabWidget()
+        self.deck_list_tabs.setDocumentMode(True)
+        self.deck_list_tabs.addTab(self._build_main_deck_tab(), "主卡组")
+        self.deck_list_tabs.addTab(self._build_derived_deck_tab(), "衍生物")
+        layout.addWidget(self.deck_list_tabs, 1)
+
+        action_row = QHBoxLayout()
+        save_button = QPushButton("保存卡组")
+        save_button.setObjectName("SecondaryButton")
+        save_button.clicked.connect(self.save_current_deck)
+        apply_button = QPushButton("应用当前卡组")
+        apply_button.setObjectName("PrimaryButton")
+        apply_button.clicked.connect(self.apply_current_deck)
+        action_row.addWidget(save_button)
+        action_row.addWidget(apply_button)
+        layout.addLayout(action_row)
+        return panel
+
+    def _build_main_deck_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(10)
         count_row = QHBoxLayout()
-        self.selected_count_label = QLabel("已选择 0 张不同卡牌")
+        self.selected_count_label = QLabel(f"已选择 0 / {MAX_DECK_SIZE} 张 · 0 种")
         self.selected_count_label.setObjectName("SubtleText")
         count_row.addWidget(self.selected_count_label)
         count_row.addStretch()
@@ -358,22 +390,60 @@ class DeckWorkspacePage(QWidget):
         self.current_list.card_dropped.connect(self.add_card_by_key)
         self.current_list.itemDoubleClicked.connect(lambda _item: self.remove_selected_current_card())
         layout.addWidget(self.current_list, 1)
-        remove_button = QPushButton("移除选中卡牌")
+
+        quantity_row = QHBoxLayout()
+        decrease_button = QPushButton("−")
+        decrease_button.setObjectName("SecondaryButton")
+        decrease_button.setFixedWidth(38)
+        decrease_button.setToolTip("减少一张选中卡牌")
+        decrease_button.clicked.connect(self.remove_selected_current_card)
+        increase_button = QPushButton("+")
+        increase_button.setObjectName("SecondaryButton")
+        increase_button.setFixedWidth(38)
+        increase_button.setToolTip("增加一张选中卡牌")
+        increase_button.clicked.connect(self.increase_selected_current_card)
+        remove_button = QPushButton("移除全部")
         remove_button.setObjectName("SecondaryButton")
-        remove_button.clicked.connect(self.remove_selected_current_card)
-        layout.addWidget(remove_button)
+        remove_button.setToolTip("从卡组中移除选中的全部同名卡牌")
+        remove_button.clicked.connect(self.remove_all_selected_current_card)
+        quantity_row.addWidget(decrease_button)
+        quantity_row.addWidget(increase_button)
+        quantity_row.addWidget(remove_button)
+        quantity_row.addStretch()
+        layout.addLayout(quantity_row)
+        return tab
+
+    def _build_derived_deck_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(10)
+        count_row = QHBoxLayout()
+        self.derived_count_label = QLabel("已选择 0 种 · 无上限 · 不计入费用分布")
+        self.derived_count_label.setObjectName("SubtleText")
+        count_row.addWidget(self.derived_count_label)
+        count_row.addStretch()
+        clear_button = QPushButton("清空")
+        clear_button.setObjectName("DangerGhostButton")
+        clear_button.clicked.connect(self.clear_derived_cards)
+        count_row.addWidget(clear_button)
+        layout.addLayout(count_row)
+
+        self.derived_list = CurrentDeckList()
+        self.derived_list.card_dropped.connect(self.add_derived_card_by_key)
+        self.derived_list.itemDoubleClicked.connect(
+            lambda _item: self.remove_selected_derived_card()
+        )
+        layout.addWidget(self.derived_list, 1)
 
         action_row = QHBoxLayout()
-        save_button = QPushButton("保存卡组")
-        save_button.setObjectName("SecondaryButton")
-        save_button.clicked.connect(self.save_current_deck)
-        apply_button = QPushButton("应用当前卡组")
-        apply_button.setObjectName("PrimaryButton")
-        apply_button.clicked.connect(self.apply_current_deck)
-        action_row.addWidget(save_button)
-        action_row.addWidget(apply_button)
+        remove_button = QPushButton("移除")
+        remove_button.setObjectName("SecondaryButton")
+        remove_button.clicked.connect(self.remove_selected_derived_card)
+        action_row.addWidget(remove_button)
+        action_row.addStretch()
         layout.addLayout(action_row)
-        return panel
+        return tab
 
     def _build_share_tab(self) -> QWidget:
         page = QWidget()
@@ -388,7 +458,7 @@ class DeckWorkspacePage(QWidget):
         title = QLabel("导出当前工作区")
         title.setObjectName("SectionTitle")
         generate.addWidget(title)
-        description = QLabel("分享码包含当前选中的卡牌模板以及对应策略配置。")
+        description = QLabel("分享码包含主卡组、衍生物以及对应策略配置。")
         description.setObjectName("SubtleText")
         generate.addWidget(description)
         self.share_output = QTextEdit()
@@ -483,11 +553,20 @@ class DeckWorkspacePage(QWidget):
         self.entry_by_key = {entry.key: entry for entry in self.catalog}
         self._library_populated = False
         previous = list(self.selected_entries.values())
+        previous_counts = dict(self.selected_counts)
+        previous_derived = list(self.derived_entries.values())
         self.selected_entries = {}
+        self.selected_counts = {}
+        self.derived_entries = {}
         for old in previous:
             entry = resolve_card_entry(old.key, self.catalog, self.resource_root)
             if entry is not None:
                 self.selected_entries[entry.key] = entry
+                self.selected_counts[entry.key] = previous_counts.get(old.key, 1)
+        for old in previous_derived:
+            entry = resolve_card_entry(old.key, self.catalog, self.resource_root)
+            if entry is not None:
+                self.derived_entries[entry.key] = entry
         self._populate_library()
         self._refresh_current_list()
         self._log(f"[卡组] 卡牌资源库已刷新，共 {len(self.catalog)} 张")
@@ -536,22 +615,83 @@ class DeckWorkspacePage(QWidget):
             self.add_card_by_key(str(item.data(Qt.UserRole) or ""))
 
     def add_card_by_key(self, key: str) -> None:
-        entry = self.entry_by_key.get(str(key or ""))
-        if entry is None or entry.key in self.selected_entries:
+        if self.deck_list_tabs.currentIndex() == 1:
+            self.add_derived_card_by_key(key)
             return
-        if len(self.selected_entries) >= 100:
-            QMessageBox.warning(self, "达到上限", "当前最多选择 100 张不同卡牌。")
+        entry = self.entry_by_key.get(str(key or ""))
+        if entry is None:
+            return
+        current_count = self.selected_counts.get(entry.key, 0)
+        if self._card_copy_group_count(entry.card_id) >= MAX_CARD_COPIES:
+            QMessageBox.warning(
+                self,
+                "达到单卡上限",
+                f"每张卡牌最多加入 {MAX_CARD_COPIES} 张。",
+            )
+            return
+        if self._selected_total_count() >= MAX_DECK_SIZE:
+            QMessageBox.warning(
+                self,
+                "达到卡组上限",
+                f"卡组最多包含 {MAX_DECK_SIZE} 张卡牌。",
+            )
             return
         self.selected_entries[entry.key] = entry
+        self.selected_counts[entry.key] = current_count + 1
         self._workspace_is_applied = False
         self._refresh_current_list()
+
+    def add_derived_card_by_key(self, key: str) -> None:
+        """向衍生物区添加唯一卡牌；重复添加保持一条记录。"""
+
+        entry = self.entry_by_key.get(str(key or ""))
+        if entry is None or entry.key in self.derived_entries:
+            return
+        self.derived_entries[entry.key] = entry
+        self._workspace_is_applied = False
+        self._refresh_current_list()
+
+    def increase_selected_current_card(self) -> None:
+        item = self.current_list.currentItem()
+        if item is not None:
+            self.add_card_by_key(str(item.data(Qt.UserRole) or ""))
 
     def remove_selected_current_card(self) -> None:
         item = self.current_list.currentItem()
         if item is None:
             return
         key = str(item.data(Qt.UserRole) or "")
+        count = self.selected_counts.get(key, 0)
+        if count > 1:
+            self.selected_counts[key] = count - 1
+        else:
+            self.selected_entries.pop(key, None)
+            self.selected_counts.pop(key, None)
+        self._workspace_is_applied = False
+        self._refresh_current_list()
+
+    def remove_all_selected_current_card(self) -> None:
+        item = self.current_list.currentItem()
+        if item is None:
+            return
+        key = str(item.data(Qt.UserRole) or "")
         self.selected_entries.pop(key, None)
+        self.selected_counts.pop(key, None)
+        self._workspace_is_applied = False
+        self._refresh_current_list()
+
+    def remove_selected_derived_card(self) -> None:
+        item = self.derived_list.currentItem()
+        if item is None:
+            return
+        self.derived_entries.pop(str(item.data(Qt.UserRole) or ""), None)
+        self._workspace_is_applied = False
+        self._refresh_current_list()
+
+    def clear_derived_cards(self) -> None:
+        if not self.derived_entries:
+            return
+        self.derived_entries.clear()
         self._workspace_is_applied = False
         self._refresh_current_list()
 
@@ -559,37 +699,154 @@ class DeckWorkspacePage(QWidget):
         if not self.selected_entries:
             return
         self.selected_entries.clear()
+        self.selected_counts.clear()
         self.strategy_config = {}
         self.workspace_deck_file = None
         self._workspace_is_applied = False
         self._refresh_current_list()
 
-    def _set_selected_entries(self, entries: Iterable[CardEntry]) -> None:
+    def _set_selected_entries(
+        self,
+        entries: Iterable[CardEntry],
+        counts: Optional[Dict[str, int]] = None,
+    ) -> None:
         self.selected_entries = {}
+        self.selected_counts = {}
         for entry in entries:
-            if isinstance(entry, CardEntry):
-                self.selected_entries.setdefault(entry.key, entry)
+            if not isinstance(entry, CardEntry):
+                continue
+            if counts is None:
+                requested = self.selected_counts.get(entry.key, 0) + 1
+            else:
+                if entry.key in self.selected_entries:
+                    continue
+                try:
+                    requested = int(counts.get(entry.key, 1))
+                except (TypeError, ValueError):
+                    requested = 1
+            remaining = MAX_DECK_SIZE - self._selected_total_count()
+            existing_count = self.selected_counts.get(entry.key, 0)
+            other_art_count = self._card_copy_group_count(entry.card_id) - existing_count
+            group_remaining = MAX_CARD_COPIES - max(0, other_art_count)
+            # 替换已有数量时，先把当前条目的旧数量还给总卡组余量。
+            deck_remaining = remaining + existing_count
+            accepted = min(
+                MAX_CARD_COPIES,
+                max(0, requested),
+                group_remaining,
+                deck_remaining,
+            )
+            if accepted <= 0:
+                continue
+            self.selected_entries[entry.key] = entry
+            self.selected_counts[entry.key] = accepted
         self._refresh_current_list()
 
+    def _set_derived_entries(self, entries: Iterable[CardEntry]) -> None:
+        self.derived_entries = {
+            entry.key: entry
+            for entry in entries
+            if isinstance(entry, CardEntry)
+        }
+        self._refresh_current_list()
+
+    def _selected_total_count(self) -> int:
+        return sum(max(0, int(count or 0)) for count in self.selected_counts.values())
+
+    def _card_copy_group_count(self, card_id: str) -> int:
+        base_id = str(card_id or "").split("@", 1)[0]
+        return sum(
+            self.selected_counts.get(key, 1)
+            for key, entry in self.selected_entries.items()
+            if entry.card_id.split("@", 1)[0] == base_id
+        )
+
+    def _deck_card_records(self) -> List[Dict[str, Any]]:
+        entries = sorted(
+            self.selected_entries.values(),
+            key=lambda card: (card.cost, card.category, card.name.casefold(), card.card_id),
+        )
+        return [
+            {
+                "card_id": entry.card_id,
+                "count": self.selected_counts.get(entry.key, 1),
+            }
+            for entry in entries
+        ]
+
+    def _derived_card_records(self) -> List[Dict[str, str]]:
+        entries = sorted(
+            self.derived_entries.values(),
+            key=lambda card: (card.cost, card.category, card.name.casefold(), card.card_id),
+        )
+        return [{"card_id": entry.card_id} for entry in entries]
+
     def _refresh_current_list(self) -> None:
+        current_item = self.current_list.currentItem()
+        current_key = (
+            str(current_item.data(Qt.UserRole) or "")
+            if current_item is not None
+            else ""
+        )
         self.current_list.clear()
         for entry in sorted(
             self.selected_entries.values(),
             key=lambda card: (card.cost, card.category, card.name.casefold(), card.card_id),
         ):
-            item = QListWidgetItem(QIcon(entry.source_path), f"{entry.cost:>2}   {entry.name}  ·  {entry.category}")
+            count = self.selected_counts.get(entry.key, 1)
+            item = QListWidgetItem(
+                QIcon(entry.source_path),
+                f"{entry.cost:>2}   {entry.name}  ·  {entry.category}    ×{count}",
+            )
             item.setData(Qt.UserRole, entry.key)
-            item.setToolTip(entry.relative_path)
+            item.setData(Qt.UserRole + 1, count)
+            item.setToolTip(
+                f"{entry.name}\n卡牌 ID: {entry.card_id}\n数量: {count}\n{entry.relative_path}"
+            )
             self.current_list.addItem(item)
-        self.selected_count_label.setText(f"已选择 {len(self.selected_entries)} 张不同卡牌")
+            if entry.key == current_key:
+                self.current_list.setCurrentItem(item)
+        derived_item = self.derived_list.currentItem()
+        derived_key = (
+            str(derived_item.data(Qt.UserRole) or "")
+            if derived_item is not None
+            else ""
+        )
+        self.derived_list.clear()
+        for entry in sorted(
+            self.derived_entries.values(),
+            key=lambda card: (card.cost, card.category, card.name.casefold(), card.card_id),
+        ):
+            item = QListWidgetItem(
+                QIcon(entry.source_path),
+                f"{entry.cost:>2}   {entry.name}  ·  {entry.category}",
+            )
+            item.setData(Qt.UserRole, entry.key)
+            item.setToolTip(
+                f"{entry.name}\n卡牌 ID: {entry.card_id}\n衍生物模板\n{entry.relative_path}"
+            )
+            self.derived_list.addItem(item)
+            if entry.key == derived_key:
+                self.derived_list.setCurrentItem(item)
+        total = self._selected_total_count()
+        self.selected_count_label.setText(
+            f"已选择 {total} / {MAX_DECK_SIZE} 张 · {len(self.selected_entries)} 种"
+        )
+        self.derived_count_label.setText(
+            f"已选择 {len(self.derived_entries)} 种 · 无上限 · 不计入费用分布"
+        )
         self._emit_active_deck()
         self.data_changed.emit()
 
     def _active_deck_payload(self) -> Dict[str, Any]:
-        costs = Counter(entry.cost for entry in self.selected_entries.values())
+        costs = Counter()
+        for key, entry in self.selected_entries.items():
+            costs[entry.cost] += self.selected_counts.get(key, 1)
         return {
             "name": self.deck_name_input.text().strip() or "未命名卡组",
-            "count": len(self.selected_entries),
+            "count": self._selected_total_count(),
+            "distinct_count": len(self.selected_entries),
+            "derived_count": len(self.derived_entries),
             "costs": dict(costs),
             "file": self.workspace_deck_file,
             "applied": self._workspace_is_applied,
@@ -652,7 +909,8 @@ class DeckWorkspacePage(QWidget):
 
             path = save_deck_snapshot(
                 deck_name=name,
-                cards=[entry.filename for entry in self.selected_entries.values()],
+                cards=self._deck_card_records(),
+                derived_cards=self._derived_card_records(),
                 decks_dir=os.path.join(get_app_root(), "saved_decks"),
                 config_path=get_config_path(),
                 strategy_config=strategy_config,
@@ -686,22 +944,23 @@ class DeckWorkspacePage(QWidget):
         try:
             with open(path, "r", encoding="utf-8") as stream:
                 data = json.load(stream)
-            entries: List[CardEntry] = []
-            missing: List[str] = []
-            for reference in filter_non_evo_cards(list(data.get("cards") or [])):
-                entry = resolve_card_entry(reference, self.catalog, self.resource_root)
-                if entry is None:
-                    missing.append(str(reference))
-                else:
-                    entries.append(entry)
+            entries, counts, missing = self._entries_from_references(
+                data.get("cards") or []
+            )
+            derived_entries, missing_derived = self._derived_entries_from_references(
+                data.get("derived_cards") or []
+            )
             self.workspace_deck_file = os.path.basename(filename)
             self.strategy_config = extract_deck_strategy_config(data)
             self._workspace_is_applied = False
             self.deck_name_input.setText(str(data.get("name") or os.path.splitext(filename)[0]))
-            self._set_selected_entries(entries)
+            self._set_selected_entries(entries, counts)
+            self._set_derived_entries(derived_entries)
             self._log(f"[卡组] 已载入卡组 '{self.deck_name_input.text()}'")
             if missing:
                 self._log(f"[卡组] {len(missing)} 张卡牌在资源库中未找到")
+            if missing_derived:
+                self._log(f"[卡组] {len(missing_derived)} 个衍生物在资源库中未找到")
         except Exception as exc:
             QMessageBox.warning(self, "加载失败", str(exc))
             self._log(f"[卡组] 加载失败: {exc}")
@@ -754,13 +1013,24 @@ class DeckWorkspacePage(QWidget):
                 self.strategy_config = self._current_config_strategy(
                     require_valid=True
                 )
-            copied, missing = self._apply_entries(self.selected_entries.values(), self.strategy_config)
+            applied_entries = {
+                entry.key: entry
+                for entry in (
+                    *self.selected_entries.values(),
+                    *self.derived_entries.values(),
+                )
+            }
+            copied, missing = self._apply_entries(
+                applied_entries.values(), self.strategy_config
+            )
             self.current_deck_file = self.workspace_deck_file
             self._workspace_is_applied = True
             self._notify_related_pages()
             self._emit_active_deck()
             self._log(
-                f"[卡组] 已应用 {len(self.selected_entries)} 张卡牌模板，复制 {copied} 个运行模板"
+                f"[卡组] 已应用 {self._selected_total_count()} 张卡牌、"
+                f"{len(self.selected_entries)} 种主卡、{len(self.derived_entries)} 种衍生物，"
+                f"复制 {copied} 个运行模板"
             )
             if missing:
                 self._log(f"[卡组] 未找到 {len(missing)} 张卡牌: {', '.join(missing[:5])}")
@@ -883,6 +1153,7 @@ class DeckWorkspacePage(QWidget):
             self.strategy_config = self._current_config_strategy([])
             self._workspace_is_applied = True
             self._set_selected_entries([])
+            self._set_derived_entries([])
             return
         entries: List[CardEntry] = []
         for filename in filter_non_evo_cards(os.listdir(card_dir)):
@@ -893,6 +1164,7 @@ class DeckWorkspacePage(QWidget):
         self.strategy_config = self._current_config_strategy(entries)
         self._workspace_is_applied = True
         self._set_selected_entries(entries)
+        self._set_derived_entries([])
 
     def refresh_preview(self) -> None:
         self.load_deck()
@@ -910,10 +1182,9 @@ class DeckWorkspacePage(QWidget):
         elif not self.strategy_config:
             self.strategy_config = self._current_config_strategy()
         data = {
-            "version": 3,
-            "cards": normalize_deck_cards(
-                [entry.filename for entry in self.selected_entries.values()]
-            ),
+            "version": DECK_SCHEMA_VERSION,
+            "cards": self._deck_card_records(),
+            "derived_cards": self._derived_card_records(),
             "strategy_config": dict(self.strategy_config or {}),
             "timestamp": int(time.time()),
         }
@@ -942,9 +1213,14 @@ class DeckWorkspacePage(QWidget):
             compact = re.sub(r"\s+", "", text)
             compressed = base64.b64decode(compact.encode("ascii"), validate=True)
             data = json.loads(zlib.decompress(compressed).decode("utf-8"))
-            if int(data.get("version", 0)) not in {1, 2, 3}:
+            if int(data.get("version", 0)) not in range(1, DECK_SCHEMA_VERSION + 1):
                 raise ValueError("不支持的分享码版本")
-            entries = self._entries_from_references(data.get("cards") or [])
+            entries, counts, _missing = self._entries_from_references(
+                data.get("cards") or []
+            )
+            derived_entries, _missing_derived = self._derived_entries_from_references(
+                data.get("derived_cards") or []
+            )
             strategy_config = data.get("strategy_config")
             if not isinstance(strategy_config, dict) and isinstance(data.get("config"), dict):
                 strategy_config = extract_strategy_config(
@@ -954,6 +1230,8 @@ class DeckWorkspacePage(QWidget):
             self.strategy_config = strategy_config if isinstance(strategy_config, dict) else {}
         except Exception:
             entries = self._entries_from_short_code(text)
+            counts = {entry.key: 1 for entry in entries}
+            derived_entries = []
             self.strategy_config = {}
         if not entries:
             QMessageBox.warning(self, "解析失败", "分享码中没有可用卡牌。")
@@ -961,17 +1239,68 @@ class DeckWorkspacePage(QWidget):
         self.workspace_deck_file = None
         self._workspace_is_applied = False
         self.deck_name_input.setText(f"分享卡组_{time.strftime('%Y%m%d_%H%M%S')}")
-        self._set_selected_entries(entries)
+        self._set_selected_entries(entries, counts)
+        self._set_derived_entries(derived_entries)
         if self.apply_current_deck():
             self.tabs.setCurrentIndex(0)
 
-    def _entries_from_references(self, references: Iterable[str]) -> List[CardEntry]:
+    def _entries_from_references(
+        self,
+        references: Iterable[Any],
+    ) -> tuple[List[CardEntry], Dict[str, int], List[str]]:
         result: List[CardEntry] = []
-        for reference in filter_non_evo_cards(list(references or [])):
+        counts: Dict[str, int] = {}
+        missing: List[str] = []
+        total = 0
+        copy_groups: Dict[str, int] = {}
+        for record in normalize_deck_card_records(references):
+            reference = str(record.get("card_id") or "")
+            count = int(record.get("count") or 0)
+            if count > MAX_CARD_COPIES:
+                raise ValueError(
+                    f"卡牌 {reference} 数量为 {count}，单卡最多 {MAX_CARD_COPIES} 张"
+                )
+            if total + count > MAX_DECK_SIZE:
+                raise ValueError(f"卡组超过 {MAX_DECK_SIZE} 张上限")
+            total += count
             entry = resolve_card_entry(reference, self.catalog, self.resource_root)
-            if entry is not None:
+            if entry is None:
+                missing.append(reference)
+                continue
+            base_id = entry.card_id.split("@", 1)[0]
+            copy_groups[base_id] = copy_groups.get(base_id, 0) + count
+            if copy_groups[base_id] > MAX_CARD_COPIES:
+                raise ValueError(
+                    f"卡牌 {base_id} 及其异画合计超过 {MAX_CARD_COPIES} 张上限"
+                )
+            if entry.key not in counts:
                 result.append(entry)
-        return result
+                counts[entry.key] = 0
+            counts[entry.key] += count
+            if counts[entry.key] > MAX_CARD_COPIES:
+                raise ValueError(
+                    f"卡牌 {entry.name} 数量超过 {MAX_CARD_COPIES} 张上限"
+                )
+        return result, counts, missing
+
+    def _derived_entries_from_references(
+        self,
+        references: Iterable[Any],
+    ) -> tuple[List[CardEntry], List[str]]:
+        result: List[CardEntry] = []
+        missing: List[str] = []
+        seen = set()
+        for record in normalize_derived_card_records(references):
+            reference = str(record.get("card_id") or "")
+            entry = resolve_card_entry(reference, self.catalog, self.resource_root)
+            if entry is None:
+                missing.append(reference)
+                continue
+            if entry.key in seen:
+                continue
+            seen.add(entry.key)
+            result.append(entry)
+        return result, missing
 
     def _entries_from_short_code(self, text: str) -> List[CardEntry]:
         parts = text.split(".")

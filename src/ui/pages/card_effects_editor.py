@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Card effects editor (Step3A 2nd-level UI).
+"""卡牌效果编辑器（Step3A 二级界面）。
 
-This dialog edits `strategy.effects` using the Step3A op schema.
-It only depends on lightweight config registries (no cv/u2/game imports).
+该对话框按 Step3A 操作结构编辑 ``strategy.effects``，仅依赖轻量配置注册表，
+不引入 cv、u2 或 game 模块。
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ from src.config.strategy_effects import (
 from src.utils.card_filename import normalize_card_base_name, split_enhance_key
 
 
-# PyQt5 stubs vary across environments; keep Qt attribute access flexible.
+# 不同环境的 PyQt5 类型桩存在差异，因此保持 Qt 属性访问方式兼容。
 Qt: Any = _Qt
 
 
@@ -617,7 +617,7 @@ class StepRow(QFrame):
         self.params_layout.setSpacing(8)
         layout.addWidget(self.params_container)
 
-        # Init selection
+        # 初始化操作选择。
         op_id = str(self.op_spec.get("op") or "")
         idx = self.op_combo.findData(op_id)
         if idx >= 0:
@@ -631,7 +631,7 @@ class StepRow(QFrame):
 
     def _on_op_changed(self) -> None:
         self.op_spec["op"] = str(self.op_combo.currentData() or "")
-        # Reset params to defaults when op changes.
+        # 操作类型变化时将参数重置为该操作的默认值。
         self.op_spec = {"op": self.op_spec["op"]}
         self._rebuild_params()
 
@@ -665,7 +665,7 @@ class StepRow(QFrame):
             if name:
                 self._param_widgets[name] = (spec, w)
 
-            # Load default / current
+        # 加载默认值或当前值。
             if name in self.op_spec:
                 _set_param_widget_value(spec, w, self.op_spec.get(name))
             elif "default" in spec:
@@ -788,7 +788,7 @@ class TriggerEditor(QWidget):
         op_id = str(step.get("op") or "")
         op_def = get_operation(op_id) if op_id else None
         if not op_id or not isinstance(op_def, dict):
-            # default to first op for this context
+            # 默认选择当前上下文允许的第一个操作。
             ops = get_operations(context_kind=self.context_kind)
             if ops:
                 step = {"op": str(ops[0].get("op_id") or "")}
@@ -830,7 +830,7 @@ class TriggerEditor(QWidget):
                     self.add_raw_step(step)
                 continue
 
-            # Legacy Step2B dict: expand to ops but preserve unknown keys.
+            # 将旧 Step2B 字典展开为操作，同时保留未知键，避免数据丢失。
             used_any = False
             if "select_option" in step:
                 opt = _norm_select_option(step.get("select_option"))
@@ -929,7 +929,7 @@ class CardEffectsDialog(QDialog):
             enhance_notice.setWordWrap(True)
             main.addWidget(enhance_notice)
 
-        # Trigger multi-select
+        # 触发器多选区。
         trigger_panel = QFrame()
         trigger_panel.setObjectName("SurfacePanel")
         trigger_panel.setProperty("card", True)
@@ -962,7 +962,7 @@ class CardEffectsDialog(QDialog):
         trig_bar.addStretch()
         main.addWidget(trigger_panel)
 
-        # Scroll content
+        # 可滚动编辑内容。
         scroll = QScrollArea()
         scroll.setObjectName("EffectsScrollArea")
         scroll.setFrameShape(QFrame.NoFrame)
@@ -975,7 +975,7 @@ class CardEffectsDialog(QDialog):
         scroll.setWidget(scroll_content)
         main.addWidget(scroll, 1)
 
-        # Build per-trigger editors
+        # 为每个触发器构建独立编辑器。
         for t in allowed:
             tid = str(t.get("id") or "")
             ck = str(t.get("context_kind") or "")
@@ -1060,8 +1060,7 @@ class CardEffectsDialog(QDialog):
         enabled = bool(cb.isChecked())
         group.setVisible(enabled)
 
-        # UX: when a trigger is enabled, prefill one default step so users don't
-        # have to manually click "添加步骤" every time.
+        # 启用触发器时预填一个默认步骤，避免用户每次都要手动点击“添加步骤”。
         if enabled:
             editor = self.trig_editors.get(trigger_id)
             if editor is not None and not getattr(editor, "rows", None):
@@ -1097,7 +1096,7 @@ class CardEffectsDialog(QDialog):
             if cb.isChecked():
                 editor = self.trig_editors.get(tid)
                 steps = editor.value() if editor is not None else []
-                # Clean empty
+        # 清理空触发器和空卡牌效果容器。
                 steps = [s for s in steps if isinstance(s, dict) and s]
                 if steps:
                     card_eff[tid] = steps
@@ -1145,7 +1144,7 @@ class CardEffectsDialog(QDialog):
             else:
                 return
 
-            # 获取当前选中的卡组文件（使用新的 current_deck_file 属性）
+        # 通过新的 ``current_deck_file`` 属性获取当前卡组文件。
             deck_file = getattr(card_select_page, "current_deck_file", None)
             if not deck_file:
                 return
@@ -1160,13 +1159,13 @@ class CardEffectsDialog(QDialog):
             with open(deck_path, "r", encoding="utf-8") as f:
                 deck_data = json.load(f)
 
-            # 更新 strategy_config
+        # 更新 ``strategy_config``。
             sc = deck_data.get("strategy_config")
             if not isinstance(sc, dict):
                 sc = {}
                 deck_data["strategy_config"] = sc
 
-            # 获取或创建 strategy.effects
+        # 获取或创建 ``strategy.effects``。
             strategy = sc.get("strategy")
             if not isinstance(strategy, dict):
                 strategy = {}

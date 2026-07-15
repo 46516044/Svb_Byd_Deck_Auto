@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""UI entrypoint.
+"""图形界面入口。
 
-This file is intentionally kept thin.
+该文件仅保留启动所需的最小编排逻辑。
 """
 
 from __future__ import annotations

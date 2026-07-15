@@ -1,17 +1,9 @@
-"""Card filename helpers.
+"""卡牌图片文件名辅助函数。
 
-Support Enhance/"爆能" tiers encoded in image filenames.
-
-Naming convention (stem without extension):
-- "4_xxx" -> base_cost=4, enhance_costs=[], name="xxx"
-- "4@6_xxx" -> base_cost=4, enhance_costs=[6], name="xxx"
-- "4@6@8_xxx" -> base_cost=4, enhance_costs=[6, 8], name="xxx"
-- Legacy "4_6_xxx" / "4_6_8_xxx" is also accepted.
-
-Card names may contain underscores. Enhance tiers are parsed as @-separated
-integer segments immediately after the base cost.
-
-Card names are resolved from CSV file when the parsed name looks like a card ID.
+支持在文件名中编码爆能层级。无扩展名时，``4_xxx`` 表示基础费用 4；
+``4@6_xxx`` 与 ``4@6@8_xxx`` 分别表示一个或多个爆能费用；同时兼容旧格式
+``4_6_xxx`` 与 ``4_6_8_xxx``。卡名本身可以包含下划线，爆能层级只解析基础
+费用之后以 ``@`` 分隔的整数段。若解析出的名称形似卡牌 ID，则通过 CSV 还原卡名。
 """
 
 from __future__ import annotations
@@ -21,16 +13,12 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 
-# Global card ID to name mapping, loaded on first access
+# 全局卡牌 ID 到名称映射，首次访问时延迟加载。
 _CARD_ID_MAP: Dict[str, str] = {}
 
 
 def _get_app_root() -> str:
-    """Get the application root directory.
-
-    In packaged (EXE) mode, returns the directory containing the EXE.
-    In development mode, returns the project root directory.
-    """
+    """返回应用根目录；打包模式取 EXE 目录，开发模式取项目根目录。"""
     import sys
 
     if getattr(sys, "frozen", False):
@@ -42,7 +30,7 @@ def _get_app_root() -> str:
 
 
 def _find_csv_path() -> str:
-    """Find the CSV file path with multiple fallback locations."""
+    """按多个兼容位置查找卡牌 CSV 文件。"""
     import sys
 
     app_root = _get_app_root()
@@ -80,7 +68,7 @@ def _find_csv_path() -> str:
 
 
 def _load_card_id_map() -> Dict[str, str]:
-    """Load card ID to name mapping from CSV file."""
+    """从 CSV 加载卡牌 ID 到名称的映射。"""
     if _CARD_ID_MAP:
         return _CARD_ID_MAP
 
@@ -104,7 +92,7 @@ def _load_card_id_map() -> Dict[str, str]:
 
 
 def get_card_name_by_id(card_id: str) -> Optional[str]:
-    """Get card name from card ID using CSV mapping."""
+    """通过 CSV 映射按卡牌 ID 查询名称。"""
     return _load_card_id_map().get(str(card_id).strip())
 
 
@@ -119,7 +107,7 @@ def _basename_stem(raw: str) -> str:
 
 
 def is_evo_card_name(card_name: str) -> bool:
-    """Return True when name/stem/filename ends with ``_evo``."""
+    """判断名称、主文件名或完整文件名是否以 ``_evo`` 结尾。"""
 
     stem = _basename_stem(card_name)
     if not stem:
@@ -128,7 +116,7 @@ def is_evo_card_name(card_name: str) -> bool:
 
 
 def strip_evo_suffix(card_name: str) -> str:
-    """Strip a trailing ``_evo`` suffix from a card name/stem."""
+    """移除卡名或主文件名末尾的 ``_evo``。"""
 
     raw = str(card_name or "").strip()
     if not raw:
@@ -139,15 +127,10 @@ def strip_evo_suffix(card_name: str) -> str:
 
 
 def parse_follower_stat_suffix(card_name: str) -> Tuple[str, Optional[int], Optional[int]]:
-    """Parse follower stat suffix from a card name.
+    """从卡名末尾解析随从身材后缀。
 
-    Expected suffix format: ``..._<atk>_<hp>``.
-    Parsing is done from the rightmost two underscore segments.
-
-    Returns:
-        (base_name, base_atk, base_hp)
-        - On success: base_name excludes the trailing ``_<atk>_<hp>``.
-        - On failure: base_name is the original name, atk/hp are None.
+    预期格式为 ``..._<atk>_<hp>``，从最右侧两个下划线段开始解析。成功时返回
+    不带身材的基础名称、攻击和生命；失败时保留原名，攻击与生命返回 ``None``。
     """
 
     raw = str(card_name or "").strip()
@@ -174,11 +157,10 @@ def parse_follower_stat_suffix(card_name: str) -> Tuple[str, Optional[int], Opti
 
 
 def normalize_card_base_name(card_name: str) -> str:
-    """Return a stable card base name used by UI/config keys.
+    """返回供界面和配置键使用的稳定基础卡名。
 
-    - Removes follower stat suffix ``_<atk>_<hp>`` when present.
-    - Removes evolve image suffix ``_evo`` when present.
-    - Keeps original text when suffix is absent.
+    存在时移除随从身材后缀 ``_<atk>_<hp>`` 与进化图片后缀 ``_evo``；无后缀时
+    保留原文本。
     """
 
     raw = str(card_name or "").strip()
@@ -192,10 +174,7 @@ def normalize_card_base_name(card_name: str) -> str:
 
 
 def normalize_config_key(key: str) -> str:
-    """Normalize a strategy/config key to suffix-free base naming.
-
-    Supports both plain keys and enhance keys (``name@cost``).
-    """
+    """将策略或配置键规范为无图片后缀的基础名称，同时支持 ``name@cost``。"""
 
     raw = str(key or "").strip()
     if not raw:
@@ -209,36 +188,28 @@ def normalize_config_key(key: str) -> str:
 
 
 def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
-    """Parse a card filename stem.
-
-    Args:
-        stem: filename without extension.
-
-    Returns:
-        (base_cost, enhance_costs, card_name)
-    """
+    """解析不带扩展名的卡牌文件名，返回基础费用、爆能费用列表与卡名。"""
 
     stem = str(stem or "").strip()
     if not stem:
         return 0, [], ""
 
-    # Handle new format: "2@4@6_xxx" (base_cost@enhance1@enhance2_name)
-    # Split by underscore first to separate cost part from name part
+    # 新格式形如 ``2@4@6_xxx``；先按下划线分离费用段与名称段。
     parts = stem.split("_")
     if not parts:
         return 0, [], stem
 
-    # Parse cost part (may contain @ for enhance tiers)
+    # 费用段可能包含以 ``@`` 分隔的多个爆能层级。
     cost_part = parts[0]
     cost_segments = cost_part.split("@")
 
     try:
         base_cost = int(cost_segments[0])
     except Exception:
-        # Fallback: treat whole stem as name.
+        # 基础费用无法解析时，将整个主文件名视为卡名。
         return 0, [], stem
 
-    # Parse enhance tiers from @-separated segments
+    # 解析 ``@`` 分隔的爆能层级。
     enhance_raw: List[int] = []
     for seg in cost_segments[1:]:
         try:
@@ -246,10 +217,8 @@ def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
         except Exception:
             break
 
-    # The rest are name parts. Also accept the legacy underscore format:
-    # "4_6_name" / "4_6_8_name". To avoid misreading numeric card IDs like
-    # "4_10001110" as enhance tiers, only consume underscore enhance segments
-    # while at least one following segment remains as the card name.
+    # 其余部分为卡名，同时兼容 ``4_6_name``、``4_6_8_name`` 旧格式。为避免把
+    # ``4_10001110`` 这类数字卡牌 ID 误判为爆能层级，仅在后方仍有名称段时消费数字。
     name_start = 1
     if len(cost_segments) == 1:
         for idx in range(1, len(parts) - 1):
@@ -267,16 +236,15 @@ def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
 
     card_name = "_".join([p for p in name_parts if p is not None])
     if not card_name:
-        # If name is missing, best-effort fallback to stem tail.
+        # 名称缺失时尽力回退到主文件名尾部。
         card_name = stem.split("_", 1)[-1] if "_" in stem else stem
 
-    # Try to resolve card ID to real name from CSV
-    # Check if card_name looks like a card ID (8-digit number)
+    # 名称形似卡牌 ID 时，尝试通过 CSV 还原真实卡名。
     resolved_name = _resolve_card_name(card_name)
     if resolved_name:
         card_name = resolved_name
 
-    # Normalize enhance tiers: unique, > base_cost, sorted ascending.
+    # 爆能层级保序规范为：去重、大于基础费用、升序排列。
     enhance_costs: List[int] = []
     for c in enhance_raw:
         try:
@@ -293,56 +261,51 @@ def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
 
 
 def _resolve_card_name(card_name: str) -> Optional[str]:
-    """Resolve card name from card ID if it looks like an ID.
+    """当名称形似卡牌 ID 时，通过 CSV 解析真实卡名。
 
-    Card IDs are typically 8-digit numbers. If the parsed name is purely numeric,
-    try to look it up in the CSV mapping.
-
-    Also supports alternate art format: "10001110@1" -> resolves "10001110@1" from CSV
-    If alternate art is not found in CSV, falls back to base card ID.
+    卡牌 ID 通常为 8 位数字；同时支持 ``10001110@1`` 异画形式，异画条目不存在时
+    回退到基础卡牌 ID。
     """
     card_name = str(card_name or "").strip()
     if not card_name:
         return None
 
-    # Evolved templates append ``_evo`` to the card ID. Resolve the base ID
-    # first, then preserve the suffix so downstream normalization can pair the
-    # base and evolved images under the same card name.
+    # 进化模板会在 ID 后追加 ``_evo``；先解析基础 ID，再保留后缀，使下游可将
+    # 基础图和进化图归到同一卡名。
     if card_name.lower().endswith("_evo"):
         resolved_base = _resolve_card_name(card_name[:-4])
         return f"{resolved_base}_evo" if resolved_base else None
 
-    # Check if it looks like a card ID (8-digit number)
+    # 处理纯 8 位数字卡牌 ID。
     if card_name.isdigit() and len(card_name) == 8:
         return get_card_name_by_id(card_name)
 
-    # Check if it looks like alternate art format: "10001110@1"
+    # 处理 ``10001110@1`` 异画格式。
     alt_art_pattern = re.match(r"^(\d{8})@(\d+)$", card_name)
     if alt_art_pattern:
-        # First try to find the alternate art entry
+        # 优先查询异画条目。
         resolved = get_card_name_by_id(card_name)
         if resolved:
             return resolved
-        # Fallback to base card ID
+        # 异画条目不存在时回退到基础 ID。
         base_id = alt_art_pattern.group(1)
         return get_card_name_by_id(base_id)
 
-    # Also check if it ends with atk_hp suffix (e.g., "10001110_2_2")
-    # Strip the stat suffix to get the base ID
+    # 对 ``10001110_2_2`` 等身材后缀形式，先移除后缀取得基础 ID。
     parts = card_name.split("_")
     if len(parts) >= 3 and parts[-1].isdigit() and parts[-2].isdigit():
         potential_id = "_".join(parts[:-2])
         if potential_id.isdigit() and len(potential_id) == 8:
             return get_card_name_by_id(potential_id)
 
-        # Also check alternate art format with stat suffix (e.g., "10001110@1_2_3")
+        # 同时支持带身材后缀的异画格式，例如 ``10001110@1_2_3``。
         alt_art_pattern = re.match(r"^(\d{8})@(\d+)$", potential_id)
         if alt_art_pattern:
-            # First try to find the alternate art entry
+            # 优先查询异画条目。
             resolved = get_card_name_by_id(potential_id)
             if resolved:
                 return resolved
-            # Fallback to base card ID
+            # 异画条目不存在时回退到基础 ID。
             base_id = alt_art_pattern.group(1)
             return get_card_name_by_id(base_id)
 
@@ -350,7 +313,7 @@ def _resolve_card_name(card_name: str) -> Optional[str]:
 
 
 def parse_card_filename(filename: str) -> Tuple[int, List[int], str]:
-    """Parse a card image filename (with extension)."""
+    """解析带扩展名的卡牌图片文件名。"""
 
     name = str(filename or "")
     stem = name.rsplit(".", 1)[0]
@@ -358,13 +321,13 @@ def parse_card_filename(filename: str) -> Tuple[int, List[int], str]:
 
 
 def make_enhance_key(card_name: str, enhance_cost: int) -> str:
-    """Build a config key for an enhance-tier variant."""
+    """为爆能层级变体构造配置键。"""
 
     return f"{str(card_name)}@{int(enhance_cost)}"
 
 
 def split_enhance_key(key: str) -> Tuple[str, Optional[int]]:
-    """Split a config key into (base_name, enhance_cost)."""
+    """将配置键拆分为基础名称和爆能费用。"""
 
     s = str(key or "")
     if "@" not in s:

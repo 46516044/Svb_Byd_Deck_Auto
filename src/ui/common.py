@@ -1,6 +1,6 @@
-"""Shared helpers for the PyQt UI.
+"""PyQt 界面共用辅助函数。
 
-Keep UI-specific utilities here so `main_ui.py` can stay thin.
+界面专用工具集中放在这里，使 ``main_ui.py`` 保持轻量。
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def deep_update_dict(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str,
 
 
 def load_custom_font(size: int = 10):
-    # Lazy import to keep this module stdlib-only at import time.
+    # 延迟导入 Qt 字体模块，使本模块导入阶段只依赖标准库。
     from PyQt5.QtGui import QFont, QFontDatabase
 
     font = QFont("Microsoft YaHei", size)

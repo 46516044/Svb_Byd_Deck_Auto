@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-# PyInstaller spec file for Shadowverse Automation UI
+# 影之诗自动化界面的 PyInstaller 打包配置。
 # 特别注意：使用虚拟环境打包，排除配置文件目录
 
 import os
@@ -107,7 +107,7 @@ hiddenimports = [
 binaries = []
 excludes = []
 
-# Prefer build-environment VC runtime DLLs for ORT stability.
+# 优先使用构建环境中的 VC 运行库 DLL，以提高 ORT 稳定性。
 preferred_vc_dlls = [
     'msvcp140.dll',
     'vcruntime140.dll',

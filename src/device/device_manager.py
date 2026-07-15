@@ -248,7 +248,7 @@ class DeviceManager:
         while device_state.script_running:
             start_time = time.time()
 
-            # If we just resumed, apply "new turn" semantics.
+                # 刚从暂停恢复时，按“进入新回合”语义重置状态。
             try:
                 device_state.apply_resume_policy_if_needed()
             except Exception:

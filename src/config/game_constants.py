@@ -6,7 +6,7 @@
 # ============================= 屏幕坐标和区域 =============================
 
 # 敌方随从血量检测区域 (左上角x, 左上角y, 右下角x, 右下角y)
-# Updated for improved sliding window detection
+# 为改进后的滑动窗口检测调整。
 ENEMY_HP_REGION = (322, 263, 1073, 302)
 ENEMY_HP_REGION_UP = (322, 250, 1073, 289)
 
@@ -51,7 +51,7 @@ BLANK_CLICK_RANDOM = 2  # 随机偏移范围
 OCR_CROP_SIZE = 45  # 用于血量识别的裁剪区域大小
 OCR_CROP_HALF_SIZE = OCR_CROP_SIZE // 2  # 裁剪区域的一半大小
 
-# ============================= HP Detection - Sliding Window Parameters =============================
+# ============================= 血量检测：滑动窗口参数 =============================
 
 # 滑动窗口参数
 HP_WINDOW_WIDTH = 43        # 窗口宽度

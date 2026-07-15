@@ -63,11 +63,11 @@ def get_card_priority(card_name: str, priority_cards: Optional[PriorityCards] = 
 
     换牌时需要评估卡牌在整局游戏中的综合价值，因此使用进化前后优先级的平均值
 
-    Args:
+    参数：
         card_name: 卡牌名称
         priority_cards: 优先级配置字典 {"卡牌名": {"priority_pre_evolution": 数字, "priority_post_evolution": 数字, "priority": 数字}}
 
-    Returns:
+    返回：
         int: 优先级数字（越小优先级越高，默认500）
     """
     def _name_candidates(raw_name: str) -> List[str]:
@@ -93,13 +93,13 @@ def get_card_priority(card_name: str, priority_cards: Optional[PriorityCards] = 
         if not isinstance(mapping, dict) or not mapping:
             return None
 
-        # 1) Fast path: direct key lookup with candidate names.
+    # 1）快速路径：使用候选名称直接查键。
         for key in _name_candidates(raw_name):
             if key in mapping:
                 cfg_v = mapping.get(key)
                 return cfg_v if isinstance(cfg_v, dict) else {"priority": cfg_v}
 
-        # 2) Normalized lookup: strip follower suffixes and align enhance key format.
+    # 2）规范化查询：移除随从后缀并统一爆能键格式。
         normalized_mapping: Dict[str, CardDict] = {}
         for k, v in mapping.items():
             nk = normalize_config_key(str(k or ""))
@@ -118,7 +118,7 @@ def get_card_priority(card_name: str, priority_cards: Optional[PriorityCards] = 
     cfg = _resolve_cfg(card_name, priority_cards)
     if cfg is not None:
 
-        # Backward compatibility: extremely old format may store an int/str.
+    # 为兼容极旧格式，允许直接以整数或字符串保存优先级。
         # 强制留牌（必留）：优先级视为最高。
         try:
             if isinstance(cfg, dict) and cfg.get("force_keep") is True:
@@ -151,11 +151,11 @@ def _build_card_index(hand_cards: List[CardDict], priority_cards: Optional[Prior
     """
     构建按费用分组的卡牌索引结构
 
-    Args:
+    参数：
         hand_cards: 手牌列表 [{'cost': 3, 'name': '...', ...}, ...]
         priority_cards: 优先级配置
 
-    Returns:
+    返回：
         Dict: {费用: [{'index': 索引, 'card': 卡牌, 'priority': 优先级}, ...]}
     """
     cards_by_cost = {i: [] for i in range(11)}
@@ -178,12 +178,12 @@ def _sort_swaps_by_cost(
     """
     按费用从高到低排序换牌索引，并同步调整原因列表
 
-    Args:
+    参数：
         swap_indices: 换牌索引列表
         reasons: 换牌原因列表
         hand_cards: 手牌列表
 
-    Returns:
+    返回：
         Tuple[List[int], List[str]]: 排序后的索引和原因
     """
     swap_with_cost = [(idx, hand_cards[idx]['cost']) for idx in swap_indices]
@@ -209,18 +209,18 @@ def _apply_rule1_overcost_and_limits(
     1. 换掉所有 > max_cost 的卡牌
     2. 执行费用限制（如1费≤1张，2费≤2张）
 
-    Args:
+    参数：
         cards_by_cost: 按费用分组的卡牌
         max_cost: 档次最大费用（3/4/5）
         cost_limits: 费用上限配置 {1: 1, 2: 2}
         swap_indices: 当前换牌索引列表
         reasons: 当前换牌原因列表
 
-    Returns:
+    返回：
         Tuple[List[int], List[str]]: 更新后的换牌索引和原因
     """
     # 步骤1: 换掉超费卡（按优先级从低到高换）
-    for cost in range(10, max_cost, -1):  # 10,9,8...max_cost+1
+    for cost in range(10, max_cost, -1):  # 费用按 10、9、8……遍历到 max_cost + 1。
         for item in sorted(cards_by_cost[cost], key=lambda x: -x['priority']):
             swap_indices.append(item['index'])
             reasons.append(f"超过{max_cost}费档次({cost}费)")
@@ -260,14 +260,14 @@ def _apply_rule2_curve_balance(
 
     关键：只从【有多张】的费用中换，自动保护唯一卡
 
-    Args:
+    参数：
         cards_by_cost: 按费用分组的卡牌
         low_cost_target: 低费目标范围 [min, max]（如[2, 3]）
         allowed_costs: 档次允许的费用集合
         swap_indices: 当前换牌索引列表
         reasons: 当前换牌原因列表
 
-    Returns:
+    返回：
         Tuple[List[int], List[str]]: 更新后的换牌索引和原因
     """
     # 计算剩余卡牌中的低费数量
@@ -333,12 +333,12 @@ def _execute_strategy_rules(
     """
     配置驱动的规则执行引擎（极简2规则）
 
-    Args:
+    参数：
         hand_cards: 手牌列表
         config: 策略配置字典（从STRATEGY_CONFIGS获取）
         priority_cards: 优先级配置
 
-    Returns:
+    返回：
         Tuple[List[int], List[int], List[str]]: (保留索引, 换牌索引, 换牌原因)
     """
     # 构建索引结构
@@ -388,7 +388,7 @@ def determine_card_swaps_enhanced(
     """
     增强版换牌策略决策（极简2规则系统）
 
-    Args:
+    参数：
         hand_cards: SIFT识别结果列表
             [
                 {'center': (x, y), 'cost': 3, 'name': '精灵公主艾莉娅', ...},
@@ -397,7 +397,7 @@ def determine_card_swaps_enhanced(
         strategy: 策略名称 ("3费档次"/"4费档次"/"5费档次")
         priority_cards: 优先级配置（可选）
 
-    Returns:
+    返回：
         Tuple[List[int], List[int], List[str]]:
             - keep_indices: 保留的卡索引
             - swap_indices: 换掉的卡索引（按费用从高到低排序）

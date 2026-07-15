@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Main PyQt control-center window."""
+"""PyQt 控制中心主窗口。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QScrollArea,
     QStackedWidget,
-    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -33,6 +32,7 @@ from PyQt5.QtWidgets import (
 from src.config.config_repository import ConfigRepository
 from src.config.paths import get_app_root, get_config_path
 from src.ui.app_state import AppState
+from src.ui.background import BackgroundWidget, resolve_background_path
 from src.ui.common import deep_update_dict
 from src.ui.deck_store import DeckStore
 from src.ui.pages.card_priority_page import CardPriorityPage
@@ -48,7 +48,7 @@ from src.utils.consent_utils import check_consent_file, save_consent
 
 
 class DeviceConnectionChecker(QThread):
-    """Background ADB/uiautomator2 connection probe."""
+    """后台执行的 ADB/uiautomator2 连接探测线程。"""
 
     finished_signal = pyqtSignal(bool, str, dict)
 
@@ -160,7 +160,7 @@ class ScreenshotWorker(QThread):
 
 
 class LogSink:
-    """Compatibility adapter for legacy pages that call ``parent.log_output.append``."""
+    """兼容旧页面调用 ``parent.log_output.append`` 的适配器。"""
 
     def __init__(self, callback):
         self._callback = callback
@@ -179,6 +179,7 @@ class ShadowverseUI(QMainWindow):
         self._screenshot_thread: Optional[ScreenshotWorker] = None
         self.script_thread: Optional[ScriptRunner] = None
         self._device_config: Optional[Dict[str, Any]] = None
+        self._start_after_connect = False
         self._auto_pass = False
         self._run_start_time = 0.0
         self._close_pending = False
@@ -198,6 +199,7 @@ class ShadowverseUI(QMainWindow):
             parent=self,
         )
         self._build_ui()
+        self._apply_custom_background(self.config_page.config_data)
         self._wire_state()
         self.state.set_active_deck(self.deck_workspace_page.active_deck_summary())
         self._load_config_into_dashboard()
@@ -238,8 +240,8 @@ class ShadowverseUI(QMainWindow):
         self.resize(1280, 800)
         self.setMinimumSize(1100, 680)
 
-        central = QWidget()
-        central.setObjectName("AppRoot")
+        central = BackgroundWidget()
+        self.app_root = central
         shell = QHBoxLayout(central)
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
@@ -256,11 +258,9 @@ class ShadowverseUI(QMainWindow):
         self.statistics_page = StatisticsPage(self)
         self.config_page = ConfigPage(self)
         self.logs_page = LogsPage(self)
-        self.config_page.config_saved.connect(
-            self.dashboard_page.load_quick_settings
-        )
+        self.config_page.config_saved.connect(self._on_config_saved)
 
-        # Compatibility aliases used by the existing card/effect editors.
+        # 为现有卡牌与效果编辑器保留兼容别名。
         self.card_select_page = self.deck_workspace_page
         self.my_deck_page = self.deck_workspace_page
         self.share_page = self.deck_workspace_page
@@ -323,18 +323,17 @@ class ShadowverseUI(QMainWindow):
         self.nav_group.setExclusive(True)
         self.nav_buttons: Dict[str, QPushButton] = {}
         nav_items = [
-            ("dashboard", "仪表盘", QStyle.SP_ComputerIcon),
-            ("deck", "卡组构筑", QStyle.SP_DirIcon),
-            ("cards", "卡牌设置", QStyle.SP_FileDialogContentsView),
-            ("stats", "统计数据", QStyle.SP_FileDialogInfoView),
-            ("settings", "参数设置", QStyle.SP_FileDialogDetailedView),
-            ("logs", "运行日志", QStyle.SP_FileIcon),
+            ("dashboard", "仪表盘"),
+            ("deck", "卡组构筑"),
+            ("cards", "卡牌设置"),
+            ("stats", "统计数据"),
+            ("settings", "参数设置"),
+            ("logs", "运行日志"),
         ]
-        for key, label, icon_id in nav_items:
+        for key, label in nav_items:
             button = QPushButton(label)
             button.setObjectName("NavButton")
             button.setCheckable(True)
-            button.setIcon(self.style().standardIcon(icon_id))
             button.clicked.connect(lambda checked=False, page=key: self.navigate(page))
             self.nav_group.addButton(button)
             self.nav_buttons[key] = button
@@ -355,6 +354,23 @@ class ShadowverseUI(QMainWindow):
         footer_layout.addStretch()
         layout.addWidget(footer)
         return sidebar
+
+    def _on_config_saved(self, config: Dict[str, Any]) -> None:
+        self.dashboard_page.load_quick_settings(config)
+        self._apply_custom_background(config)
+
+    def _apply_custom_background(self, config: Dict[str, Any]) -> bool:
+        ui_config = config.get("ui", {}) if isinstance(config, dict) else {}
+        if not isinstance(ui_config, dict):
+            ui_config = {}
+        background = ui_config.get("custom_background", {})
+        if not isinstance(background, dict):
+            background = {}
+        return self.app_root.set_background(
+            enabled=bool(background.get("enabled", False)),
+            path=resolve_background_path(background.get("path", "")),
+            opacity=background.get("opacity", 22),
+        )
 
     def _wire_state(self) -> None:
         self.state.device_changed.connect(self.dashboard_page.set_device_info)
@@ -416,14 +432,22 @@ class ShadowverseUI(QMainWindow):
         )
         self.dashboard_page.load_quick_settings(config or {})
 
-    def connect_device(self) -> None:
+    def connect_device(self, *, start_after_connect: bool = False) -> None:
         if self.is_script_running():
+            self._start_after_connect = False
             QMessageBox.warning(self, "运行中", "脚本运行中，不能重新连接设备。")
             return
+        if self._device_check_thread is not None and self._device_check_thread.isRunning():
+            if start_after_connect:
+                self._start_after_connect = True
+            return
+
+        self._start_after_connect = bool(start_after_connect)
 
         values = self.dashboard_page.connection_values()
         serial = str(values.get("serial") or "").strip()
         if not serial:
+            self._start_after_connect = False
             QMessageBox.warning(self, "ADB 地址为空", "请输入模拟器 ADB 地址。")
             return
 
@@ -516,6 +540,8 @@ class ShadowverseUI(QMainWindow):
         message: str,
         info: Dict[str, Any],
     ) -> None:
+        should_start = bool(ok and self._start_after_connect and not self._close_pending)
+        self._start_after_connect = False
         connection_config = dict(self._device_config or {})
         serial = str(connection_config.get("serial") or "")
         server = "国际服" if connection_config.get("is_global") else "国服"
@@ -542,12 +568,11 @@ class ShadowverseUI(QMainWindow):
         if self._device_check_thread is not None:
             self._device_check_thread.deleteLater()
         self._device_check_thread = None
+        if should_start:
+            self.start_script()
 
     def start_script(self) -> None:
-        if self.script_thread is None:
-            QMessageBox.warning(self, "设备未连接", "请先连接设备。")
-            return
-        if self.script_thread.isRunning():
+        if self.is_script_running():
             return
         if not self.deck_workspace_page.workspace_is_applied():
             QMessageBox.warning(
@@ -558,14 +583,20 @@ class ShadowverseUI(QMainWindow):
             return
 
         values = self.dashboard_page.connection_values()
-        connected_serial = str((self._device_config or {}).get("serial") or "")
         requested_serial = str(values.get("serial") or "").strip()
-        if requested_serial != connected_serial:
-            QMessageBox.warning(
-                self,
-                "设备地址已变化",
-                "ADB 地址已修改，请重新连接设备后再开始运行。",
-            )
+        if not requested_serial:
+            QMessageBox.warning(self, "ADB 地址为空", "请输入模拟器 ADB 地址。")
+            return
+
+        connected_serial = str((self._device_config or {}).get("serial") or "")
+        connection_ready = bool(
+            self.state.device.get("connected")
+            and self.script_thread is not None
+            and requested_serial == connected_serial
+        )
+        if not connection_ready:
+            self.append_log(f"[控制] 开始运行前先连接设备: {requested_serial}")
+            self.connect_device(start_after_connect=True)
             return
 
         if self._device_config is not None:
@@ -733,9 +764,10 @@ class ShadowverseUI(QMainWindow):
                 "[关闭] 后台任务尚未退出，窗口已恢复操作；请稍后再次关闭。"
             )
 
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
         if not self._close_pending:
             self._close_pending = True
+            self._start_after_connect = False
             self._close_deadline = time.monotonic() + 15.0
             self.footer_status.setText("正在等待后台任务退出")
             if self.is_script_running():

@@ -18,10 +18,10 @@ def check_consent_file() -> bool:
     """
     检查是否存在同意文件
     
-    Returns:
+    返回：
         bool: 是否已同意
     """
-    # 1) Preferred: config flag (shared by UI/CLI)
+    # 1）优先读取界面与 CLI 共用的配置标记。
     try:
         config_path = get_config_path()
         if os.path.exists(config_path):
@@ -32,7 +32,7 @@ def check_consent_file() -> bool:
     except Exception:
         pass
 
-    # 2) Preferred: consent file in app root (independent of CWD)
+    # 2）其次读取应用根目录下、不依赖当前工作目录的同意文件。
     try:
         consent_path = os.path.join(get_app_root(), "consent.txt")
         if os.path.exists(consent_path):
@@ -40,7 +40,7 @@ def check_consent_file() -> bool:
     except Exception:
         pass
 
-    # 3) Backward compatibility: consent file in current working directory
+    # 3）为兼容旧版本，最后检查当前工作目录中的同意文件。
     return os.path.exists("consent.txt")
 
 
@@ -48,7 +48,7 @@ def save_consent(*, persist_to_config: bool = True) -> bool:
     """
     保存用户同意状态到文件
     
-    Returns:
+    返回：
         bool: 是否保存成功
     """
     try:
@@ -64,14 +64,14 @@ def save_consent(*, persist_to_config: bool = True) -> bool:
                         with open(config_path, "r", encoding="utf-8") as cf:
                             config_data = json.load(cf)
                     except Exception:
-                        # Don't overwrite a possibly corrupted config.
+                        # 配置可能已经损坏，此时不得覆盖原文件。
                         config_data = None
 
                 if isinstance(config_data, dict):
                     config_data["agreed_to_disclaimer"] = True
                     write_json_atomic(config_path, config_data, indent=4, ensure_ascii=False)
             except Exception:
-                # Consent file is enough; config persistence is best-effort.
+                # 同意文件已足够生效，配置持久化仅作尽力处理。
                 pass
 
         return True
@@ -84,7 +84,7 @@ def display_disclaimer_and_get_consent() -> bool:
     """
     显示免责声明并获取用户同意
     
-    Returns:
+    返回：
         bool: 用户是否同意
     """
     # 清屏
@@ -106,7 +106,7 @@ def display_disclaimer_and_get_consent() -> bool:
                 "\n请仔细阅读以上声明，输入'同意'表示您已理解并接受所有条款: "
             ).strip()
         except EOFError:
-            # Non-interactive environment (e.g. pythonw / packaged GUI).
+            # pythonw 或打包界面等非交互环境不读取标准输入。
             return False
         
         if response == "同意":
@@ -128,7 +128,7 @@ def remove_consent() -> bool:
     """
     移除用户同意文件（用于重新获取同意）
     
-    Returns:
+    返回：
         bool: 是否移除成功
     """
     try:
@@ -136,14 +136,14 @@ def remove_consent() -> bool:
         if os.path.exists(consent_path):
             os.remove(consent_path)
 
-        # Backward compatibility: also remove legacy CWD file.
+        # 为兼容旧版本，同时删除当前工作目录中的旧同意文件。
         if os.path.exists("consent.txt"):
             try:
                 os.remove("consent.txt")
             except Exception:
                 pass
 
-        # Best-effort: clear config flag.
+        # 尽力清除配置中的同意标记。
         try:
             config_path = get_config_path()
             if os.path.exists(config_path):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""My deck page (view/manage current deck)."""
+"""用于查看和管理当前卡组的“我的卡组”页面。"""
 
 from __future__ import annotations
 
@@ -339,7 +339,7 @@ class MyDeckPage(QWidget):
                 # 如果卡组数据中包含策略配置，只应用“卡组相关策略”（不覆盖设备/ADB等机器相关配置）
                 sc = deck_data.get("strategy_config")
                 if not isinstance(sc, dict) and isinstance(deck_data.get("config"), dict):
-                    # Backward compatibility: legacy decks stored full config snapshot.
+                    # 兼容旧卡组中保存的完整配置快照。
                     sc = extract_strategy_config(
                         deck_data["config"],
                         cards=list(deck_data.get("cards") or []),
@@ -369,12 +369,12 @@ class MyDeckPage(QWidget):
                 if hasattr(self.parent, "card_priority_page"):
                     self.parent.card_priority_page.refresh_card_priority()
 
-                # 更新 card_select_page 的 current_deck_file
+                # 更新 ``card_select_page.current_deck_file``。
                 if hasattr(self.parent, "card_select_page"):
                     self.parent.card_select_page.current_deck_file = deck_file
 
         except Exception as e:
-            # 加载失败时清除 current_deck_file
+            # 加载失败时清除 ``current_deck_file``。
             if hasattr(self.parent, "card_select_page"):
                 self.parent.card_select_page.current_deck_file = None
             QMessageBox.warning(self, "错误", f"加载卡组失败: {str(e)}")
@@ -484,7 +484,7 @@ class MyDeckPage(QWidget):
                 lambda pos, f=card_file: self.show_context_menu(pos, f)
             )
 
-            # 卡片名称（支持 Enhance/爆能 文件名）
+            # 卡牌名称支持爆能文件名格式。
             try:
                 _, _, card_name = parse_card_filename(card_file)
             except Exception:

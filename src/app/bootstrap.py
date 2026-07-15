@@ -1,7 +1,6 @@
-"""App bootstrap (composition root).
+"""应用启动编排层（组合根）。
 
-Centralize startup wiring (config/logging/gpu/device threads) so entrypoints can
-stay thin.
+集中连接配置、日志、GPU 和设备线程，使各入口文件保持轻量。
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ def _command_listener(
             if stop_event.is_set():
                 break
 
-            # Apply pause/resume immediately (do not wait for device loop).
+            # 立即应用暂停或恢复，不等待设备主循环下一次轮询。
             if cmd == "p":
                 for device_state in device_manager.device_states.values():
                     device_state.request_pause(reason="command")
@@ -63,7 +62,7 @@ def _command_listener(
                     logger.info(f"\n--- 设备 {serial} 统计 ---")
                     device_state.show_round_statistics()
 
-            # Fallback for future commands.
+        # 为后续扩展命令保留回退分支。
             for device_state in device_manager.device_states.values():
                 device_state.command_queue.put(cmd)
 
@@ -84,16 +83,15 @@ def run_cli(
     log_queue: Optional["queue.Queue[str]"],
     device_config: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Run the automation loop (CLI/script mode).
+    """运行 CLI 或脚本模式的自动化循环。
 
-    Args:
-        device_config: Optional device configuration from UI input.
-                       If provided, use this config directly instead of reading from config.json.
+    ``device_config`` 可接收界面传入的设备配置；提供后直接使用，不再从
+    ``config.json`` 读取设备信息。
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
 
-    # Local imports to keep UI startup light.
+        # 延迟导入重量级模块，保持界面启动轻量。
     from src.device.device_manager import DeviceManager
     from src.ui.notification_manager import NotificationManager
 
@@ -121,7 +119,7 @@ def run_cli(
                 except Exception as e:
                     logger.warning(f"应用策略配置失败: {e}")
 
-        # Inject runtime config to avoid repeated disk reads in hot paths.
+        # 注入运行时配置，避免热路径重复读取磁盘。
         try:
             from src.config import settings as _settings
 
@@ -135,7 +133,7 @@ def run_cli(
         logger.info("=== 影之诗自动对战脚本启动 ===")
         logger.info(f"使用配置文件: {config_manager.config_file}")
 
-        # Log active deck/strategy profiles.
+        # 记录当前启用的卡组与策略档案。
         try:
             from src.config.profiles import (
                 format_profile_summary,
@@ -226,10 +224,7 @@ def run_cli(
 
 
 def run_gui(argv: Optional[list[str]] = None) -> int:
-    """Run the PyQt UI.
-
-    This keeps `main_ui.py` thin while sharing the same automation runner.
-    """
+    """启动 PyQt 图形界面，并复用同一套自动化运行器。"""
 
     import sys as _sys
 

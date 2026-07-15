@@ -91,7 +91,7 @@ class GameManager:
         self._hp_mask_warning_logged = False
         mask_candidates = [
             resource_path(os.path.join("src", "masks", "hp_mask.png")),
-            # Backward compatibility (older layouts might ship it under templates).
+            # 向后兼容：旧版目录结构可能会把该文件放在 templates 目录下。
             self.template_manager.get_template_path("hp_mask.png"),
         ]
 
@@ -215,13 +215,13 @@ class GameManager:
         is_select: bool = False,
     ):
         """
-        检测场上的敌方随从位置与血量 (Improved with sliding window + fallback recognition)
+        检测场上的敌方随从位置与血量（使用滑动窗口并提供识别后备方案）。
 
-        Returns:
+        返回：
             List[Tuple[int, int, str, str]]: [(x, y, "normal", hp_value), ...]
-            - x, y: Screen coordinates (calibrated)
-            - "normal": Follower type (always "normal" for compatibility)
-            - hp_value: HP as string (e.g., "5", "99")
+            - x, y：校准后的屏幕坐标
+            - "normal"：随从类型；为兼容旧调用方固定返回 "normal"
+            - hp_value：字符串形式的生命值，例如 "5"、"99"
         """
         timestamp = int(time.time() * 1000)
         hp_region = ENEMY_HP_REGION
@@ -235,7 +235,7 @@ class GameManager:
                 screenshot_cv = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
                 cv2.imwrite(f"debug/screenshot_{timestamp}.png", screenshot_cv)
 
-            # Step 1: Crop enemy HP region
+            # 步骤 1：裁剪敌方生命值区域。
             x1, y1, x2, y2 = hp_region
             region = screenshot.crop(hp_region)
             region_np = np.array(region)
@@ -245,7 +245,7 @@ class GameManager:
                 logger.warning("HP遮罩不可用：启用无遮罩兜底检测（精度可能下降）")
                 self._hp_mask_warning_logged = True
 
-            # Step 2: Sliding window detection with color analysis
+            # 步骤 2：结合颜色分析执行滑动窗口检测。
             detections_raw = sliding_window_detect(
                 region_cv,
                 self.hp_mask,
@@ -258,7 +258,7 @@ class GameManager:
                 bright_red_v_threshold=HP_BRIGHT_RED_V_THRESHOLD
             )
 
-            # Step 3: Merge overlapping detections
+            # 步骤 3：合并相互重叠的检测结果。
             detections = merge_detections(
                 detections_raw,
                 min_gap=HP_MIN_FOLLOWER_GAP,
@@ -267,44 +267,44 @@ class GameManager:
 
             logger.info(f"检测到 {len(detections)} 个敌方随从HP位置")
 
-            # Step 4: Recognize HP for each detection
+            # 步骤 4：识别每个检测区域中的生命值。
             enemy_followers = []
             for idx, (center_x, width) in enumerate(detections):
-                # Crop HP window
+                # 裁剪生命值窗口。
                 crop_x1 = max(0, center_x - width // 2)
                 crop_x2 = min(region_cv.shape[1], center_x + width // 2)
                 hp_crop = region_cv[0:HP_WINDOW_HEIGHT, crop_x1:crop_x2].copy()
 
-                # Convert to RGBA and apply mask
+                # 转为 RGBA 并应用遮罩。
                 hp_crop_rgba = cv2.cvtColor(hp_crop, cv2.COLOR_BGR2BGRA)
                 if self.hp_mask is not None:
                     mask_resized = cv2.resize(self.hp_mask, (hp_crop_rgba.shape[1], hp_crop_rgba.shape[0]), interpolation=cv2.INTER_NEAREST)
                     hp_crop_rgba[:, :, 3] = mask_resized
                 else:
-                    # If no mask, use full alpha
+                    # 没有遮罩时使用完全不透明的 Alpha 通道。
                     hp_crop_rgba[:, :, 3] = 255
 
-                # Save debug crop if requested
+                # 根据需要保存调试用裁剪图。
                 if debug_flag:
                     debug_path = f"debug/hp_crop_{idx}_{timestamp}.png"
                     cv2.imwrite(debug_path, hp_crop_rgba)
 
-                # Preprocess to 28x28
+                # 预处理为 28x28 图像。
                 digit_list = self.hp_preprocessor.preprocess(hp_crop_rgba, None)
 
-                # Recognize with fallback (EasyOCR → MNIST)
+                # 使用后备链识别生命值：EasyOCR 失败后转用 MNIST。
                 hp_value = recognize_hp_with_fallback(
                     digit_list,
                     self.reader,
                     self.mnist_session
                 )
 
-                # Fallback to "99" if recognition completely failed
+                # 识别完全失败时以 "99" 作为后备值。
                 if not hp_value or hp_value in ["?", "error", "unknown", "none"]:
                     hp_value = "99"
                     logger.warning(f"HP识别失败，使用默认值99 (位置: x={center_x})")
 
-                # Calculate global screen coordinates
+                # 计算全局屏幕坐标。
                 enemy_x = x1 + center_x + ENEMY_FOLLOWER_OFFSET_X
                 enemy_y = ENEMY_FOLLOWER_Y_ADJUST + random.randint(
                     -ENEMY_FOLLOWER_Y_RANDOM,
@@ -315,17 +315,17 @@ class GameManager:
 
                 logger.info(f"随从 {idx+1}: HP={hp_value}, X={enemy_x}, Y={enemy_y}")
 
-            # Debug visualization if requested
+            # 根据需要绘制调试可视化结果。
             if debug_flag and enemy_followers:
                 timestamp = int(time.time() * 1000)
                 debug_img = region_cv.copy()
                 for idx, (center_x, width) in enumerate(detections):
-                    # Draw detection window
+                    # 绘制检测窗口。
                     x_left = center_x - width // 2
                     x_right = center_x + width // 2
                     cv2.rectangle(debug_img, (x_left, 0), (x_right, HP_WINDOW_HEIGHT), (0, 255, 0), 2)
                     cv2.circle(debug_img, (center_x, HP_WINDOW_HEIGHT // 2), 5, (0, 255, 255), -1)
-                    # Add HP label
+                    # 添加生命值标签。
                     hp_text = enemy_followers[idx][3] if idx < len(enemy_followers) else "?"
                     cv2.putText(debug_img, f"HP:{hp_text}", (center_x - 20, 15),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
@@ -355,7 +355,7 @@ class GameManager:
         为兼容调用方，保留 ``extra_shots`` / ``shot_delay_range`` 参数，
         但不再用于跨帧采样。
 
-        Args:
+        参数：
             screenshot: 当前截图（PIL Image）
             debug_flag: 是否输出debug图片
             extra_shots: 保留参数（单帧模式下不使用）
@@ -376,8 +376,8 @@ class GameManager:
         def _type_priority(t: str) -> int:
             return {"green": 3, "yellow": 2, "normal": 1}.get(t, 0)
 
-        # Wider x-axis dedup threshold to absorb animation jitter and mixed
-        # contour artifacts (e.g. one follower detected as both green+normal).
+        # 放宽横轴去重阈值，以吸收动画抖动和混合轮廓伪影，
+        # 例如同一随从同时被识别为 green 与 normal。
         dedup_x_thresh = 96
 
         def _dedup_by_x(followers, x_thresh: int = dedup_x_thresh):
@@ -385,7 +385,7 @@ class GameManager:
             if not followers:
                 return []
             followers_sorted = sorted(followers, key=lambda p: p[0])
-            clusters = []  # [{'x':float, 'items':[...]}]
+            clusters = []  # 聚类结构：[{"x": float, "items": [...]}]
             for item in followers_sorted:
                 x = int(item[0])
                 matched = False
@@ -513,8 +513,7 @@ class GameManager:
                 cv2.dilate(blue_mask, kernel, iterations=1), kernel, iterations=1
             )
 
-            # NOTE: These are cheap and deterministic; threadpool overhead is larger
-            # than the benefit for such small workloads.
+            # 这些计算开销小且结果确定；对于这种小任务，线程池开销大于收益。
             green_contours = cv2.findContours(
                 green_eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )[0]
@@ -980,7 +979,7 @@ class GameManager:
                         template_img = template_img.astype(np.uint8, copy=False)
 
                     # 转为OpenCV常用BGR三通道
-                    if template_img.ndim == 2:  # Gray
+                    if template_img.ndim == 2:  # 灰度图
                         template_img = cv2.cvtColor(template_img, cv2.COLOR_GRAY2BGR)
                     elif template_img.ndim == 3:
                         ch = template_img.shape[2]
@@ -1065,11 +1064,10 @@ class GameManager:
             else:
                 card_templates = cast(dict[str, dict[str, Any]], self._board_sift_templates)
 
-            # Build a stable runtime name map for board recognition.
-            # Prefer names with explicit follower stats suffix (e.g. _4_4), so
-            # runtime can derive attacker ATK/HP and apply evolve(+2/+2,+3/+3)
-            # correctly. When matched template is *_evo without stats, fallback
-            # to a sibling template of the same base card that has stats.
+            # 为场面识别构建稳定的运行时名称映射。
+            # 优先使用带明确随从身材后缀的名称（例如 _4_4），让运行时能够推导攻击者的
+            # ATK/HP，并正确应用进化增益（+2/+2、+3/+3）。若匹配到不含身材的
+            # *_evo 模板，则回退到同一基础卡牌下带身材数据的同级模板。
             runtime_name_map = {}
             stat_name_by_base = {}
             for tname in list(card_templates.keys()):
@@ -1340,7 +1338,7 @@ class GameManager:
         return shield_targets
 
     def _extract_shield_points(self, screenshot, debug_flag=False, is_select=False):
-        """Extract raw shield icon centers (global coordinates) from screenshot."""
+        """从截图中提取守护图标的原始中心点，返回全局坐标。"""
 
         if screenshot is None:
             return []
@@ -1360,7 +1358,7 @@ class GameManager:
             return []
 
     def _match_positions_with_shields(self, positions, detected_shields, x_tolerance=50):
-        """Match arbitrary position list to shield centers by x-axis proximity."""
+        """按横轴距离将任意位置列表与守护图标中心点进行匹配。"""
 
         if not positions or not detected_shields:
             return []

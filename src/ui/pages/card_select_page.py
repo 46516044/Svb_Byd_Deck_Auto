@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Card selection page."""
+"""卡牌选择页面。"""
 
 from __future__ import annotations
 
@@ -807,7 +807,7 @@ class CardSelectPage(QWidget):
             except Exception:
                 decks = []
         else:
-            # Fallback: scan directory directly.
+            # 索引不可用时回退为直接扫描目录。
             decks_dir = os.path.join(get_exe_dir(), "saved_decks")
             if os.path.exists(decks_dir):
                 for file in os.listdir(decks_dir):
@@ -846,7 +846,7 @@ class CardSelectPage(QWidget):
             for display_name, filename in list(decks or []):
                 self.saved_decks_combo.addItem(str(display_name), filename)
 
-            # Restore selection if possible.
+            # 条件允许时恢复原选择。
             if current:
                 idx = self.saved_decks_combo.findData(current)
                 if idx >= 0:

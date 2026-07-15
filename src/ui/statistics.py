@@ -1,4 +1,4 @@
-"""Read and aggregate persisted battle statistics for the UI."""
+"""读取并汇总供界面展示的持久化对战统计。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ PathLike = Union[str, Path]
 
 @dataclass(frozen=True)
 class MatchRecord:
-    """Normalized representation of one persisted battle."""
+    """单场持久化对战的规范表示。"""
 
     occurred_at: datetime
     rounds: Optional[int]
@@ -28,7 +28,7 @@ class MatchRecord:
 
 @dataclass(frozen=True)
 class MatchAggregate:
-    """Aggregate metrics for a collection of battle records."""
+    """一组对战记录的汇总指标。"""
 
     battle_count: int = 0
     total_duration_seconds: float = 0.0
@@ -57,7 +57,7 @@ class DailyBattleCount:
 
 @dataclass(frozen=True)
 class StatisticsSnapshot:
-    """Complete statistics payload consumed by the statistics page."""
+    """统计页面消费的完整统计数据。"""
 
     records: Tuple[MatchRecord, ...]
     overall: MatchAggregate
@@ -89,7 +89,7 @@ _DURATION_PART_RE = re.compile(
 
 
 def parse_match_datetime(value: Any) -> Optional[datetime]:
-    """Parse a persisted match date into a local, timezone-naive datetime."""
+    """将持久化对战日期解析为不带时区的本地时间。"""
 
     if isinstance(value, datetime):
         parsed = value
@@ -130,7 +130,7 @@ def parse_match_datetime(value: Any) -> Optional[datetime]:
 
 
 def parse_duration_seconds(value: Any) -> Optional[float]:
-    """Parse numeric, clock-style, Chinese, or English duration values."""
+    """解析数值、时钟格式、中文或英文形式的时长。"""
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         duration = float(value)
@@ -307,7 +307,7 @@ def build_daily_counts(
     days: int = 7,
     end_day: Optional[date] = None,
 ) -> Tuple[DailyBattleCount, ...]:
-    """Return a contiguous daily series ending at ``end_day``."""
+    """返回截至 ``end_day`` 的连续每日序列。"""
 
     days = max(1, int(days))
     end_day = end_day or date.today()

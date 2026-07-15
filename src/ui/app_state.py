@@ -1,4 +1,4 @@
-"""Shared UI state for the PyQt control center."""
+"""PyQt 控制中心共用的界面状态。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 
 class AppState(QObject):
-    """Small observable state store shared by top-level UI pages."""
+    """顶层页面共用的轻量可观察状态容器。"""
 
     device_changed = pyqtSignal(dict)
     run_status_changed = pyqtSignal(str)
@@ -33,6 +33,7 @@ class AppState(QObject):
         self.active_deck: Dict[str, Any] = {
             "name": "未命名卡组",
             "count": 0,
+            "distinct_count": 0,
             "costs": {},
             "file": None,
             "applied": True,

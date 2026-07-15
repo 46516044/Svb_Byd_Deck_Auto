@@ -17,10 +17,7 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Lazy re-exports.
-
-    Avoid importing heavy modules (cv2/torch/u2/etc.) at package import time.
-    """
+    """延迟重导出，避免包导入阶段加载 cv2、torch、u2 等重量级模块。"""
 
     if name == "ConfigManager":
         from src.config.config_manager import ConfigManager as _ConfigManager

@@ -1,4 +1,4 @@
-"""Filterable full-log page for the desktop interface."""
+"""桌面界面的可筛选完整日志页面。"""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ _FORMATTED_LOG_RE = re.compile(
 
 @dataclass(frozen=True)
 class LogEntry:
-    """One normalized log record retained independently of the active filter."""
+    """独立于当前筛选条件保存的一条规范日志记录。"""
 
     timestamp: datetime
     level: str
@@ -83,7 +83,7 @@ class LogEntry:
 
 
 class LogsPage(QWidget):
-    """Full log viewer with level/text filtering and export actions."""
+    """支持级别、文本筛选及导出的完整日志查看器。"""
 
     logs_cleared = pyqtSignal()
     export_completed = pyqtSignal(str)
@@ -186,7 +186,7 @@ class LogsPage(QWidget):
 
     @property
     def entries(self) -> List[LogEntry]:
-        """Return a snapshot of all retained entries."""
+        """返回全部保留日志条目的快照。"""
 
         return list(self._entries)
 
@@ -196,11 +196,11 @@ class LogsPage(QWidget):
         level: Optional[object] = None,
         timestamp: Optional[Union[datetime, str]] = None,
     ) -> None:
-        """Append a log message.
+        """追加一条日志消息。
 
-        Existing callers may pass only ``message``. Explicit level calls can use
-        ``append_log(message, "warning")``; the demo-style
-        ``append_log("warning", message)`` order is accepted as well.
+        旧调用方可以只传 ``message``；显式级别可使用
+        ``append_log(message, "warning")``，同时兼容演示代码采用的
+        ``append_log("warning", message)`` 参数顺序。
         """
 
         if QThread.currentThread() != self.thread():
@@ -209,7 +209,7 @@ class LogsPage(QWidget):
         self._append_log_impl(message, level, timestamp)
 
     def append(self, message: object) -> None:
-        """Compatibility entry point for legacy QTextEdit-style callers."""
+        """兼容旧 ``QTextEdit`` 风格调用方的入口。"""
 
         self.append_log(message)
 
@@ -221,7 +221,7 @@ class LogsPage(QWidget):
     ) -> None:
         raw_message = str(message or "")
 
-        # Also accept append_log("warning", "message") for easy demo parity.
+        # 同时接受 ``append_log("warning", "message")``，与演示调用保持一致。
         first_as_level = self._normalize_level(raw_message)
         second_as_level = self._normalize_level(level)
         if level is not None and first_as_level and not second_as_level:
@@ -257,7 +257,7 @@ class LogsPage(QWidget):
         self._update_count_label()
 
     def clear_logs(self) -> None:
-        """Clear both the display and the retained export data."""
+        """同时清空显示内容和保留的导出数据。"""
 
         self._entries.clear()
         self._visible_count = 0
@@ -268,7 +268,7 @@ class LogsPage(QWidget):
         self.logs_cleared.emit()
 
     def copy_all(self) -> str:
-        """Copy all retained logs and return the copied text."""
+        """复制全部保留日志，并返回复制的文本。"""
 
         text = self._all_logs_text()
         clipboard = QApplication.clipboard()
@@ -279,10 +279,9 @@ class LogsPage(QWidget):
         return text
 
     def export_logs(self, file_path: Optional[Union[str, Path]] = None) -> Optional[str]:
-        """Export all retained logs to a UTF-8 text file.
+        """将全部保留日志导出为 UTF-8 文本文件。
 
-        Supplying ``file_path`` skips the file dialog, which is useful for
-        integration code and automated checks.
+        显式提供 ``file_path`` 时跳过文件对话框，便于集成代码和自动化检查调用。
         """
 
         interactive = not file_path
@@ -318,7 +317,7 @@ class LogsPage(QWidget):
         return resolved
 
     def set_level_filter(self, level: str) -> None:
-        """Select a filter programmatically."""
+        """通过程序选择筛选条件。"""
 
         normalized = self._normalize_level(level) or "all"
         index = self.level_filter.findData(normalized)
@@ -450,5 +449,5 @@ class LogsPage(QWidget):
         return datetime.now()
 
 
-# Singular spelling kept as a convenient import alias.
+# 保留单数形式，作为便于导入的别名。
 LogPage = LogsPage

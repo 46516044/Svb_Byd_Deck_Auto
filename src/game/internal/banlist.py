@@ -1,7 +1,6 @@
-"""Internal banlist / anti-abuse guard.
+"""内部禁用名单与防滥用保护。
 
-Banlist is intentionally hardcoded (not user-configurable). It can be toggled by
-config at `game.banlist_enabled`.
+名单刻意硬编码，不向用户开放编辑；可通过 ``game.banlist_enabled`` 配置开关。
 """
 
 from __future__ import annotations
@@ -9,10 +8,10 @@ from __future__ import annotations
 from typing import Any, Dict, List, Sequence, Tuple
 
 
-# Hardcoded card-name banlist. Empty means "no restrictions".
+# 硬编码卡名禁用名单；空集合表示不限制。
 _BANLIST_HAND_CARD_NAMES = frozenset(
     {
-        # Keep empty for now.
+# 当前暂时保持为空。
     }
 )
 
@@ -28,7 +27,7 @@ def should_block_play(
     hand_cards: Sequence[Dict[str, Any]] | None,
     config: Dict[str, Any] | None,
 ) -> Tuple[bool, List[str]]:
-    """Return (blocked, hit_card_names)."""
+    """返回是否阻止以及命中的卡名列表。"""
 
     if not is_banlist_enabled(config):
         return False, []

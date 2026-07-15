@@ -1,4 +1,4 @@
-"""Operation executors for Step3A effects."""
+"""Step3A 效果操作执行器。"""
 
 from __future__ import annotations
 
@@ -463,7 +463,7 @@ class OperationExecutor:
         except Exception:
             target_kind = ""
 
-        # Allow animations / target UI to settle.
+        # 等待动画或目标选择界面稳定。
         time.sleep(0.4)
 
         n = max(1, _safe_int(count, 1))

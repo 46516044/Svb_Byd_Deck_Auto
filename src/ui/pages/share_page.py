@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Share/apply deck page."""
+"""卡组分享与应用页面。"""
 
 from __future__ import annotations
 
@@ -58,12 +58,13 @@ from src.config.paths import get_card_cost_dir, get_config_path
 from src.config.config_repository import ConfigRepository
 from src.ui.common import get_exe_dir
 from src.ui.deck_io import (
+    DECK_SCHEMA_VERSION,
     apply_strategy_config,
     build_card_variant_index,
     build_card_source_index,
     extract_strategy_config,
     filter_non_evo_cards,
-    normalize_deck_cards,
+    serialize_deck_card_records,
     resolve_runtime_card_paths,
     save_deck_snapshot,
 )
@@ -177,7 +178,7 @@ class SharePage(QWidget):
         main_layout.addWidget(back_btn)
 
     def generate_share_code(self):
-        """生成分享码（旧格式：base64压缩）"""
+        """生成分享码（旧格式：Base64 压缩）。"""
         try:
             card_files = []
             card_dir = get_card_cost_dir(ensure=True)
@@ -188,7 +189,7 @@ class SharePage(QWidget):
                     if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
                 ]
             card_files = filter_non_evo_cards(card_files)
-            card_refs = normalize_deck_cards(card_files)
+            card_refs = serialize_deck_card_records(card_files)
 
             config_path = get_config_path()
             config_data = {}
@@ -206,7 +207,7 @@ class SharePage(QWidget):
             )
 
             share_data = {
-                "version": 3,
+                "version": DECK_SCHEMA_VERSION,
                 "cards": card_refs,
                 "strategy_config": strategy_config,
                 "timestamp": int(time.time()),
@@ -233,7 +234,7 @@ class SharePage(QWidget):
             QMessageBox.information(self, "成功", "分享码已复制到剪贴板！")
 
     def apply_share_code(self):
-        """应用分享码（兼容旧格式base64和新格式4位Hash短码）"""
+        """应用分享码，兼容旧 Base64 格式和新四位哈希短码。"""
         try:
             if getattr(self.parent, "is_script_running", lambda: False)():
                 QMessageBox.warning(
@@ -266,13 +267,13 @@ class SharePage(QWidget):
             self.parent.log_output.append(f"[分享] 应用分享码失败: {str(e)}")
 
     def _apply_old_format(self, share_code):
-        """应用旧格式分享码（base64压缩）"""
+        """应用 Base64 压缩的旧格式分享码。"""
         compressed = base64.b64decode(share_code.encode("ascii"))
         json_data = zlib.decompress(compressed).decode("utf-8")
         share_data = json.loads(json_data)
 
         version = share_data.get("version", 1)
-        if version not in [1, 2, 3]:
+        if version not in range(1, DECK_SCHEMA_VERSION + 1):
             raise ValueError("不支持的分享码版本")
 
         card_dir = get_card_cost_dir(ensure=True)
@@ -336,7 +337,7 @@ class SharePage(QWidget):
         return True
 
     def _apply_new_format(self, share_code):
-        """应用新格式分享码（4位Hash短码）"""
+        """应用四位哈希短码格式的分享码。"""
         shortcode_parts = share_code.split(".")
         if len(shortcode_parts) < 3:
             raise ValueError("分享码格式非法")

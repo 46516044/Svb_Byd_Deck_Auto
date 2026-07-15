@@ -1,7 +1,6 @@
-"""Effects registries (Trigger/Operation metadata) for Step3A.
+"""Step3A 使用的效果注册表，包含触发器与操作元数据。
 
-This module must stay lightweight because UI imports it.
-Do NOT import cv/u2/game modules here.
+界面层会直接导入本模块，因此必须保持轻量，禁止在此引入 cv、u2 或 game 模块。
 """
 
 from __future__ import annotations
