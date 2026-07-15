@@ -234,6 +234,7 @@ class DashboardPage(QWidget):
     stop_requested = pyqtSignal()
     screenshot_requested = pyqtSignal()
     navigate_requested = pyqtSignal(str)
+    disclaimer_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -245,7 +246,7 @@ class DashboardPage(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 22, 24, 24)
-        root.setSpacing(18)
+        root.setSpacing(14)
 
         title = QLabel("仪表盘")
         title.setObjectName("PageTitle")
@@ -406,6 +407,21 @@ class DashboardPage(QWidget):
         self.log_output.document().setMaximumBlockCount(1000)
         log_layout.addWidget(self.log_output)
         root.addWidget(log_panel, 1)
+
+        notice = QFrame()
+        notice.setObjectName("DisclaimerStrip")
+        notice_layout = QHBoxLayout(notice)
+        notice_layout.setContentsMargins(10, 2, 6, 2)
+        notice_layout.setSpacing(6)
+        notice_text = QLabel("免费工具 · 仅供个人学习研究 · 使用风险自负")
+        notice_text.setObjectName("DisclaimerNoticeText")
+        notice_layout.addWidget(notice_text)
+        notice_layout.addStretch()
+        self.disclaimer_button = QPushButton("查看详情")
+        self.disclaimer_button.setObjectName("LinkButton")
+        self.disclaimer_button.clicked.connect(self.disclaimer_requested)
+        notice_layout.addWidget(self.disclaimer_button)
+        root.addWidget(notice)
 
     @staticmethod
     def _section_title(text: str) -> QLabel:

@@ -11,6 +11,8 @@ try:
     project_root = os.path.abspath(os.path.dirname(__file__))
 except NameError:
     project_root = os.path.abspath(os.getcwd())
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # 主脚本文件
 main_script = os.path.join(project_root, 'main_ui.py')
@@ -38,10 +40,16 @@ for rel_path in model_files:
     if os.path.exists(src):
         datas.append((src, os.path.dirname(rel_path)))
 
-# 包含内部遮罩资源（不属于用户可自定义模板）
-hp_mask_file = os.path.join(project_root, 'src', 'masks', 'hp_mask.png')
-if os.path.exists(hp_mask_file):
-    datas.append((hp_mask_file, 'src/masks'))
+# 包含内部遮罩资源；源码未提供专用副本时，从现有模板目录选取回退文件。
+hp_mask_candidates = [
+    os.path.join(project_root, 'src', 'masks', 'hp_mask.png'),
+    os.path.join(project_root, 'templates_global', 'hp_mask.png'),
+    os.path.join(project_root, 'templates', 'hp_mask.png'),
+]
+for hp_mask_file in hp_mask_candidates:
+    if os.path.exists(hp_mask_file):
+        datas.append((hp_mask_file, 'src/masks'))
+        break
 
 # 包含uiautomator2的assets资源文件（兼容venv/conda）
 uiautomator2_assets_candidates = []
@@ -71,7 +79,7 @@ for u2_assets_dir in uiautomator2_assets_candidates:
         break
 
 # 包含必要的配置文件
-config_files = ['LICENSE', 'README.md', 'PACKAGING.md']
+config_files = ['LICENSE', 'README.md']
 for fname in config_files:
     fpath = os.path.join(project_root, fname)
     if os.path.exists(fpath):
@@ -84,7 +92,6 @@ excluded_dirs = [
     'templates',
     'templates_global',
     'card_cost',
-    'shadowverse_cards_cost',
 ]
 
 # 排除的配置文件（用户可自定义的配置文件，不打包进程序）
@@ -126,6 +133,14 @@ runtime_hooks = [
     os.path.join(project_root, 'pyi_rth_onnxruntime_dll.py'),
 ]
 
+# Analysis 期间部分 PyInstaller hook 会导入 ONNX Runtime，提前配置 DLL 搜索路径。
+try:
+    from src.utils.onnxruntime_dll import configure_onnxruntime_dll_search
+
+    configure_onnxruntime_dll_search()
+except Exception as exc:
+    print("警告: ONNX Runtime DLL 搜索路径配置失败: {}".format(exc))
+
 # 添加PyQt5插件
 pyqt5_plugin_dirs = []
 try:
@@ -134,22 +149,25 @@ try:
     
     # 查找插件目录
     possible_plugin_paths = [
+        os.path.join(pyqt5_path, 'Qt5', 'plugins'),
         os.path.join(pyqt5_path, 'Qt', 'plugins'),
         os.path.join(pyqt5_path, 'plugins'),
+        os.path.join(sys.prefix, 'Lib', 'site-packages', 'PyQt5', 'Qt5', 'plugins'),
         os.path.join(sys.prefix, 'Lib', 'site-packages', 'PyQt5', 'Qt', 'plugins'),
         os.path.join(sys.prefix, 'Lib', 'site-packages', 'PyQt5', 'plugins'),
+        os.path.join(venv_path, 'Lib', 'site-packages', 'PyQt5', 'Qt5', 'plugins'),
         os.path.join(venv_path, 'Lib', 'site-packages', 'PyQt5', 'Qt', 'plugins'),
         os.path.join(venv_path, 'Lib', 'site-packages', 'PyQt5', 'plugins')
     ]
     
     for plugin_root in possible_plugin_paths:
         if os.path.isdir(plugin_root):
+            qt_dir_name = os.path.basename(os.path.dirname(plugin_root))
             for name in ('platforms', 'imageformats'):
                 src = os.path.join(plugin_root, name)
                 if os.path.isdir(src):
-                    dest = os.path.join('PyQt5', 'Qt', 'plugins', name)
+                    dest = os.path.join('PyQt5', qt_dir_name, 'plugins', name)
                     datas.append((src, dest))
-                    break
             break
 
 except ImportError:
@@ -184,7 +202,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,  # 是否启用控制台窗口，因为程序需要获取用户输入以确认同意声明
+    console=False,  # GUI 版本通过 PyQt 对话框确认免责声明，无需控制台窗口。
     icon=os.path.join(project_root, 'app.ico') if os.path.exists(os.path.join(project_root, 'app.ico')) else None,
 )
 

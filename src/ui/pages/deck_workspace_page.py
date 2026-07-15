@@ -63,6 +63,8 @@ from src.ui.deck_io import (
 
 CARD_MIME = "application/x-svb-card-key"
 CUSTOM_DICT = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
+ACTIVE_DECK_STATE_VERSION = 1
+RUNTIME_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 
 
 def _decode_shortcode(shortcode: str) -> int:
@@ -1025,6 +1027,7 @@ class DeckWorkspacePage(QWidget):
             )
             self.current_deck_file = self.workspace_deck_file
             self._workspace_is_applied = True
+            self._persist_active_deck_snapshot()
             self._notify_related_pages()
             self._emit_active_deck()
             self._log(
@@ -1146,6 +1149,179 @@ class DeckWorkspacePage(QWidget):
 
         return copied, []
 
+    @staticmethod
+    def _runtime_template_names(card_dir: str) -> List[str]:
+        if not os.path.isdir(card_dir):
+            return []
+        return sorted(
+            filename
+            for filename in os.listdir(card_dir)
+            if os.path.isfile(os.path.join(card_dir, filename))
+            and filename.casefold().endswith(RUNTIME_IMAGE_EXTENSIONS)
+        )
+
+    def _persist_active_deck_snapshot(self) -> bool:
+        """保存只供界面重启恢复使用的已应用卡组快照。"""
+
+        card_dir = get_card_cost_dir(ensure=False)
+        payload = {
+            "version": ACTIVE_DECK_STATE_VERSION,
+            "deck_schema_version": DECK_SCHEMA_VERSION,
+            "name": self.deck_name_input.text().strip() or "未命名卡组",
+            "cards": self._deck_card_records(),
+            "derived_cards": self._derived_card_records(),
+            "deck_file": self.workspace_deck_file,
+            "runtime_templates": self._runtime_template_names(card_dir),
+        }
+        result = ConfigRepository(get_config_path()).update(
+            {"ui": {"active_deck_snapshot": payload}},
+            refuse_on_parse_error=True,
+            indent=4,
+            ensure_ascii=False,
+        )
+        if not result.ok:
+            self._log(f"[卡组] 界面恢复快照保存失败: {result.error or '未知错误'}")
+        return bool(result.ok)
+
+    def _restore_active_deck_snapshot(self, card_dir: str) -> bool:
+        """在运行模板未变化时恢复主卡数量与衍生物分区。"""
+
+        config, _, _error = ConfigRepository(get_config_path()).load_existing(
+            allow_default_on_error=False
+        )
+        if not isinstance(config, dict):
+            return False
+        ui_config = config.get("ui", {})
+        snapshot = (
+            ui_config.get("active_deck_snapshot", {})
+            if isinstance(ui_config, dict)
+            else {}
+        )
+        if not isinstance(snapshot, dict) or int(snapshot.get("version", 0) or 0) != ACTIVE_DECK_STATE_VERSION:
+            return False
+
+        expected_templates = sorted(
+            os.path.basename(str(filename)).casefold()
+            for filename in list(snapshot.get("runtime_templates") or [])
+            if str(filename or "").strip()
+        )
+        actual_templates = sorted(
+            filename.casefold() for filename in self._runtime_template_names(card_dir)
+        )
+        if not expected_templates or expected_templates != actual_templates:
+            return False
+
+        entries, counts, missing = self._entries_from_references(
+            snapshot.get("cards") or []
+        )
+        derived_entries, missing_derived = self._derived_entries_from_references(
+            snapshot.get("derived_cards") or []
+        )
+        if not entries or missing or missing_derived:
+            return False
+
+        deck_file = str(snapshot.get("deck_file") or "").strip()
+        self.workspace_deck_file = os.path.basename(deck_file) if deck_file else None
+        self.current_deck_file = self.workspace_deck_file
+        self.strategy_config = self._current_config_strategy(entries)
+        self._workspace_is_applied = True
+        self.deck_name_input.setText(
+            str(snapshot.get("name") or "未命名卡组")
+        )
+        self._set_selected_entries(entries, counts)
+        self._set_derived_entries(derived_entries)
+        return True
+
+    def _runtime_names_for_entries(
+        self,
+        entries: Iterable[CardEntry],
+        *,
+        exact_index=None,
+        stem_index=None,
+        variant_index=None,
+    ) -> set[str]:
+        if exact_index is None or stem_index is None:
+            exact_index, stem_index = build_card_source_index(self.resource_root)
+        if variant_index is None:
+            variant_index = build_card_variant_index(self.resource_root)
+        names: set[str] = set()
+        for entry in entries:
+            paths = resolve_runtime_card_paths(
+                self.resource_root,
+                entry.filename,
+                exact_index=exact_index,
+                stem_index=stem_index,
+                variant_index=variant_index,
+            )
+            if not paths:
+                return set()
+            names.update(os.path.basename(path).casefold() for path in paths)
+        return names
+
+    def _restore_matching_saved_deck(self, card_dir: str) -> bool:
+        """旧版本没有快照时，按运行模板唯一匹配一个已保存卡组。"""
+
+        actual_templates = {
+            filename.casefold() for filename in self._runtime_template_names(card_dir)
+        }
+        if not actual_templates:
+            return False
+        decks_dir = os.path.join(get_app_root(), "saved_decks")
+        if not os.path.isdir(decks_dir):
+            return False
+
+        exact_index, stem_index = build_card_source_index(self.resource_root)
+        variant_index = build_card_variant_index(self.resource_root)
+        matches = []
+        for filename in sorted(os.listdir(decks_dir)):
+            if not filename.casefold().endswith(".json"):
+                continue
+            path = os.path.join(decks_dir, filename)
+            try:
+                with open(path, "r", encoding="utf-8-sig") as stream:
+                    data = json.load(stream)
+                if not isinstance(data, dict):
+                    continue
+                entries, counts, missing = self._entries_from_references(
+                    data.get("cards") or []
+                )
+                derived_entries, missing_derived = self._derived_entries_from_references(
+                    data.get("derived_cards") or []
+                )
+                if not entries or missing or missing_derived:
+                    continue
+                unique_entries = {
+                    entry.key: entry
+                    for entry in (*entries, *derived_entries)
+                }
+                expected_templates = self._runtime_names_for_entries(
+                    unique_entries.values(),
+                    exact_index=exact_index,
+                    stem_index=stem_index,
+                    variant_index=variant_index,
+                )
+                if expected_templates == actual_templates:
+                    matches.append(
+                        (filename, data, entries, counts, derived_entries)
+                    )
+            except Exception:
+                continue
+
+        if len(matches) != 1:
+            return False
+        filename, data, entries, counts, derived_entries = matches[0]
+        self.workspace_deck_file = filename
+        self.current_deck_file = filename
+        self.strategy_config = self._current_config_strategy(entries)
+        self._workspace_is_applied = True
+        self.deck_name_input.setText(
+            str(data.get("name") or os.path.splitext(filename)[0])
+        )
+        self._set_selected_entries(entries, counts)
+        self._set_derived_entries(derived_entries)
+        self._persist_active_deck_snapshot()
+        return True
+
     def load_deck(self) -> None:
         card_dir = get_card_cost_dir(ensure=False)
         if not os.path.isdir(card_dir):
@@ -1154,6 +1330,10 @@ class DeckWorkspacePage(QWidget):
             self._workspace_is_applied = True
             self._set_selected_entries([])
             self._set_derived_entries([])
+            return
+        if self._restore_active_deck_snapshot(card_dir):
+            return
+        if self._restore_matching_saved_deck(card_dir):
             return
         entries: List[CardEntry] = []
         for filename in filter_non_evo_cards(os.listdir(card_dir)):

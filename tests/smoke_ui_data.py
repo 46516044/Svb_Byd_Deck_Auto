@@ -23,6 +23,7 @@ from src.ui.deck_io import (
 )
 from src.ui.statistics import load_statistics
 import src.ui.statistics as statistics_module
+import src.utils.consent_utils as consent_module
 from src.utils.card_filename import normalize_card_base_name, parse_card_filename
 
 
@@ -77,6 +78,35 @@ def test_background_config_is_persisted() -> None:
         loaded, parse_ok, error = ConfigRepository(str(config_path)).load_existing()
         assert parse_ok, error
         assert loaded["ui"]["custom_background"] == expected
+
+
+def test_disclaimer_consent_is_versioned() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = Path(temp_dir) / "config.json"
+        consent_path = Path(temp_dir) / "consent.txt"
+        consent_path.write_text("用户已同意免责声明\n", encoding="utf-8")
+        original_get_app_root = consent_module.get_app_root
+        original_get_config_path = consent_module.get_config_path
+        original_cwd = os.getcwd()
+        try:
+            consent_module.get_app_root = lambda: temp_dir
+            consent_module.get_config_path = lambda: str(config_path)
+            os.chdir(temp_dir)
+            assert consent_module.check_consent_file() is False
+            assert consent_module.save_consent(persist_to_config=True)
+            assert consent_module.check_consent_file() is True
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            assert payload["agreed_to_disclaimer"] is True
+            assert payload["disclaimer_version"] == consent_module.DISCLAIMER_VERSION
+            assert consent_module.remove_consent()
+            assert consent_module.check_consent_file() is False
+            consent_module.accept_consent_for_session()
+            assert consent_module.check_consent_file() is True
+            assert consent_module.remove_consent()
+        finally:
+            os.chdir(original_cwd)
+            consent_module.get_app_root = original_get_app_root
+            consent_module.get_config_path = original_get_config_path
 
 
 def test_deck_snapshot_saves_card_ids_and_counts() -> None:
@@ -265,6 +295,7 @@ if __name__ == "__main__":
     test_card_catalog_contract()
     test_background_path_round_trip()
     test_background_config_is_persisted()
+    test_disclaimer_consent_is_versioned()
     test_deck_snapshot_saves_card_ids_and_counts()
     test_deck_card_records_accept_legacy_and_structured_entries()
     test_deck_snapshot_rejects_more_than_three_copies()

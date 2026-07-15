@@ -98,6 +98,20 @@ QLabel#FooterDot[active="true"] {
     color: #a6e3a1;
 }
 
+QPushButton#SidebarAboutButton {
+    min-height: 28px;
+    padding: 0 4px;
+    color: #9399b2;
+    background: transparent;
+    border: 0;
+    text-align: left;
+}
+
+QPushButton#SidebarAboutButton:hover {
+    color: #cdd6f4;
+    background-color: #282838;
+}
+
 QFrame[card="true"], QFrame#SurfacePanel, QFrame#MetricCard, QGroupBox {
     background-color: #282838;
     border: 1px solid #3a3a4a;
@@ -150,6 +164,56 @@ QLabel#DeviceDot[connected="true"] { color: #a6e3a1; }
 QLabel[status="success"] { color: #a6e3a1; }
 QLabel[status="warning"] { color: #f9e2af; }
 QLabel[status="error"] { color: #f38ba8; }
+
+QLabel#DisclaimerTitle {
+    color: #f38ba8;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+QFrame#DisclaimerRiskPanel {
+    background-color: #30242d;
+    border: 1px solid #5b3948;
+    border-radius: 6px;
+}
+
+QScrollArea#DisclaimerScroll,
+QScrollArea#DisclaimerScroll QWidget#qt_scrollarea_viewport,
+QWidget#DisclaimerContent {
+    background-color: #1e1e2e;
+    border: 0;
+}
+
+QLabel#DisclaimerRiskText {
+    color: #cdd6f4;
+    font-size: 14px;
+}
+
+QFrame#CommunityRow {
+    background-color: #242434;
+    border-bottom: 1px solid #3a3a4a;
+}
+
+QLabel#CommunityNumber {
+    color: #89b4fa;
+    font-family: Consolas, "Microsoft YaHei UI", monospace;
+    font-weight: 600;
+}
+
+QLabel#DisclaimerVersion {
+    color: #6c7086;
+    font-size: 10px;
+}
+
+QFrame#DisclaimerStrip {
+    background: transparent;
+    border-top: 1px solid #3a3a4a;
+}
+
+QLabel#DisclaimerNoticeText {
+    color: #9399b2;
+    font-size: 11px;
+}
 
 QPushButton, QToolButton {
     min-height: 30px;

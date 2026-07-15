@@ -143,11 +143,15 @@ Svb_Byd_Deck_Auto/
 1. 安装运行与构建依赖：
 
    ```powershell
-   pip install -r requirements-py311.lock
-   pip install -r requirements-build.in
+   .venv\Scripts\python.exe -m pip install -r requirements-py311.lock
+   .venv\Scripts\python.exe -m pip install -r requirements-build.in
    ```
 
-2. 根据当前发布配置执行 PyInstaller 打包。
+2. 执行打包脚本；脚本会使用项目虚拟环境并在完成后复制外部资源目录。
+
+   ```powershell
+   .\build.ps1
+   ```
 
 3. 打包完成后，检查产物是否包含模型文件、模板目录、图标和必要的运行时 DLL。
 

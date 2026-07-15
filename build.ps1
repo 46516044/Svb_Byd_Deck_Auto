@@ -12,32 +12,47 @@ param(
 
 # 设置控制台编码
 $OutputEncoding = [console]::InputEncoding = [console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+Push-Location -LiteralPath $PSScriptRoot
+
+$expectedDistName = "Svb_Byd_Deck_Auto"
+$distName = Split-Path -Leaf $DistDir
+$distParent = Split-Path -Parent $DistDir
+if (-not $distParent) {
+    $distParent = "."
+}
+if ($distName -ne $expectedDistName) {
+    Write-Host "错误: DistDir 最后一层必须为 $expectedDistName" -ForegroundColor Red
+    Pop-Location
+    exit 1
+}
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  影之诗自动对战脚本 - 打包脚本" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 检查虚拟环境是否存在
-$venvPath = ".venv\Scripts\activate"
-if (-not (Test-Path $venvPath)) {
-    Write-Host "错误: 虚拟环境不存在 - $venvPath" -ForegroundColor Red
+# 检查项目虚拟环境及打包工具
+$pythonPath = ".venv\Scripts\python.exe"
+if (-not (Test-Path $pythonPath)) {
+    Write-Host "错误: 虚拟环境不存在 - $pythonPath" -ForegroundColor Red
     Read-Host "按回车键退出..."
+    Pop-Location
     exit 1
 }
 
-# 进入虚拟环境
-Write-Host "[1/3] 激活虚拟环境..." -ForegroundColor Yellow
+# 检查 PyInstaller，不依赖当前 PowerShell 是否已激活虚拟环境
+Write-Host "[1/3] 检查打包环境..." -ForegroundColor Yellow
 try {
-    & $venvPath
-    if (-not $?) {
-        throw "激活虚拟环境失败"
+    & $pythonPath -c "import PyInstaller" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "缺少 PyInstaller，请先运行：.venv\Scripts\python.exe -m pip install -r requirements-build.in"
     }
-    Write-Host "虚拟环境已激活" -ForegroundColor Green
+    Write-Host "打包环境可用" -ForegroundColor Green
 }
 catch {
     Write-Host "错误: $_" -ForegroundColor Red
     Read-Host "按回车键退出..."
+    Pop-Location
     exit 1
 }
 
@@ -45,8 +60,8 @@ catch {
 Write-Host ""
 Write-Host "[2/3] 执行 PyInstaller 打包..." -ForegroundColor Yellow
 try {
-    pyinstaller main.spec
-    if (-not $?) {
+    & $pythonPath -m PyInstaller --noconfirm --clean --distpath $distParent main.spec
+    if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller 执行失败"
     }
     Write-Host "打包完成" -ForegroundColor Green
@@ -54,6 +69,7 @@ try {
 catch {
     Write-Host "错误: $_" -ForegroundColor Red
     Read-Host "按回车键退出..."
+    Pop-Location
     exit 1
 }
 
@@ -67,7 +83,6 @@ $requiredDirs = @(
     "templates",
     "templates_global",
     "card_cost",
-    "shadowverse_cards_cost",
     "说明文档（必看）"
 )
 
@@ -95,4 +110,5 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  打包完成!" -ForegroundColor Green
 Write-Host "  可执行文件位置: $DistDir\Svb_Byd_Deck_Auto.exe" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
+Pop-Location
 Read-Host "按回车键退出..."

@@ -230,7 +230,9 @@ def run_gui(argv: Optional[list[str]] = None) -> int:
 
     from PyQt5.QtWidgets import QApplication
 
+    from src.ui.disclaimer import request_startup_disclaimer
     from src.ui.main_window import ShadowverseUI
+    from src.ui.theme import apply_theme
 
     command_queue: "queue.Queue[str]" = queue.Queue()
     log_queue: "queue.Queue[str]" = queue.Queue()
@@ -248,6 +250,10 @@ def run_gui(argv: Optional[list[str]] = None) -> int:
         )
 
     app = QApplication(argv if argv is not None else _sys.argv)
+    apply_theme(app)
+    if not request_startup_disclaimer():
+        return 0
+
     window = ShadowverseUI(run_main_script, command_queue, log_queue)
     window.show()
     return int(app.exec_())

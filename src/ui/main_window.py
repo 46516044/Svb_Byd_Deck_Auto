@@ -15,7 +15,6 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QButtonGroup,
-    QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -35,6 +34,7 @@ from src.ui.app_state import AppState
 from src.ui.background import BackgroundWidget, resolve_background_path
 from src.ui.common import deep_update_dict
 from src.ui.deck_store import DeckStore
+from src.ui.disclaimer import show_disclaimer_dialog
 from src.ui.pages.card_priority_page import CardPriorityPage
 from src.ui.pages.config_page import ConfigPage
 from src.ui.pages.dashboard_page import DashboardPage
@@ -44,7 +44,6 @@ from src.ui.pages.statistics_page import StatisticsPage
 from src.ui.theme import apply_theme
 from src.ui.workers.log_listener import LogListener
 from src.ui.workers.script_runner import ScriptRunner
-from src.utils.consent_utils import check_consent_file, save_consent
 
 
 class DeviceConnectionChecker(QThread):
@@ -185,9 +184,6 @@ class ShadowverseUI(QMainWindow):
         self._close_pending = False
         self._close_deadline = 0.0
 
-        if not self.show_startup_dialog():
-            raise SystemExit(0)
-
         app = QApplication.instance()
         if app is not None:
             apply_theme(app)
@@ -212,28 +208,10 @@ class ShadowverseUI(QMainWindow):
         self.log_listener.log_signal.connect(self.append_log)
         self.log_listener.start()
 
-    def show_startup_dialog(self) -> bool:
-        if check_consent_file():
-            return True
+    def show_about_disclaimer(self) -> None:
+        """从主界面随时重新打开免责声明和交流群信息。"""
 
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("免责声明")
-        dialog.setIcon(QMessageBox.Warning)
-        dialog.setTextFormat(Qt.RichText)
-        dialog.setText(
-            "<b>本工具仅供个人学习研究使用，禁止商业倒卖。</b><br><br>"
-            "使用自动化工具可能违反游戏用户协议并导致账号风险。开发者不对使用后果承担责任。"
-        )
-        remember = QCheckBox("同意后不再显示")
-        remember.setChecked(True)
-        dialog.setCheckBox(remember)
-        dialog.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        dialog.button(QMessageBox.Yes).setText("同意")
-        dialog.button(QMessageBox.No).setText("退出")
-        accepted = dialog.exec_() == QMessageBox.Yes
-        if accepted:
-            save_consent(persist_to_config=remember.isChecked())
-        return accepted
+        show_disclaimer_dialog(self, require_acceptance=False)
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Shadowverse Auto Control Center")
@@ -284,6 +262,7 @@ class ShadowverseUI(QMainWindow):
         self.dashboard_page.stop_requested.connect(self.stop_script)
         self.dashboard_page.screenshot_requested.connect(self.show_screenshot_preview)
         self.dashboard_page.navigate_requested.connect(self.navigate)
+        self.dashboard_page.disclaimer_requested.connect(self.show_about_disclaimer)
         self.deck_workspace_page.log_requested.connect(self.append_log)
         self.deck_workspace_page.active_deck_changed.connect(self.state.set_active_deck)
         self.navigate("dashboard")
@@ -343,15 +322,25 @@ class ShadowverseUI(QMainWindow):
 
         footer = QFrame()
         footer.setObjectName("SidebarFooter")
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(14, 12, 14, 12)
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(10, 8, 10, 9)
+        footer_layout.setSpacing(5)
+        self.about_button = QPushButton("关于与免责声明")
+        self.about_button.setObjectName("SidebarAboutButton")
+        self.about_button.setToolTip("查看使用风险、免费发布声明和交流群信息")
+        self.about_button.clicked.connect(self.show_about_disclaimer)
+        footer_layout.addWidget(self.about_button)
+
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(4, 0, 4, 0)
         self.footer_dot = QLabel("●")
         self.footer_dot.setObjectName("FooterDot")
         self.footer_status = QLabel("服务待命")
         self.footer_status.setObjectName("BrandSubtitle")
-        footer_layout.addWidget(self.footer_dot)
-        footer_layout.addWidget(self.footer_status)
-        footer_layout.addStretch()
+        status_row.addWidget(self.footer_dot)
+        status_row.addWidget(self.footer_status)
+        status_row.addStretch()
+        footer_layout.addLayout(status_row)
         layout.addWidget(footer)
         return sidebar
 
