@@ -159,7 +159,7 @@ Svb_Byd_Deck_Auto/
 1. **国际服深色模式**：MuMu 模拟器运行国际服时可能出现画面过暗问题，导致模板识别失败，可尝试开启深色识别选项
 2. **画面分辨率**：当前仅支持 1280x720 分辨率，请确保模拟器分辨率设置正确
 3. **场地选择**：建议使用黑色背景场地，避免使用简易场地，否则识别错误率可能上升
-4. **DLL 加载冲突**：部分 Windows 环境可能存在系统级 `onnxruntime.dll`，源码入口已优先加载当前虚拟环境中的 ONNX Runtime DLL
+4. **MNIST 运行时**：HP 数字兜底识别已改用 OpenCV DNN 读取 `models/mnist_adv.onnx`，不再依赖 ONNX Runtime 原生 DLL
 
 ## TODO
 
