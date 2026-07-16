@@ -282,44 +282,41 @@ def predict_digit_easyocr(reader, digit_28x28):
         return "error"
 
 
-def predict_digit_mnist(session, digit_28x28):
+def load_mnist_model(model_path):
+    """使用 OpenCV DNN 加载 MNIST ONNX 模型。"""
+    return cv2.dnn.readNetFromONNX(model_path)
+
+
+def predict_digit_mnist(model, digit_28x28):
     """
     使用MNIST ONNX模型预测单个数字
 
     参数：
-        session: ONNX推理会话
+        model: OpenCV DNN 网络
         digit_28x28: 28x28灰度图像
 
     返回：
         预测的数字（0-9），失败时返回-1
     """
-    if session is None:
+    if model is None:
         return -1
 
     try:
-        input_shape = session.get_inputs()[0].shape
-        input_name = session.get_inputs()[0].name
-        output_name = session.get_outputs()[0].name
-
         x = digit_28x28.astype(np.float32) / 255.0
-
-        if len(input_shape) == 2:
-            x = x.reshape(1, 784)
-        elif len(input_shape) == 4:
-            x = np.expand_dims(np.expand_dims(x, axis=0), axis=0)
-        else:
-            logger.warning(f"Unexpected MNIST input shape: {input_shape}")
+        if x.shape != (28, 28):
+            logger.warning(f"Unexpected MNIST input shape: {x.shape}")
             return -1
 
-        result = session.run([output_name], {input_name: x})
-        prediction = int(np.argmax(result[0]))
+        model.setInput(x.reshape(1, 1, 28, 28))
+        result = model.forward()
+        prediction = int(np.argmax(result))
         return prediction
     except Exception as e:
         logger.error(f"MNIST prediction failed: {e}")
         return -1
 
 
-def recognize_hp_with_fallback(digit_list, easyocr_reader, mnist_session):
+def recognize_hp_with_fallback(digit_list, easyocr_reader, mnist_model):
     """
     使用按数字回退策略识别HP数字：
     - 首先对每个数字尝试EasyOCR（带净化）
@@ -329,7 +326,7 @@ def recognize_hp_with_fallback(digit_list, easyocr_reader, mnist_session):
     参数：
         digit_list: 28x28灰度图像列表（1或2个数字）
         easyocr_reader: EasyOCR Reader实例（或None）
-        mnist_session: ONNX推理会话（或None）
+        mnist_model: OpenCV DNN 网络（或None）
 
     返回：
         HP值字符串（例如"5"，"12"），全部失败时返回"?"
@@ -345,7 +342,7 @@ def recognize_hp_with_fallback(digit_list, easyocr_reader, mnist_session):
             final_digits.append(easyocr_pred)
         else:
         # EasyOCR 失败时回退到 MNIST。
-            mnist_pred = predict_digit_mnist(mnist_session, digit_img)
+            mnist_pred = predict_digit_mnist(mnist_model, digit_img)
             if mnist_pred >= 0:
                 final_digits.append(str(mnist_pred))
             else:

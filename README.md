@@ -108,7 +108,6 @@
 Svb_Byd_Deck_Auto/
 ├── main.py                    # CLI 入口
 ├── main_ui.py                 # GUI 入口
-├── pyi_rth_onnxruntime_dll.py # PyInstaller 运行时 DLL 加载辅助
 ├── src/                       # 核心源码目录
 │   ├── app/                   # 应用启动与组合入口
 │   ├── config/                # 配置管理、路径与策略配置

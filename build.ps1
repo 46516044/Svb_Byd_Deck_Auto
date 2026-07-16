@@ -41,7 +41,7 @@ if (-not (Test-Path $pythonPath)) {
 }
 
 # 检查 PyInstaller，不依赖当前 PowerShell 是否已激活虚拟环境
-Write-Host "[1/3] 检查打包环境..." -ForegroundColor Yellow
+Write-Host "[1/4] 检查打包环境..." -ForegroundColor Yellow
 try {
     & $pythonPath -c "import PyInstaller" 2>$null
     if ($LASTEXITCODE -ne 0) {
@@ -58,7 +58,7 @@ catch {
 
 # 执行打包
 Write-Host ""
-Write-Host "[2/3] 执行 PyInstaller 打包..." -ForegroundColor Yellow
+Write-Host "[2/4] 执行 PyInstaller 打包..." -ForegroundColor Yellow
 try {
     & $pythonPath -m PyInstaller --noconfirm --clean --distpath $distParent main.spec
     if ($LASTEXITCODE -ne 0) {
@@ -75,7 +75,7 @@ catch {
 
 # 复制资源目录到 dist 目录
 Write-Host ""
-Write-Host "[3/3] 复制资源目录..." -ForegroundColor Yellow
+Write-Host "[3/4] 复制资源目录..." -ForegroundColor Yellow
 
 $requiredDirs = @(
     "quanka\SV_WB_Cards",
@@ -104,6 +104,41 @@ foreach ($dir in $requiredDirs) {
         Write-Host "警告: $dir 目录不存在" -ForegroundColor Yellow
     }
 }
+
+Write-Host ""
+Write-Host "[4/4] 验证 MNIST 运行时..." -ForegroundColor Yellow
+
+$internalDir = Join-Path $DistDir "_internal"
+$forbiddenOrtNames = @(
+    "onnxruntime.dll",
+    "onnxruntime_providers_shared.dll",
+    "onnxruntime_pybind11_state.pyd"
+)
+$forbiddenOrtFiles = @(
+    Get-ChildItem -LiteralPath $internalDir -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $forbiddenOrtNames -contains $_.Name }
+)
+if ($forbiddenOrtFiles.Count -gt 0) {
+    Write-Host "错误: 发布目录仍包含 ONNX Runtime 原生文件:" -ForegroundColor Red
+    $forbiddenOrtFiles | ForEach-Object { Write-Host "  $($_.FullName)" -ForegroundColor Red }
+    Pop-Location
+    exit 1
+}
+
+$distMnistModel = Join-Path $internalDir "models\mnist_adv.onnx"
+if (-not (Test-Path -LiteralPath $distMnistModel -PathType Leaf)) {
+    Write-Host "错误: 发布目录缺少 MNIST 模型 - $distMnistModel" -ForegroundColor Red
+    Pop-Location
+    exit 1
+}
+
+& $pythonPath -c "import cv2, sys; cv2.dnn.readNetFromONNX(sys.argv[1])" $distMnistModel
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "错误: OpenCV 无法读取发布目录中的 MNIST 模型" -ForegroundColor Red
+    Pop-Location
+    exit 1
+}
+Write-Host "MNIST 运行时验证通过，发布目录未包含 ONNX Runtime 原生 DLL" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan

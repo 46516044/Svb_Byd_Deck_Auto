@@ -25,6 +25,7 @@ from src.utils.card_filename import (
 from src.utils.hp_detection import (
     sliding_window_detect,
     merge_detections,
+    load_mnist_model,
     recognize_hp_with_fallback,
 )
 from src.utils.mnist_preprocessor import MNISTPreprocessor
@@ -78,9 +79,8 @@ class GameManager:
             mnist_path = resource_path(mnist_path)
         if os.path.exists(mnist_path):
             try:
-                import onnxruntime
-                self.mnist_session = onnxruntime.InferenceSession(mnist_path, providers=["CPUExecutionProvider"])
-                logger.info(f"MNIST模型已加载: {mnist_path}")
+                self.mnist_session = load_mnist_model(mnist_path)
+                logger.info(f"MNIST模型已加载(OpenCV DNN): {mnist_path}")
             except Exception as e:
                 logger.warning(f"加载MNIST模型失败: {e}，将仅使用EasyOCR")
         else:

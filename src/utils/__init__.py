@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-# 此处避免使用 ``import *``。许多工具依赖 cv2、onnx、torch 等可选重量级模块，
+# 此处避免使用 ``import *``。许多工具依赖 cv2、torch 等重量级模块，
 # 在包导入阶段提前加载会拖慢启动，并可能触发副作用。
 
 __all__ = [

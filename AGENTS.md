@@ -9,7 +9,7 @@
 
 ## 入口与架构
 - `main_ui.py` 和 `main.py` 都是薄入口；启动编排集中在 `src/app/bootstrap.py`。
-- 源码入口会先调用 `src/utils/onnxruntime_dll.py`，在 Windows 下优先把当前 Python 环境的 `onnxruntime/capi` DLL 目录加入搜索路径。
+- HP 的 MNIST 兜底识别通过 OpenCV DNN 读取 `models/mnist_adv.onnx`，不依赖 ONNX Runtime 原生 DLL。
 - 主要边界：`src/ui` 界面与工作线程，`src/device` 设备管理，`src/game` 战斗/效果/策略，`src/config` 配置与持久化，`src/core` 通用 IO/日志。
 - UI 页面在 `src/ui/pages/`；卡牌效果引擎相关实现集中在 `src/game/effects/`、`src/game/policy/`，配套文档见 `docs/effects_user_manual.md` 与 `docs/effects_developer_manual.md`。
 
@@ -21,7 +21,7 @@
 
 ## 打包注意
 - `main.spec` 的 PyInstaller 入口是 `main_ui.py`。
-- 打包会包含 `models/craft_mlt_25k.pth`、`models/english_g2.pth`、`models/mnist_adv.onnx`、`src/masks/hp_mask.png`、`uiautomator2/assets`、PyQt5 插件和运行 hook `pyi_rth_onnxruntime_dll.py`。
+- 打包会包含 `models/craft_mlt_25k.pth`、`models/english_g2.pth`、`models/mnist_adv.onnx`、`src/masks/hp_mask.png`、`uiautomator2/assets` 和 PyQt5 插件；`main.spec` 必须排除 `onnxruntime`。
 - 打包刻意不内置用户可改资源：`config.json`、`templates/`、`templates_global/`、`card_cost/`、`shadowverse_cards_cost/`、`quanka/`、`Image/`；发布后这些目录需与 exe 同级提供。
 
 ## 项目约束

@@ -20,10 +20,8 @@ main_script = os.path.join(project_root, 'main_ui.py')
 # 设置虚拟环境路径（根据实际情况调整）
 venv_path = os.path.join(project_root, '.venv')
 if os.path.exists(venv_path):
-    # 添加虚拟环境的site-packages到路径
+    # 仅用于定位随包资源；打包脚本本身必须由该虚拟环境运行。
     site_packages = os.path.join(venv_path, 'Lib', 'site-packages')
-    if os.path.exists(site_packages):
-        sys.path.insert(0, site_packages)
 
 # 数据文件 - 只包含必要的运行时资源
 # 特别注意：排除quanka、Image、templates、templates_global等配置文件目录
@@ -106,40 +104,14 @@ hiddenimports = [
     'easyocr',
     'torch',
     'torchvision',
-    'onnxruntime',
     'src.utils.card_swap_strategy_enhanced',
     'src.config.card_priorities',
 ]
 
 binaries = []
-excludes = []
-
-# 优先使用构建环境中的 VC 运行库 DLL，以提高 ORT 稳定性。
-preferred_vc_dlls = [
-    'msvcp140.dll',
-    'vcruntime140.dll',
-    'vcruntime140_1.dll',
+excludes = [
+    'onnxruntime',
 ]
-for dll_name in preferred_vc_dlls:
-    for cand in (
-        os.path.join(sys.prefix, dll_name),
-        os.path.join(sys.prefix, 'Library', 'bin', dll_name),
-    ):
-        if os.path.exists(cand):
-            binaries.append((cand, '.'))
-            break
-
-runtime_hooks = [
-    os.path.join(project_root, 'pyi_rth_onnxruntime_dll.py'),
-]
-
-# Analysis 期间部分 PyInstaller hook 会导入 ONNX Runtime，提前配置 DLL 搜索路径。
-try:
-    from src.utils.onnxruntime_dll import configure_onnxruntime_dll_search
-
-    configure_onnxruntime_dll_search()
-except Exception as exc:
-    print("警告: ONNX Runtime DLL 搜索路径配置失败: {}".format(exc))
 
 # 添加PyQt5插件
 pyqt5_plugin_dirs = []
@@ -176,12 +148,12 @@ except ImportError:
 # 分析阶段
 a = Analysis(
     [main_script],
-    pathex=[project_root, site_packages] if 'site_packages' in locals() else [project_root],
+    pathex=[project_root],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    runtime_hooks=runtime_hooks,
+    runtime_hooks=[],
     excludes=excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -214,11 +186,7 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[
-        'onnxruntime.dll',
-        'onnxruntime_providers_shared.dll',
-        'onnxruntime_pybind11_state.pyd',
-    ],
+    upx_exclude=[],
     name='Svb_Byd_Deck_Auto',
 )
 
