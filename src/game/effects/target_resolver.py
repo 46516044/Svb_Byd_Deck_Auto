@@ -1,6 +1,6 @@
-"""Target resolving for Step3A `select_targets` operation.
+"""Step3A ``select_targets`` 操作的目标解析器。
 
-This module is runtime-only (allowed to call cv/u2/game managers).
+本模块仅供运行时使用，允许调用 cv、u2 与游戏管理器。
 """
 
 from __future__ import annotations
@@ -323,7 +323,7 @@ def resolve_targets(
     distinct_xy: bool = True,
     is_select_ui: bool = True,
 ) -> List[Tuple[int, int]]:
-    """Resolve a TargetSpec dict into click positions."""
+    """将 ``TargetSpec`` 字典解析为点击位置。"""
 
     ds = getattr(ctx, "device_state", None)
     if ds is None:

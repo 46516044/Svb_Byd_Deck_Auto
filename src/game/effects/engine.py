@@ -1,4 +1,4 @@
-"""EffectEngine: execute Step3A operations at runtime."""
+"""效果引擎：在运行时执行 Step3A 操作。"""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ class EffectEngine:
                 ok = EffectEngine._execute_one(op_id, step, ctx)
                 if ok:
                     continue
-                # Treat False as a failure (but not an exception).
+            # 返回 ``False`` 视为失败，但不当作异常。
                 raise RuntimeError(f"op returned false: {op_id}")
             except Exception as e:
                 msg = f"{op_id} failed: {e}"
@@ -84,9 +84,9 @@ class EffectEngine:
                         OperationExecutor.cancel_action(ctx)
                     except Exception:
                         pass
-                    # Continue by default.
+        # 默认继续执行后续步骤。
                     continue
-                # default: skip_step
+        # 默认失败策略为跳过当前步骤。
                 continue
 
         ok = not aborted
@@ -145,7 +145,7 @@ class EffectEngine:
                 atk_delta=step.get("atk_delta", 1),
                 hp_delta=step.get("hp_delta", 1),
             )
-            # Backward compatibility: legacy buff step may contain attack_times.
+            # 兼容旧 ``buff`` 步骤中混入的 ``attack_times``。
             if step.get("attack_times") is not None:
                 return bool(
                     stat_ok

@@ -1,4 +1,4 @@
-"""Script runner thread for UI."""
+"""界面脚本运行线程。"""
 
 from __future__ import annotations
 

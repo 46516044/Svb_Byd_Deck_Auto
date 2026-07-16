@@ -73,7 +73,7 @@ class EvolutionSpecialActions:
 
         ops = normalize_effect_steps_to_ops(steps)
 
-        # Preserve legacy runtime semantics: evolve special clicks before select_option.
+        # 保留旧运行语义：进化特殊点击先于 ``select_option`` 执行。
         ops = [
             o for o in ops if isinstance(o, dict) and str(o.get("op") or "") != "select_option"
         ] + [
@@ -98,8 +98,8 @@ class EvolutionSpecialActions:
         )
         run_result = EffectEngine.run_ops(ops, ctx=ctx, trigger_id=trigger)
 
-        # If a required enemy-follower target was not selected, the game may still
-        # be waiting in target-select UI; cancel and let caller try another follower.
+            # 必选敌方随从目标未选中时，游戏可能仍停留在目标界面；先取消，
+            # 再让调用方尝试其他随从。
         fail_kinds = list(getattr(ctx, "select_targets_fail_kinds", []) or [])
         success_kinds = set(str(k) for k in list(getattr(ctx, "select_targets_success_kinds", []) or []))
         enemy_target_failed = any(

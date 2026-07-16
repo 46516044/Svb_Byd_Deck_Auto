@@ -263,12 +263,12 @@ class MNISTPreprocessor:
         v = v.astype(np.int32)
 
         # 检测数字像素 (GREEN + WHITE + PINK)
-        # GREEN
+        # 绿色数字。
         is_green_rgb = (g > 70) & (g > r * 1.0) & (g > b * 1.1)
         is_green_hsv = (hue >= 20) & (hue <= 90) & (s > 140) & (g > 40)
         is_green = is_green_rgb | is_green_hsv
 
-        # WHITE
+        # 白色数字。
         min_channel = np.minimum(np.minimum(r, g), b)
         is_white = ((r > 150) & (g > 140) & (b > 100) &
                    (s < 80) & (v > 150) & (min_channel > 100))
@@ -316,7 +316,7 @@ class MNISTPreprocessor:
 
     def _enhance_contrast(self, gray: np.ndarray) -> np.ndarray:
         """
-        增强对比度使用CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        使用 CLAHE（限制对比度自适应直方图均衡）增强对比度。
         """
         if gray.max() == 0:
             return gray
@@ -331,7 +331,7 @@ class MNISTPreprocessor:
         """
         二值化图像
 
-        使用Otsu's方法自动确定阈值
+        使用 Otsu 方法自动确定阈值。
         """
         if gray.max() == 0:
             return gray
@@ -428,11 +428,11 @@ class MNISTPreprocessor:
             binary_128: 128x128二值化图像
 
         返回:
-            True=双数字, False=单数字
+            ``True`` 表示双数字，``False`` 表示单数字。
         """
         h, w = binary_128.shape
-        mid_col1 = w // 2 - 1  # 第63列(0-indexed)
-        mid_col2 = w // 2      # 第64列(0-indexed)
+        mid_col1 = w // 2 - 1  # 第 63 列（索引从 0 开始）。
+        mid_col2 = w // 2      # 第 64 列（索引从 0 开始）。
 
         # 统计中线两列的白色像素
         white_pixels_col1 = np.sum(binary_128[:, mid_col1] > 0)

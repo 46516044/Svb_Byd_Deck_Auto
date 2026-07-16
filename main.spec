@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-# PyInstaller spec file for Shadowverse Automation UI
+# 影之诗自动化界面的 PyInstaller 打包配置。
 # 特别注意：使用虚拟环境打包，排除配置文件目录
 
 import os
@@ -11,6 +11,8 @@ try:
     project_root = os.path.abspath(os.path.dirname(__file__))
 except NameError:
     project_root = os.path.abspath(os.getcwd())
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # 主脚本文件
 main_script = os.path.join(project_root, 'main_ui.py')
@@ -18,10 +20,8 @@ main_script = os.path.join(project_root, 'main_ui.py')
 # 设置虚拟环境路径（根据实际情况调整）
 venv_path = os.path.join(project_root, '.venv')
 if os.path.exists(venv_path):
-    # 添加虚拟环境的site-packages到路径
+    # 仅用于定位随包资源；打包脚本本身必须由该虚拟环境运行。
     site_packages = os.path.join(venv_path, 'Lib', 'site-packages')
-    if os.path.exists(site_packages):
-        sys.path.insert(0, site_packages)
 
 # 数据文件 - 只包含必要的运行时资源
 # 特别注意：排除quanka、Image、templates、templates_global等配置文件目录
@@ -38,10 +38,16 @@ for rel_path in model_files:
     if os.path.exists(src):
         datas.append((src, os.path.dirname(rel_path)))
 
-# 包含内部遮罩资源（不属于用户可自定义模板）
-hp_mask_file = os.path.join(project_root, 'src', 'masks', 'hp_mask.png')
-if os.path.exists(hp_mask_file):
-    datas.append((hp_mask_file, 'src/masks'))
+# 包含内部遮罩资源；源码未提供专用副本时，从现有模板目录选取回退文件。
+hp_mask_candidates = [
+    os.path.join(project_root, 'src', 'masks', 'hp_mask.png'),
+    os.path.join(project_root, 'templates_global', 'hp_mask.png'),
+    os.path.join(project_root, 'templates', 'hp_mask.png'),
+]
+for hp_mask_file in hp_mask_candidates:
+    if os.path.exists(hp_mask_file):
+        datas.append((hp_mask_file, 'src/masks'))
+        break
 
 # 包含uiautomator2的assets资源文件（兼容venv/conda）
 uiautomator2_assets_candidates = []
@@ -71,7 +77,7 @@ for u2_assets_dir in uiautomator2_assets_candidates:
         break
 
 # 包含必要的配置文件
-config_files = ['LICENSE', 'README.md', 'PACKAGING.md']
+config_files = ['LICENSE', 'README.md']
 for fname in config_files:
     fpath = os.path.join(project_root, fname)
     if os.path.exists(fpath):
@@ -84,7 +90,6 @@ excluded_dirs = [
     'templates',
     'templates_global',
     'card_cost',
-    'shadowverse_cards_cost',
 ]
 
 # 排除的配置文件（用户可自定义的配置文件，不打包进程序）
@@ -99,31 +104,13 @@ hiddenimports = [
     'easyocr',
     'torch',
     'torchvision',
-    'onnxruntime',
     'src.utils.card_swap_strategy_enhanced',
     'src.config.card_priorities',
 ]
 
 binaries = []
-excludes = []
-
-# Prefer build-environment VC runtime DLLs for ORT stability.
-preferred_vc_dlls = [
-    'msvcp140.dll',
-    'vcruntime140.dll',
-    'vcruntime140_1.dll',
-]
-for dll_name in preferred_vc_dlls:
-    for cand in (
-        os.path.join(sys.prefix, dll_name),
-        os.path.join(sys.prefix, 'Library', 'bin', dll_name),
-    ):
-        if os.path.exists(cand):
-            binaries.append((cand, '.'))
-            break
-
-runtime_hooks = [
-    os.path.join(project_root, 'pyi_rth_onnxruntime_dll.py'),
+excludes = [
+    'onnxruntime',
 ]
 
 # 添加PyQt5插件
@@ -134,22 +121,25 @@ try:
     
     # 查找插件目录
     possible_plugin_paths = [
+        os.path.join(pyqt5_path, 'Qt5', 'plugins'),
         os.path.join(pyqt5_path, 'Qt', 'plugins'),
         os.path.join(pyqt5_path, 'plugins'),
+        os.path.join(sys.prefix, 'Lib', 'site-packages', 'PyQt5', 'Qt5', 'plugins'),
         os.path.join(sys.prefix, 'Lib', 'site-packages', 'PyQt5', 'Qt', 'plugins'),
         os.path.join(sys.prefix, 'Lib', 'site-packages', 'PyQt5', 'plugins'),
+        os.path.join(venv_path, 'Lib', 'site-packages', 'PyQt5', 'Qt5', 'plugins'),
         os.path.join(venv_path, 'Lib', 'site-packages', 'PyQt5', 'Qt', 'plugins'),
         os.path.join(venv_path, 'Lib', 'site-packages', 'PyQt5', 'plugins')
     ]
     
     for plugin_root in possible_plugin_paths:
         if os.path.isdir(plugin_root):
+            qt_dir_name = os.path.basename(os.path.dirname(plugin_root))
             for name in ('platforms', 'imageformats'):
                 src = os.path.join(plugin_root, name)
                 if os.path.isdir(src):
-                    dest = os.path.join('PyQt5', 'Qt', 'plugins', name)
+                    dest = os.path.join('PyQt5', qt_dir_name, 'plugins', name)
                     datas.append((src, dest))
-                    break
             break
 
 except ImportError:
@@ -158,12 +148,12 @@ except ImportError:
 # 分析阶段
 a = Analysis(
     [main_script],
-    pathex=[project_root, site_packages] if 'site_packages' in locals() else [project_root],
+    pathex=[project_root],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    runtime_hooks=runtime_hooks,
+    runtime_hooks=[],
     excludes=excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -184,7 +174,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,  # 是否启用控制台窗口，因为程序需要获取用户输入以确认同意声明
+    console=False,  # GUI 版本通过 PyQt 对话框确认免责声明，无需控制台窗口。
     icon=os.path.join(project_root, 'app.ico') if os.path.exists(os.path.join(project_root, 'app.ico')) else None,
 )
 
@@ -196,11 +186,7 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[
-        'onnxruntime.dll',
-        'onnxruntime_providers_shared.dll',
-        'onnxruntime_pybind11_state.pyd',
-    ],
+    upx_exclude=[],
     name='Svb_Byd_Deck_Auto',
 )
 

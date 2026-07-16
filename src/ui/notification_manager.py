@@ -64,11 +64,11 @@ class NotificationManager:
                 continue
             except Exception as e:
                 logger.error(f"通知处理出错: {str(e)}")
-                # 只有在实际获取到项目时才调用task_done
-                # 这里不调用task_done，因为异常可能发生在获取项目之后
+                # 只有确认取到队列项时才能调用 ``task_done``；异常可能发生在取项前，
+                # 因此该分支不盲目减少未完成任务计数。
     
     def _show_tkinter_notification(self, title: str, message: str):
-        """使用Tkinter显示通知"""
+        """使用 Tkinter 显示通知。"""
         try:
             # 创建临时窗口
             root = tk.Tk()

@@ -1,7 +1,7 @@
-"""Minimal domain/data structures.
+"""最小领域数据结构。
 
-Keep these models pure (no device/cv/config imports) so they can be reused by
-policy/effects/phases without dragging runtime dependencies.
+这些模型保持纯数据，不导入 device、cv 或 config，使策略、效果和阶段模块复用时
+不会连带加载运行时依赖。
 """
 
 from __future__ import annotations
@@ -12,10 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 @dataclass(frozen=True)
 class GameRules:
-    """Game rule constants used by higher-level logic.
-
-    Note: this is intentionally minimal; expand later.
-    """
+    """上层逻辑使用的游戏规则常量；当前刻意保持最小，按需扩展。"""
 
     pp_cap: int = 10
     evolve_unlock_turn_first: int = 5
@@ -24,12 +21,10 @@ class GameRules:
 
 @dataclass(frozen=True)
 class TargetSpec:
-    """A declarative target request (not coordinates).
+    """声明式目标请求，而非实际坐标。
 
-    Examples:
-      - kind="enemy_leader"
-      - kind="enemy_follower", selector="highest_hp"
-      - kind="option", selector="index", params={"index": 2}
+    例如 ``kind="enemy_leader"``、``kind="enemy_follower"`` 搭配
+    ``selector="highest_hp"``，或用 ``params={"index": 2}`` 指定选项索引。
     """
 
     kind: str
@@ -39,10 +34,7 @@ class TargetSpec:
 
 @dataclass(frozen=True)
 class Action:
-    """An abstract action step (execution layer will translate it).
-
-    Placeholder to be consumed by phases/policy later.
-    """
+    """由执行层转换的抽象动作步骤，供阶段和策略层后续消费。"""
 
     type: str
     payload: Dict[str, Any] = field(default_factory=dict)
@@ -50,10 +42,9 @@ class Action:
 
 @dataclass
 class ObservedGameState:
-    """What the script currently *observes* about the match.
+    """脚本当前观察到的对战状态。
 
-    Fields may be missing/None when recognition fails.
-    This structure is designed to accept legacy outputs directly.
+    识别失败时字段可能缺失或为 ``None``；该结构可直接接收旧版输出形态。
     """
 
     turn: Optional[int] = None
@@ -62,10 +53,8 @@ class ObservedGameState:
     ep: Optional[int] = None
     sep: Optional[int] = None
 
-    # Legacy-friendly shapes:
-    # - hand: list[dict] from HandCardManager/SIFT
-    # - board_*: list[tuple] from follower scans
-    # - ward_enemy: list[(x,y)] from shield scan
+    # 兼容旧数据形态：手牌来自 HandCardManager/SIFT 的字典列表，场面来自随从扫描
+    # 的元组列表，守护目标来自护盾扫描的坐标列表。
     hand: List[Dict[str, Any]] = field(default_factory=list)
     board_ours: List[Any] = field(default_factory=list)
     board_enemy: List[Any] = field(default_factory=list)
@@ -75,7 +64,7 @@ class ObservedGameState:
     note: str = ""
 
     def brief(self) -> str:
-        """Human-readable one-line summary for logs."""
+        """生成供日志使用的人类可读单行摘要。"""
 
         def _fmt_bool(v: Optional[bool]) -> str:
             if v is None:
@@ -107,7 +96,7 @@ class ObservedGameState:
 
 @dataclass
 class FollowerRuntimeState:
-    """Runtime follower model used by battle selection/settlement."""
+    """对战选择与结算使用的运行时随从模型。"""
 
     side: str = "ours"
     x: int = 0
@@ -130,8 +119,7 @@ class FollowerRuntimeState:
     evolved_type: str = "none"
     miss_count: int = 0
 
-    # Per-turn override: this follower can attack N times in the specified round.
-    # Default behavior remains once per turn.
+    # 逐回合覆盖：指定回合内该随从可攻击 N 次；默认仍为每回合一次。
     attack_times_round: int = -1
     attack_times_total: int = 1
 

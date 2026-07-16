@@ -1,13 +1,12 @@
-"""ConfigRepository: single write point for UI-facing config I/O.
+"""面向界面的配置仓储，也是配置写入的唯一入口。
 
-UI pages previously wrote config.json directly in multiple places, causing
-inconsistent migrations and partial schema restores (e.g. deck snapshots).
+旧界面曾在多个位置直接写入 ``config.json``，容易造成迁移结果不一致，或在恢复
+卡组快照时只覆盖部分结构。本模块将界面所需能力统一为：
 
-This module keeps the UI's needs simple:
-- Load existing config.json (optionally refusing to overwrite on parse errors)
-- Apply deep-merge patches while preserving unknown/hidden fields
-- Normalize against DEFAULT_CONFIG and run migrations before writing
-- Persist via atomic write (temp + os.replace)
+- 加载现有配置，并可在解析失败时拒绝覆盖；
+- 深度合并补丁，同时保留未知或隐藏字段；
+- 写入前按 ``DEFAULT_CONFIG`` 规范化并执行迁移；
+- 通过临时文件与 ``os.replace`` 原子落盘。
 """
 
 from __future__ import annotations
@@ -38,11 +37,10 @@ logger = logging.getLogger(__name__)
 
 
 def _deep_merge(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a merged copy of base with patch applied (recursive for dicts).
+    """返回应用补丁后的副本，字典递归合并。
 
-    - Dicts are merged recursively.
-    - Lists/values in patch replace base.
-    - Nested containers are deep-copied to avoid reference sharing.
+    字典会递归合并；补丁中的列表和普通值直接替换原值；嵌套容器均深拷贝，
+    避免合并结果与调用方共享引用。
     """
 
     merged: Dict[str, Any] = copy.deepcopy(base) if isinstance(base, dict) else {}
@@ -61,7 +59,7 @@ def _deep_merge(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_and_migrate(user_config: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge against DEFAULT_CONFIG and apply schema migrations."""
+    """与 ``DEFAULT_CONFIG`` 合并并执行结构迁移。"""
 
     cfg = _deep_merge(DEFAULT_CONFIG, user_config if isinstance(user_config, dict) else {})
     try:
@@ -103,7 +101,7 @@ class ConfigWriteResult:
 
 
 class ConfigRepository:
-    """Repository-style helper for config.json I/O used by UI."""
+    """供界面使用的 ``config.json`` 仓储式读写器。"""
 
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = os.path.abspath(config_path or get_config_path())
@@ -111,12 +109,11 @@ class ConfigRepository:
     def load_existing(
         self, *, allow_default_on_error: bool = True
     ) -> tuple[Optional[Dict[str, Any]], bool, Optional[str]]:
-        """Load config.json from disk.
+        """从磁盘加载 ``config.json``。
 
-        Returns: (config_or_none, parse_ok, error)
-        - If file is missing: returns normalized defaults, parse_ok=True.
-        - If JSON parse fails and allow_default_on_error=True: returns normalized defaults, parse_ok=False.
-        - If JSON parse fails and allow_default_on_error=False: returns None, parse_ok=False.
+        返回 ``(配置或 None, 解析是否成功, 错误信息)``。文件不存在时返回规范化
+        默认值；解析失败且允许回退时返回默认值并标记失败；不允许回退时返回
+        ``None``，避免后续误覆盖损坏文件。
         """
 
         if not os.path.exists(self.config_path):
@@ -170,7 +167,7 @@ class ConfigRepository:
         merged = _deep_merge(existing, patch if isinstance(patch, dict) else {})
         normalized = _normalize_and_migrate(merged)
         res = self.save(normalized, indent=indent, ensure_ascii=ensure_ascii)
-        # Preserve parse_ok from initial load for callers that care.
+        # 保留首次加载的解析状态，供需要区分“回退后写入”的调用方判断。
         return ConfigWriteResult(ok=res.ok, parse_ok=parse_ok, error=res.error or err)
 
     def replace_with_snapshot(

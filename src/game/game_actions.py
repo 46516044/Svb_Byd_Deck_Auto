@@ -49,13 +49,13 @@ class GameActions:
         from .hand_card_manager import HandCardManager
         self.hand_manager = HandCardManager(device_state)
 
-        # Keep a small observation cache for logging.
+        # 保留一份轻量观察缓存，供结构化日志使用。
         self._last_observed_hand_cards = []
         self._force_post_play_hand_refresh = False
         self._force_post_evolve_hand_refresh = False
         self._last_play_phase_remaining_cost = 0
 
-        # Policy hook (default preserves legacy behavior).
+        # 策略钩子；默认策略保持旧版行为。
         try:
             from src.game.policy.base import LegacyBattlePolicy
 
@@ -63,14 +63,14 @@ class GameActions:
         except Exception:
             self.battle_policy = None
 
-        # Lightweight perf counters for follower scanning.
+        # 随从扫描使用的轻量性能计数器。
         self._perf_scan_our_followers = {
             "fast": {"calls": 0, "ok": 0, "total_ms": 0.0},
             "full": {"calls": 0, "ok": 0, "total_ms": 0.0},
         }
         self._perf_scan_our_followers_last_log_ts = 0.0
 
-        # Spot-based scan stabilization (max 5 board slots).
+        # 基于场上槽位稳定扫描结果，场上最多有 5 个槽位。
         self._spot_state: Dict[int, Dict[str, Any]] = {}
         self._spot_round_key: Optional[Tuple[int, int]] = None
         self._spot_centers: List[int] = self._build_spot_centers()
@@ -86,11 +86,11 @@ class GameActions:
         except Exception:
             self.battle_runtime = None
 
-        # Step3C: lightweight phase cache flags.
+        # Step3C：轻量阶段缓存标志。
         self._play_phase_enemy_affected = False
         self._cached_enemy_presence_for_evolve = None
 
-        # Round-local state used by card-play flow.
+        # 出牌流程使用的本回合局部状态。
         self._banlist_blocked_this_round = False
         self._current_round_ignored_cards: set[str] = set()
         self._current_extra_cost_bonus = 0
@@ -116,7 +116,7 @@ class GameActions:
         return getter()
 
     def _build_spot_centers(self) -> List[int]:
-        """Build 5 fixed slot centers from our follower region."""
+        """根据我方随从区域构建 5 个固定槽位中心点。"""
 
         try:
             x1, _y1, x2, _y2 = OUR_FOLLOWER_REGION
@@ -127,7 +127,7 @@ class GameActions:
             return [975, 797, 620, 442, 264]
 
     def _slot_id_for_x(self, x: Any) -> int:
-        """Map x coordinate to nearest board slot [0..4], rightmost=0."""
+        """将横坐标映射到最近的场上槽位 [0..4]，最右侧为 0。"""
 
         try:
             x_i = int(x)
@@ -142,7 +142,7 @@ class GameActions:
             range(len(centers)),
             key=lambda i: abs(int(centers[i]) - x_i),
         )
-        # Convert to right->left slot id for easier reasoning in logs.
+        # 转为从右到左的槽位编号，便于阅读日志和分析位置。
         return int((len(centers) - 1) - left_to_right_idx)
 
     def _current_round_key(self) -> Tuple[int, int]:
@@ -168,7 +168,7 @@ class GameActions:
             self._spot_round_key = key
 
     def _mark_recent_attack_slot(self, pos: Sequence[Any]) -> None:
-        """Short-lived slot evidence after an attack was actually consumed."""
+        """记录攻击次数实际消耗后短时间有效的槽位证据。"""
 
         if not isinstance(pos, (list, tuple)) or len(pos) < 1:
             return
@@ -199,16 +199,16 @@ class GameActions:
         *,
         sort_desc: bool,
     ) -> List[Tuple[int, int, str, Optional[str]]]:
-        """Aggregate multi-shot scans using best-shot anchor + constrained assignment.
+        """以最佳单帧为锚点，通过受限分配聚合多次扫描结果。
 
-        Priority to pick anchor frame:
-        1) total follower count
-        2) named count
-        3) attackable count (green/yellow)
+        锚点帧选择优先级：
+        1）随从总数
+        2）已识别名称的随从数量
+        3）可攻击随从数量（green/yellow）
 
-        Then assign type evidence from other frames to anchor followers:
-        - first by exact name
-        - then (for remaining) by x/y-nearest fallback
+        随后把其他帧的类型证据分配给锚点随从：
+        - 优先按完全一致的名称匹配
+        - 剩余项再按横纵坐标最近原则回退匹配
         """
 
         def _norm_type(v: Any) -> str:
@@ -251,8 +251,8 @@ class GameActions:
             attackable = sum(1 for it in list(shot or []) if str(it[2]) in ("green", "yellow"))
             return (int(total), int(named), int(attackable))
 
-        # Use best single-shot as anchor, with strong priority on follower count,
-        # then naming quality, then attackable type evidence.
+        # 选择最佳单帧作为锚点：优先比较随从数量，其次比较命名质量，
+        # 最后比较可攻击类型的识别证据。
         best_idx = max(range(len(shots)), key=lambda i: (_shot_score(shots[i]), i))
         best_shot = list(shots[best_idx])
 
@@ -324,7 +324,7 @@ class GameActions:
             used: set[int] = set()
             matched_anchor: set[int] = set()
 
-            # Pass 1: name-based assignment first.
+            # 第一轮：优先按名称分配。
             for ai, anchor in enumerate(anchors):
                 name = str(anchor.get("base_name") or "")
                 if not name:
@@ -345,7 +345,7 @@ class GameActions:
                 if item[3]:
                     anchor["names"].append(item[3])
 
-            # Pass 2: coord-based assignment for remaining anchors.
+            # 第二轮：按坐标为剩余锚点分配结果。
             for ai, anchor in enumerate(anchors):
                 if ai in matched_anchor:
                     continue
@@ -392,11 +392,11 @@ class GameActions:
         *,
         sort_desc: bool,
     ) -> List[Tuple[int, int, str, Optional[str]]]:
-        """Stabilize follower type/name by board slot history.
+        """根据场上槽位的历史记录稳定随从类型和名称。
 
-        Rules:
-        - raw normal can downgrade green/yellow only with short-lived attack evidence.
-        - empty name does not overwrite a continuous slot name.
+        规则：
+        - 仅当存在短时间有效的攻击证据时，原始 normal 才能把 green/yellow 降级。
+        - 空名称不会覆盖同一连续槽位中已有的名称。
         """
 
         now = time.time()
@@ -636,7 +636,7 @@ class GameActions:
         if runtime is None or not hasattr(runtime, "mark_latest_play_origin"):
             return
         try:
-            # Wait for summon/effect animation to settle before tagging follower origin.
+            # 等待召唤或效果动画稳定后，再标记随从来源。
             self.device_state.sleep(2.0)
             followers = self._refresh_our_followers(
                 sort_desc=True,
@@ -728,7 +728,7 @@ class GameActions:
             DEFAULT_ATTACK_TARGET[1] + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
         )
 
-        # Step3A: optional on_attack effects hook.
+        # Step3A：可选的 on_attack 效果钩子。
         try:
             from src.config.strategy_effects import (
                 get_card_effect_steps as _get_eff_steps,
@@ -803,7 +803,7 @@ class GameActions:
 
         shield_targets = []
 
-        # Step3C: attack-phase cache (single phase, local lifetime).
+        # Step3C：攻击阶段缓存，仅在当前阶段内有效。
         attack_cache: Dict[str, Any] = {
             "enemy": None,
             "ward": list(shield_targets or []),
@@ -812,7 +812,7 @@ class GameActions:
         }
 
         def _strict_refresh_attack_followers(*, with_names: bool = False, retries: int = 1):
-            """Attack-critical scan: 3-shots + retry, no stale-cache fallback."""
+            """攻击关键路径扫描：连续扫描 3 帧并重试，不回退到过期缓存。"""
 
             return self._refresh_our_followers(
                 sort_desc=True,
@@ -843,7 +843,7 @@ class GameActions:
             return named_followers
 
         def _pick_named_attacker(current_pos: Tuple[Any, Any], *, preferred_type: Optional[str] = None):
-            """Refresh with names and rematch attacker by position/type."""
+            """刷新随从名称，并按位置和类型重新匹配攻击者。"""
 
             named_followers = list(_get_named_followers_cached() or [])
             if not named_followers:
@@ -1034,25 +1034,23 @@ class GameActions:
             ward_positions: Optional[Sequence[Sequence[Any]]] = None,
             blocked_target_buckets: Optional[Sequence[int]] = None,
         ):
-            """Select attacker+target by type priority and residual minimization.
+            """按类型优先级和最小剩余生命值选择攻击者与目标。
 
-            Priority:
-            1) attacker type order follows ``allowed_types`` (e.g. yellow then green)
-            2) within same type, if lethal exists, choose residual closest to 0
-            3) if no lethal, fallback to right-to-left first valid plan
+            优先级：
+            1）攻击者类型顺序遵循 ``allowed_types``，例如先 yellow 后 green
+            2）同类型存在可击杀方案时，选择目标剩余生命值最接近 0 的方案
+            3）无法击杀时，回退到从右向左的第一个有效方案
             """
 
             enemy_list = list(enemy_followers or [])
             if not enemy_list:
                 return None
 
-            # Use the latest caller-provided follower snapshot; fallback to the
-            # phase baseline for compatibility.
+            # 优先使用调用方提供的最新随从快照；为兼容旧调用方式，缺失时回退到阶段基线。
             attackers = list(attacker_followers or all_followers or [])
             blocked = {int(b) for b in list(blocked_target_buckets or [])}
 
-            # Important: plan selection must only consider attackers that still
-            # have remaining attack uses in this turn.
+            # 关键约束：规划时只能考虑本回合仍有剩余攻击次数的攻击者。
             unspent_attackers = list(
                 _iter_unspent_attackers(attackers, allowed_types=allowed_types)
             )
@@ -1143,7 +1141,7 @@ class GameActions:
                     )
                     return kill_plans[0]
 
-                # No lethal in this type: keep existing behavior (right-to-left first available).
+                # 当前类型无法击杀时保持旧行为：选择从右到左第一个可用方案。
                 return plans[0]
 
             return None
@@ -1194,8 +1192,7 @@ class GameActions:
             best_score = 10**9
 
             for key_i, meta in list(attacker_key_meta.items()):
-                # Fallback keys are negative. Positive keys are runtime uid and
-                # should be resolved in the uid path above.
+                # 后备键使用负数；正数键是运行时 UID，应在上面的 UID 路径中完成解析。
                 if int(key_i) > 0:
                     continue
                 mx = int(meta.get("x", x_i))
@@ -1245,8 +1242,8 @@ class GameActions:
 
         def _attack_cap_for_attacker(pos_xy: Sequence[Any], *, name_hint: Any = None) -> int:
             key_i = _resolve_attacker_key(pos_xy, name_hint=name_hint)
-            # key_i == 0 means unresolved/invalid attacker. Negative keys are
-            # valid fallback ids and should keep attack cap bookkeeping.
+            # key_i == 0 表示攻击者无效或无法解析；负数键是有效的后备 ID，
+            # 仍需参与攻击次数上限统计。
             if key_i == 0:
                 return 1
 
@@ -1390,7 +1387,7 @@ class GameActions:
 
         self._ensure_runtime_epoch()
 
-        # Attack baseline: ours(handled by caller), enemy + ward one-shot at phase start.
+        # 攻击阶段基线：我方由调用方处理；阶段开始时各扫描一次敌方与守护目标。
         shield_targets = _get_ward_targets_cached(force=True)
         _ = _get_enemy_followers_cached(force=True, ward_positions=shield_targets)
         max_attack_attempts = 6
@@ -1402,7 +1399,7 @@ class GameActions:
             all_followers = list(_strict_refresh_attack_followers(with_names=True, retries=0) or [])
             _invalidate_named_scan_cache()
         else:
-            # Ensure expected order (right -> left)
+            # 确保顺序符合预期：从右到左。
             try:
                 all_followers = sorted(
                     list(all_followers or []),
@@ -1415,7 +1412,7 @@ class GameActions:
 
         self._runtime_sync_ours(all_followers)
 
-        # Structured observation log (no extra recognition).
+        # 记录结构化观察日志，不触发额外识别。
         enemy_positions = enemy_check if isinstance(enemy_check, (list, tuple)) else []
         self._log_observed_state(note="attack/start", enemy=enemy_positions, ward=shield_targets)
 
@@ -2364,7 +2361,7 @@ class GameActions:
             return []
 
     def _log_observed_state(self, *, note: str, enemy=None, ward=None):
-        """Log a minimal ObservedGameState without changing battle behavior."""
+        """记录最小化的 ObservedGameState，且不改变对战行为。"""
 
         try:
             from src.game.domain import ObservedGameState
@@ -2395,7 +2392,7 @@ class GameActions:
             )
             self.device_state.logger.info(f"[OBS] {state.brief()}")
         except Exception as e:
-            # Don't break battle loop for logging failures.
+            # 日志记录失败不能中断对战循环。
             try:
                 self.device_state.logger.debug(f"[OBS] build failed: {e}")
             except Exception:
@@ -2417,7 +2414,7 @@ class GameActions:
             return
 
         enemy_check = self._await_enemy_check(enemy_future)
-        # Give summon / board animations time to settle before attack scanning.
+        # 给召唤和场面动画留出稳定时间，再开始攻击扫描。
         self.device_state.sleep(0.5)
         AttackPhase(self).run(enemy_check)
         self.device_state.sleep(1)
@@ -2439,7 +2436,7 @@ class GameActions:
 
         enemy_check = self._await_enemy_check(enemy_future)
 
-        # Step3C: evolve-pre only needs 1-shot ours scan.
+        # Step3C：进化前只需对我方场面扫描 1 帧。
         self._refresh_our_followers(
             sort_desc=False,
             extra_shots=0,
@@ -2447,8 +2444,8 @@ class GameActions:
             with_names=True,
         )
 
-        # Step3C: if play phase had no enemy-affecting action, reuse pre-play enemy presence.
-        # Otherwise refresh once before evolve decision.
+        # Step3C：若出牌阶段没有影响敌方场面的操作，则复用出牌前的敌方存在状态；
+        # 否则在作出进化决策前刷新一次。
         self._cached_enemy_presence_for_evolve = bool(enemy_check)
         if bool(getattr(self, "_play_phase_enemy_affected", False)):
             try:
@@ -2475,7 +2472,7 @@ class GameActions:
             except Exception:
                 pass
 
-        # Give summon / evolution animations time to settle before attack scanning.
+        # 给召唤和进化动画留出稳定时间，再开始攻击扫描。
         self.device_state.sleep(0.5)
         AttackPhase(self).run(enemy_check)
         self.device_state.sleep(1)
@@ -2577,7 +2574,7 @@ class GameActions:
         # 改进的出牌逻辑：每出一张牌都重新检测手牌
         self._play_cards_with_retry(available_cost, current_round)
 
-        # Banlist hit: skip later phases (evolve/attack) and only end turn.
+        # 命中禁用名单后跳过进化、攻击等后续阶段，只执行结束回合。
         if getattr(self, "_banlist_blocked_this_round", False):
             return False
         return True
@@ -2614,7 +2611,7 @@ class GameActions:
         retry_count = 0
         self._last_play_phase_remaining_cost = int(available_cost or 0)
         if reset_round_state:
-            # Reset observation cache per round.
+            # 每回合重置观察缓存。
             self._last_observed_hand_cards = []
             # 当前回合需要忽略的卡牌（如剑士的斩击在没有敌方随从时）
             self._current_round_ignored_cards = set()
@@ -2631,7 +2628,7 @@ class GameActions:
             self.device_state.logger.warning("未能识别到任何手牌")
             return int(available_cost or 0)
 
-        # Banlist guard (anti-abuse / emergency stop).
+        # 禁用名单防护，用于防滥用和紧急停止。
         try:
             from src.game.internal.banlist import should_block_play
 
@@ -2644,7 +2641,7 @@ class GameActions:
             self._banlist_blocked_this_round = True
             return int(available_cost or 0)
 
-        # Cache last observed hand for later structured logging.
+        # 缓存最近一次识别到的手牌，供后续结构化日志使用。
         self._last_observed_hand_cards = list(cards)
 
         from src.config.card_priorities import (
@@ -2657,7 +2654,7 @@ class GameActions:
         from src.utils.card_filename import make_enhance_key
 
         def _decorate_cards_for_pp(cards_list: List[Dict[str, Any]], pp: int) -> None:
-            """Decorate card dicts with effective cost/key for current PP."""
+            """根据当前 PP 为卡牌字典补充实际费用和配置键。"""
 
             for c in cards_list:
                 base_name = str(c.get("name", "") or "")
@@ -2973,7 +2970,7 @@ class GameActions:
                     or card.get("config_key")
                     or card_name
                 )
-                # Avoid duplicate heavy scan when pre-play origin tagging already succeeded.
+                # 出牌前的来源标记已成功时，避免重复执行高开销扫描。
                 if not preplay_tag_ok:
                     self._tag_recent_played_follower(card_name=card_name, cfg_key=cfg_key)
         except Exception:
@@ -3001,7 +2998,7 @@ class GameActions:
         return result
 
     def _card_play_may_affect_enemy(self, card: Dict[str, Any]) -> bool:
-        """Best-effort detector for enemy-affecting on_play cards (Step3C cache invalidation)."""
+        """尽力检测会影响敌方场面的 on_play 卡牌，用于使 Step3C 缓存失效。"""
 
         try:
             from src.config.strategy_effects import get_card_effect_steps, normalize_effect_steps_to_ops
@@ -3101,10 +3098,10 @@ class GameActions:
         """
         验证换牌识别结果是否合理
 
-        Args:
+        参数：
             cards: 识别到的卡牌列表
 
-        Returns:
+        返回：
             (is_valid, reason): 是否有效及原因
         """
         # 检查1：必须恰好4张（严格遵循游戏规则）
@@ -3192,7 +3189,7 @@ class GameActions:
                             f"[SIFT换牌] 第{attempt+1}次识别失败: {reason}"
                         )
 
-                        # Debug: 输出识别到的卡牌位置信息
+                        # 调试：输出识别到的卡牌位置信息。
                         for i, card in enumerate(recognized_cards):
                             cx, cy = card['center']
                             self.device_state.logger.debug(
@@ -3351,7 +3348,7 @@ class GameActions:
                 else:
                     self.device_state.logger.info("[SIFT换牌] 无需换牌，当前手牌已满足策略")
 
-                # 7. Debug模式保存截图
+                # 7. 调试模式下保存截图。
                 if debug_flag:
                     debug_dir = "debug_mulligan_sift"
                     if not os.path.exists(debug_dir):
@@ -3379,7 +3376,7 @@ class GameActions:
                 return True
 
             finally:
-                # No per-instance mutation; nothing to restore.
+                # 未修改实例状态，因此无需恢复。
                 pass
 
         except Exception as e:
@@ -3505,7 +3502,7 @@ class GameActions:
         通过多次单帧采样（默认3次）+ slot聚合 + 必要时确认重扫，
         减少外层零散补扫并稳定类型/命名结果。
         """
-        # Keep old names when doing fast scans (no SIFT naming).
+        # 快速扫描不执行 SIFT 命名，因此需要保留旧名称。
         try:
             cached_before = self.follower_manager.get_positions() or []
         except Exception:
@@ -3525,7 +3522,7 @@ class GameActions:
             if not followers_local:
                 return []
 
-            # Optional: backfill names from cache when we skipped naming.
+            # 跳过命名时，可根据缓存回填名称。
             if not with_names and cached_before and len(cached_before) == len(followers_local):
                 try:
                     if any(len(f) > 3 and f[3] for f in cached_before):
@@ -3586,7 +3583,7 @@ class GameActions:
             followers = self._aggregate_followers_from_shots(shots, sort_desc=bool(sort_desc))
             last_followers = list(followers or [])
 
-            # Perf record (includes the scan_our_followers path and any extra shots inside it).
+            # 记录性能数据，包含 scan_our_followers 路径及其内部的额外扫描帧。
             dt_ms = (time.perf_counter() - t0) * 1000.0
             self._record_our_scan_perf(
                 mode=mode,
@@ -3600,7 +3597,7 @@ class GameActions:
             if attempt < retries:
                 time.sleep(random.uniform(0.12, 0.22))
 
-        # Unified bottom-layer empty confirm scan (total: at most 2 scans when retries=0).
+        # 在底层统一执行空结果确认扫描；retries=0 时总计最多扫描两轮。
         if not last_followers:
             try:
                 self.device_state.sleep(0.2)
@@ -3637,11 +3634,11 @@ class GameActions:
             except Exception:
                 pass
 
-        # Fallback: optionally return cached positions (for non-critical paths).
+        # 后备方案：非关键路径可选择返回缓存位置。
         if not allow_cached_fallback:
             return []
 
-        # Return cached positions, ensuring order matches caller expectations.
+        # 返回缓存位置，并确保排序符合调用方预期。
         try:
             cached = self.follower_manager.get_positions() or []
         except Exception:

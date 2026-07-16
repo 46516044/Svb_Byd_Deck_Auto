@@ -15,7 +15,7 @@
 - **多服务器支持**：支持国际服和国服配置，并自动切换对应模板目录
 - **换牌策略**：提供 3 费、4 费、5 费三个档次的换牌策略，用于优化起手手牌组合
 - **战斗自动化**：自动执行回合结束、随从攻击、进化、超进化等操作
-- **卡组管理**：支持保存、加载和分享卡组配置
+- **卡组管理**：支持保存、加载和分享卡组配置；版本 5 使用 `card_id + count` 保存主卡组，并以唯一 `card_id` 保存无上限衍生物，兼容旧版卡组读取
 - **卡牌设置**：支持设置卡牌优先级、进化优先级、必留，以及出牌、攻击、进化、超进化等特殊效果
 - **庆典模式**：支持庆典广场赛活动的自动化流程
 - **空过功能**：可在战斗中直接结束回合，跳过其他操作
@@ -108,7 +108,6 @@
 Svb_Byd_Deck_Auto/
 ├── main.py                    # CLI 入口
 ├── main_ui.py                 # GUI 入口
-├── pyi_rth_onnxruntime_dll.py # PyInstaller 运行时 DLL 加载辅助
 ├── src/                       # 核心源码目录
 │   ├── app/                   # 应用启动与组合入口
 │   ├── config/                # 配置管理、路径与策略配置
@@ -143,11 +142,15 @@ Svb_Byd_Deck_Auto/
 1. 安装运行与构建依赖：
 
    ```powershell
-   pip install -r requirements-py311.lock
-   pip install -r requirements-build.in
+   .venv\Scripts\python.exe -m pip install -r requirements-py311.lock
+   .venv\Scripts\python.exe -m pip install -r requirements-build.in
    ```
 
-2. 根据当前发布配置执行 PyInstaller 打包。
+2. 执行打包脚本；脚本会使用项目虚拟环境并在完成后复制外部资源目录。
+
+   ```powershell
+   .\build.ps1
+   ```
 
 3. 打包完成后，检查产物是否包含模型文件、模板目录、图标和必要的运行时 DLL。
 
@@ -156,7 +159,7 @@ Svb_Byd_Deck_Auto/
 1. **国际服深色模式**：MuMu 模拟器运行国际服时可能出现画面过暗问题，导致模板识别失败，可尝试开启深色识别选项
 2. **画面分辨率**：当前仅支持 1280x720 分辨率，请确保模拟器分辨率设置正确
 3. **场地选择**：建议使用黑色背景场地，避免使用简易场地，否则识别错误率可能上升
-4. **DLL 加载冲突**：部分 Windows 环境可能存在系统级 `onnxruntime.dll`，源码入口已优先加载当前虚拟环境中的 ONNX Runtime DLL
+4. **MNIST 运行时**：HP 数字兜底识别已改用 OpenCV DNN 读取 `models/mnist_adv.onnx`，不再依赖 ONNX Runtime 原生 DLL
 
 ## TODO
 

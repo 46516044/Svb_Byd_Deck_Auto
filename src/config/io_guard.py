@@ -1,12 +1,8 @@
-"""Runtime IO guard helpers.
+"""运行时 IO 防护辅助函数。
 
-Goal:
-- keep disk IO in config layer
-- warn if config disk IO happens during battle hot paths
-
-Implementation notes:
-- Uses thread-local state (each device runs in its own worker thread)
-- Guard is best-effort; it does not intercept arbitrary `open()` calls
+目标是把磁盘 IO 限制在配置层，并在对战热路径中发生配置读写时给出警告。
+每台设备运行在独立工作线程中，因此这里使用线程局部状态；该防护仅作尽力检查，
+不会拦截任意位置直接调用的 ``open()``。
 """
 
 from __future__ import annotations
@@ -29,7 +25,7 @@ def set_in_battle(value: bool) -> None:
 
 @contextmanager
 def battle_io_guard() -> Iterator[None]:
-    """Mark current thread as running battle hot path."""
+    """标记当前线程正处于对战热路径。"""
 
     prev = is_in_battle()
     set_in_battle(True)

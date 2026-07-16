@@ -8,7 +8,7 @@ class FollowerManager:
     """随从管理器，用于管理我方和敌方随从的位置信息"""
     
     def __init__(self):
-        # (x, y, type, name)
+        # 随从数据结构：(x, y, type, name)。
         self.positions: List[Tuple[int, int, str, Optional[str]]] = []
         self.enemy_positions: List[Tuple[int, int, str, Optional[str]]] = []
 

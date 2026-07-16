@@ -63,11 +63,11 @@ def detect_hp_in_window(window, mask, red_bg_threshold=0.25, other_threshold=0.2
     使用颜色分析在滑动窗口中检测HP
 
     分类：
-    - RED_BG: 暗红色背景（低V值）
-    - BRIGHT_RED: 亮红色数字（高V值 >= bright_red_v_threshold）
-    - GREEN: 绿色数字
-    - WHITE: 白色数字
-    - OTHER: 噪声/未分类
+    - ``RED_BG``：暗红色背景（低 V 值）
+    - ``BRIGHT_RED``：亮红色数字（高 V 值）
+    - ``GREEN``：绿色数字
+    - ``WHITE``：白色数字
+    - ``OTHER``：噪声或未分类像素
 
     参数：
         window: BGR图像窗口
@@ -100,13 +100,13 @@ def detect_hp_in_window(window, mask, red_bg_threshold=0.25, other_threshold=0.2
     if not np.any(mask_bool):
         return False, 0
 
-    # Extract masked pixels
+    # 提取掩码覆盖的有效像素。
     pixels_bgr = window[mask_bool]
     b = pixels_bgr[:, 0].astype(np.int32)
     g = pixels_bgr[:, 1].astype(np.int32)
     r = pixels_bgr[:, 2].astype(np.int32)
 
-    # Convert to HSV for better color detection
+    # 转为 HSV，以提高颜色分类稳定性。
     window_hsv = cv2.cvtColor(window, cv2.COLOR_BGR2HSV)
     pixels_hsv = window_hsv[mask_bool]
     h = pixels_hsv[:, 0].astype(np.int32)
@@ -143,7 +143,7 @@ def detect_hp_in_window(window, mask, red_bg_threshold=0.25, other_threshold=0.2
     is_white = ((r > 150) & (g > 140) & (b > 100) &
                 (s < 80) & (v > 150) & (min_channel > 100))
 
-    # Calculate ratios
+    # 计算各颜色类别的像素比例。
     red_bg_count = int(np.sum(is_red_bg))
     digit_count = int(np.sum(is_bright_red | is_green | is_white))
     other_count = int(np.sum(~(is_red_bg | is_bright_red | is_green | is_white)))
@@ -152,7 +152,7 @@ def detect_hp_in_window(window, mask, red_bg_threshold=0.25, other_threshold=0.2
     digit_ratio = digit_count / total
     other_ratio = other_count / total
 
-    # Detection: RED_BG >= threshold AND OTHER < threshold AND DIGIT >= threshold
+    # 同时满足红色背景、噪声上限和数字像素下限时才判定命中。
     detected = (red_bg_ratio >= red_bg_threshold and
                 other_ratio < other_threshold and
                 digit_ratio >= digit_threshold)
@@ -176,12 +176,12 @@ def sliding_window_detect(region_img, mask, window_width=43, window_height=39,
     返回：
         (center_x, width, score)元组的列表
     """
-    # Keep API compatibility: callers may pass window_height explicitly.
+    # 保持 API 兼容，调用方仍可显式传入 ``window_height``。
     _ = window_height
     h, w = region_img.shape[:2]
     detections = []
 
-    # Normalize mask once to reduce per-window overhead.
+    # 掩码只规范化一次，降低每个滑动窗口的重复开销。
     mask_local = mask
     if mask_local is None:
         mask_local = np.ones((int(h), int(window_width)), dtype=np.uint8) * 255
@@ -200,7 +200,7 @@ def sliding_window_detect(region_img, mask, window_width=43, window_height=39,
         except Exception:
             mask_local = None
 
-    # Slide from right to left
+    # 从右向左滑动窗口。
     x = w - window_width
     while x >= 0:
         window = region_img[0:h, x:x+window_width]
@@ -237,17 +237,17 @@ def merge_detections(detections, min_gap=105, max_followers=5):
     for det in sorted_dets[1:]:
         cx, w, score = det
         if cx - current[0] < min_gap:
-            # Overlapping, keep higher score
+            # 检测区间重叠时保留得分更高者。
             if score > current[2]:
                 current = list(det)
         else:
-            # New follower
+            # 与已有区间不重叠，视为新的随从位置。
             merged.append((current[0], current[1]))
             current = list(det)
 
     merged.append((current[0], current[1]))
 
-    # Limit to max_followers
+    # 最终数量不超过最大随从数。
     if len(merged) > max_followers:
         logger.warning(f"Detected {len(merged)} followers, limiting to {max_followers}")
         merged = merged[:max_followers]
@@ -274,7 +274,7 @@ def predict_digit_easyocr(reader, digit_28x28):
         result = reader.readtext(img_uint8, allowlist='0123456789', detail=0)
         prediction = ''.join(result) if result else ""
 
-        # Sanitize to single digit
+        # 将识别结果净化为单个数字。
         sanitized = sanitize_single_digit_result(prediction)
         return sanitized
     except Exception as e:
@@ -282,44 +282,41 @@ def predict_digit_easyocr(reader, digit_28x28):
         return "error"
 
 
-def predict_digit_mnist(session, digit_28x28):
+def load_mnist_model(model_path):
+    """使用 OpenCV DNN 加载 MNIST ONNX 模型。"""
+    return cv2.dnn.readNetFromONNX(model_path)
+
+
+def predict_digit_mnist(model, digit_28x28):
     """
     使用MNIST ONNX模型预测单个数字
 
     参数：
-        session: ONNX推理会话
+        model: OpenCV DNN 网络
         digit_28x28: 28x28灰度图像
 
     返回：
         预测的数字（0-9），失败时返回-1
     """
-    if session is None:
+    if model is None:
         return -1
 
     try:
-        input_shape = session.get_inputs()[0].shape
-        input_name = session.get_inputs()[0].name
-        output_name = session.get_outputs()[0].name
-
         x = digit_28x28.astype(np.float32) / 255.0
-
-        if len(input_shape) == 2:
-            x = x.reshape(1, 784)
-        elif len(input_shape) == 4:
-            x = np.expand_dims(np.expand_dims(x, axis=0), axis=0)
-        else:
-            logger.warning(f"Unexpected MNIST input shape: {input_shape}")
+        if x.shape != (28, 28):
+            logger.warning(f"Unexpected MNIST input shape: {x.shape}")
             return -1
 
-        result = session.run([output_name], {input_name: x})
-        prediction = int(np.argmax(result[0]))
+        model.setInput(x.reshape(1, 1, 28, 28))
+        result = model.forward()
+        prediction = int(np.argmax(result))
         return prediction
     except Exception as e:
         logger.error(f"MNIST prediction failed: {e}")
         return -1
 
 
-def recognize_hp_with_fallback(digit_list, easyocr_reader, mnist_session):
+def recognize_hp_with_fallback(digit_list, easyocr_reader, mnist_model):
     """
     使用按数字回退策略识别HP数字：
     - 首先对每个数字尝试EasyOCR（带净化）
@@ -329,7 +326,7 @@ def recognize_hp_with_fallback(digit_list, easyocr_reader, mnist_session):
     参数：
         digit_list: 28x28灰度图像列表（1或2个数字）
         easyocr_reader: EasyOCR Reader实例（或None）
-        mnist_session: ONNX推理会话（或None）
+        mnist_model: OpenCV DNN 网络（或None）
 
     返回：
         HP值字符串（例如"5"，"12"），全部失败时返回"?"
@@ -337,19 +334,19 @@ def recognize_hp_with_fallback(digit_list, easyocr_reader, mnist_session):
     final_digits = []
 
     for digit_img in digit_list:
-        # Try EasyOCR first
+        # 每个数字优先使用 EasyOCR。
         easyocr_pred = predict_digit_easyocr(easyocr_reader, digit_img)
 
-        # Use EasyOCR if valid (not empty, not error)
+        # EasyOCR 返回非空且非错误值时直接采用。
         if easyocr_pred and easyocr_pred not in ["error", ""]:
             final_digits.append(easyocr_pred)
         else:
-            # Fall back to MNIST
-            mnist_pred = predict_digit_mnist(mnist_session, digit_img)
+        # EasyOCR 失败时回退到 MNIST。
+            mnist_pred = predict_digit_mnist(mnist_model, digit_img)
             if mnist_pred >= 0:
                 final_digits.append(str(mnist_pred))
             else:
-                # Both failed
+        # 两种模型都失败时保留未知占位符。
                 final_digits.append('?')
 
     return ''.join(final_digits)

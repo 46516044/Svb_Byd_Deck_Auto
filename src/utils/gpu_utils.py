@@ -22,7 +22,7 @@ def setup_gpu():
     """
     检测和配置GPU
     
-    Returns:
+    返回：
         bool: 是否成功启用GPU
     """
     global _gpu_status, _gpu_initialized
@@ -84,11 +84,11 @@ def get_easyocr_reader(gpu_enabled: Optional[bool] = None, model_dir: Optional[s
     """
     获取EasyOCR读取器实例（全局单例）
     
-    Args:
+    参数：
         gpu_enabled: 是否启用GPU，None表示自动检测
         model_dir: 模型目录路径（已废弃，始终用项目根目录下models）
         
-    Returns:
+    返回：
         EasyOCR Reader实例
     """
     global _easyocr_reader, _easyocr_initialized

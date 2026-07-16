@@ -1,10 +1,7 @@
-"""Profiles (DeckProfile / StrategyProfile).
+"""卡组与策略档案模型（``DeckProfile`` / ``StrategyProfile``）。
 
-This is a minimal foundation:
-- represent 'what deck' and 'what strategy' are currently active
-- provide a consistent loggable summary
-
-Future steps can extend this to support loading/merging external profile files.
+当前只提供最小基础：表示正在使用的卡组和策略，并生成一致、可记录的摘要。
+后续可在此基础上扩展外部档案文件的加载与合并。
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
-"""Policy interfaces.
+"""策略接口。
 
-For now we introduce a minimal battle policy hook so the existing logic can be
-gradually migrated without changing outward behavior.
+当前只引入最小对战策略钩子，使现有逻辑可在不改变外部行为的前提下逐步迁移。
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ class BattlePolicy(Protocol):
 
 
 class LegacyBattlePolicy:
-    """Policy that preserves the current hardcoded evolve decision."""
+    """保留当前硬编码进化决策的策略。"""
 
     name = "legacy"
 
@@ -58,11 +57,11 @@ class LegacyBattlePolicy:
     def should_evolve(self, actions: _BattleActionsLike) -> bool:
         ds = actions.device_state
 
-        # Must have points.
+        # 必须拥有可用进化点。
         if not (getattr(ds, "evolution_point", 0) > 0 or getattr(ds, "super_evolution_point", 0) > 0):
             return False
 
-        # Condition 1: enemy has followers.
+        # 条件一：敌方场上存在随从。
         cached_enemy_presence = getattr(actions, "_cached_enemy_presence_for_evolve", None)
         if cached_enemy_presence is not None:
             if bool(cached_enemy_presence):
@@ -79,7 +78,7 @@ class LegacyBattlePolicy:
                     ds.logger.info("检测到敌方随从，满足进化/超进化条件")
                     return True
 
-        # Condition 2: our green (storm) followers exist.
+        # 条件二：我方存在绿色标记的疾驰随从。
         try:
             manager = getattr(actions, "follower_manager", None)
             if manager is None or not hasattr(manager, "get_positions"):
@@ -99,7 +98,7 @@ class LegacyBattlePolicy:
             ds.logger.info("检测到我方疾驰随从，满足进化/超进化条件")
             return True
 
-        # Condition 3: any evolve-priority follower exists.
+        # 条件三：存在配置了进化优先级的随从。
         for follower in our_followers:
             follower_name = follower[3] if len(follower) > 3 else None
             if follower_name and is_evolve_priority_card(

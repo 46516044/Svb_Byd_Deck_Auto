@@ -22,7 +22,7 @@ class ConfigManager:
     """配置管理器类"""
 
     def __init__(self, config_file: Optional[str] = None):
-        # Default to a canonical config path (independent of CWD).
+        # 默认使用规范配置路径，不依赖当前工作目录。
         self.config_file = os.path.abspath(config_file or get_config_path())
         self.repository = ConfigRepository(self.config_file)
         self.config = self._load_config()
@@ -41,7 +41,7 @@ class ConfigManager:
         config = loaded if isinstance(loaded, dict) else {}
 
         if not file_exists:
-            # Keep historical behavior: create config file on first run.
+            # 保持历史行为：首次运行时创建配置文件。
             save_res = self.repository.save(config, indent=2, ensure_ascii=False)
             if not save_res.ok:
                 logger.error(f"保存配置文件失败: {save_res.error}")
@@ -51,7 +51,7 @@ class ConfigManager:
             logger.error(f"加载配置文件失败: {str(err)}，使用默认配置")
             return config
 
-        # If repository normalization/migrations changed the content, persist once.
+        # 仓储规范化或迁移改变内容后，仅回写一次。
         try:
             with open(self.config_file, "r", encoding="utf-8") as f:
                 raw = json.load(f)
@@ -68,7 +68,7 @@ class ConfigManager:
     
     def _merge_configs(self, default_config: Dict[str, Any], user_config: Dict[str, Any]) -> Dict[str, Any]:
         """递归合并配置"""
-        # Treat defaults as immutable; avoid leaking nested references.
+        # 将默认配置视为不可变对象，避免泄漏嵌套引用。
         merged: Dict[str, Any] = copy.deepcopy(default_config) if isinstance(default_config, dict) else {}
 
         if not isinstance(user_config, dict):
@@ -78,7 +78,7 @@ class ConfigManager:
             if key in merged and isinstance(merged.get(key), dict) and isinstance(value, dict):
                 merged[key] = self._merge_configs(merged[key], value)
             else:
-                # Copy nested containers to avoid sharing references with caller data.
+                # 复制嵌套容器，避免与调用方数据共享引用。
                 if isinstance(value, (dict, list)):
                     merged[key] = copy.deepcopy(value)
                 else:

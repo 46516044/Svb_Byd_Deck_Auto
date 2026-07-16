@@ -1,10 +1,8 @@
-"""Helpers for controlling what gets written to disk as config.json.
+"""控制 ``config.json`` 实际落盘内容的辅助函数。
 
-The runtime config is merged with DEFAULT_CONFIG and may include internal/
-hard-coded fields. For end-users, persisting those fields in config.json adds
-noise and confusion (especially when the code does not actually consume them).
-
-This module defines a small "prune" step applied before writing config.json.
+运行时配置与 ``DEFAULT_CONFIG`` 合并后，可能带有内部字段或硬编码字段。将这些
+并未真正由代码消费的内容写给用户，只会增加噪声和理解成本。本模块定义写入前
+执行的精简步骤。
 """
 
 from __future__ import annotations
@@ -13,38 +11,37 @@ import copy
 from typing import Any, Dict
 
 
-# Keys that are currently internal/hard-coded/unused and should not be persisted
-# into user-facing config.json.
+# 以下键当前属于内部字段、硬编码字段或未使用字段，不应写入用户配置。
 _DROP_TOP_LEVEL_KEYS = {
-    "adb_port",  # unused (device serials are stored under devices[*].serial)
-    "templates",  # currently unused (template thresholds are hard-coded per-template)
-    "profiles",  # internal placeholder; runtime defaults fill it
-    "card_mode_options",  # migrated to strategy.effects at load-time
-    "card_evolve_mode_options",  # migrated to strategy.effects at load-time
+    "adb_port",  # 未使用，设备序列号保存在 devices[*].serial。
+    "templates",  # 当前未使用，每个模板的阈值仍由代码单独定义。
+    "profiles",  # 内部占位结构，由运行时默认值补齐。
+    "card_mode_options",  # 加载时迁移到 strategy.effects。
+    "card_evolve_mode_options",  # 加载时迁移到 strategy.effects。
 }
 
 _DROP_GAME_KEYS = {
-    "resolution",  # currently unused (most coordinates assume 1280x720)
-    "evolution_rounds",  # currently hard-coded in state machine
-    "evolution_rounds_with_extra_cost",  # currently hard-coded in state machine
-    "max_follower_count",  # currently hard-coded as HP_MAX_FOLLOWERS
-    "cost_recognition",  # currently unused (cost comes from SIFT templates)
-    "use_enhanced_mulligan",  # runtime now uses canonical enhanced path only
+    "resolution",  # 当前未使用，大部分坐标仍按 1280x720 处理。
+    "evolution_rounds",  # 当前由状态机硬编码。
+    "evolution_rounds_with_extra_cost",  # 当前由状态机硬编码。
+    "max_follower_count",  # 当前硬编码为 HP_MAX_FOLLOWERS。
+    "cost_recognition",  # 当前未使用，费用来自 SIFT 模板。
+    "use_enhanced_mulligan",  # 运行时只使用规范化后的增强换牌路径。
 }
 
 _DROP_AUTO_RESTART_KEYS = {
-    "output_timeout",  # legacy key; replaced by stage_timeout
-    "match_timeout",  # legacy key; removed
+    "output_timeout",  # 旧键，已由 stage_timeout 替代。
+    "match_timeout",  # 已移除的旧键。
 }
 
 _DROP_RUN_SETTINGS_KEYS = {
-    "max_battle_count",  # removed
-    "force_close",  # removed
+    "max_battle_count",  # 已移除。
+    "force_close",  # 已移除。
 }
 
 
 def prune_config_for_save(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a pruned copy of config for persistence to disk."""
+    """返回适合写入磁盘的精简配置副本。"""
 
     if not isinstance(config, dict):
         return {}
@@ -59,7 +56,7 @@ def prune_config_for_save(config: Dict[str, Any]) -> Dict[str, Any]:
         for k in _DROP_GAME_KEYS:
             game.pop(k, None)
 
-        # If game becomes empty (unlikely), drop it.
+        # 若 game 精简后为空，则一并删除该容器。
         if not game:
             cfg.pop("game", None)
 

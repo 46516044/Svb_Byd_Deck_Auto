@@ -1,4 +1,4 @@
-"""Battle phases."""
+"""对战阶段模块。"""
 
 from .play import PlayPhase
 from .evolve import EvolvePhase

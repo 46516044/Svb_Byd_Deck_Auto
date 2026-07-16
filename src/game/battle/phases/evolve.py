@@ -1,4 +1,4 @@
-"""Evolve/super-evolve phase wrapper."""
+"""进化与超进化阶段包装器。"""
 
 from __future__ import annotations
 

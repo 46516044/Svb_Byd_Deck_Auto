@@ -1,4 +1,4 @@
-"""Log listener thread for UI."""
+"""界面日志监听线程。"""
 
 from __future__ import annotations
 

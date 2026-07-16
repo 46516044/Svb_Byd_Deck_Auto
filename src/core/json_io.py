@@ -1,10 +1,7 @@
-"""Lightweight JSON IO helpers.
+"""轻量级 JSON IO 辅助函数。
 
-Avoid partial/corrupted JSON files by using atomic writes.
-
-Design constraints:
-- stdlib-only (safe to import from UI/config layers)
-- Windows-friendly (uses os.replace)
+通过原子写入避免生成半截或损坏的 JSON 文件。模块仅依赖标准库，界面层和配置层
+均可安全导入；落盘使用 ``os.replace``，兼容 Windows。
 """
 
 from __future__ import annotations
@@ -21,7 +18,7 @@ def write_text_atomic(
     *,
     encoding: str = "utf-8",
 ) -> None:
-    """Atomically write a text file (best-effort fsync)."""
+    """原子写入文本文件，并尽力执行 ``fsync``。"""
 
     abs_path = os.path.abspath(path)
     parent = os.path.dirname(abs_path) or os.curdir
@@ -35,12 +32,12 @@ def write_text_atomic(
             try:
                 os.fsync(f.fileno())
             except Exception:
-                # Some filesystems/platforms may not support fsync.
+                # 部分文件系统或平台不支持 fsync，失败时不影响原子替换流程。
                 pass
 
         os.replace(tmp_path, abs_path)
     finally:
-        # If anything failed before replace, remove the temp file.
+        # 替换前任一步骤失败时清理临时文件。
         try:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -57,7 +54,7 @@ def write_json_atomic(
     sort_keys: bool = False,
     encoding: str = "utf-8",
 ) -> None:
-    """Atomically write JSON with a trailing newline."""
+    """原子写入 JSON，并在文件末尾保留换行。"""
 
     text = json.dumps(
         data,
@@ -69,7 +66,7 @@ def write_json_atomic(
 
 
 def read_json(path: str, *, default: Optional[Any] = None, encoding: str = "utf-8") -> Any:
-    """Read JSON, returning default on failure."""
+    """读取 JSON，失败时返回调用方提供的默认值。"""
 
     try:
         with open(path, "r", encoding=encoding) as f:

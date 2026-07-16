@@ -31,24 +31,24 @@ class HandCardManager:
         """
         初始化手牌管理器
         
-        Args:
+        参数：
             device_state: 设备状态对象
         """
         self.device_state: Optional[_DeviceStateLike] = device_state
         self.hand_area = (229, 539, 1130, 710)  # 手牌区域坐标
 
-        # Per-device/per-instance recognizer (templates are shared internally).
+        # 每台设备、每个管理器持有独立识别器，模板数据由内部共享。
         self.sift_recognition = SiftCardRecognition(get_card_cost_dir(ensure=True))
 
     def recognize_hand_cards(self, screenshot, silent=False) -> List[CardInfo]:
         """
         使用SIFT识别手牌区域中的卡牌
         
-        Args:
+        参数：
             screenshot: 游戏截图
             silent: 是否静默模式，不输出日志
             
-        Returns:
+        返回：
             List[Dict]: 识别到的卡牌列表，每个字典包含:
                 - center: (x, y) 卡牌中心位置
                 - cost: int 卡牌费用
@@ -82,11 +82,11 @@ class HandCardManager:
         """
         带重试机制的手牌识别
         
-        Args:
+        参数：
             max_retries: 最大重试次数
             silent: 是否静默模式，不输出日志
             
-        Returns:
+        返回：
             List[Dict]: 识别到的卡牌列表
         """
         device_state = self.device_state
@@ -149,10 +149,10 @@ class HandCardManager:
         """
         根据卡牌名称获取费用
         
-        Args:
+        参数：
             card_name: 卡牌名称
             
-        Returns:
+        返回：
             Optional[int]: 卡牌费用，如果未找到返回None
         """
         return self.sift_recognition.get_card_cost_by_name(card_name)
@@ -161,7 +161,7 @@ class HandCardManager:
         """
         获取所有卡牌名称
         
-        Returns:
+        返回：
             List[str]: 所有卡牌名称列表
         """
         return self.sift_recognition.get_all_card_names()
@@ -170,7 +170,7 @@ class HandCardManager:
         """
         获取所有卡牌的费用映射
         
-        Returns:
+        返回：
             Dict[str, int]: 卡牌名称到费用的映射
         """
         return self.sift_recognition.get_all_card_costs()
@@ -179,10 +179,10 @@ class HandCardManager:
         """
         按费用排序卡牌（从低到高）
         
-        Args:
+        参数：
             cards: 卡牌列表
             
-        Returns:
+        返回：
             List[Dict]: 排序后的卡牌列表
         """
         return sorted(cards, key=lambda card: card['cost'])
@@ -191,10 +191,10 @@ class HandCardManager:
         """
         按位置排序卡牌（从左到右）
         
-        Args:
+        参数：
             cards: 卡牌列表
             
-        Returns:
+        返回：
             List[Dict]: 排序后的卡牌列表
         """
         return sorted(cards, key=lambda card: card['center'][0])
@@ -203,11 +203,11 @@ class HandCardManager:
         """
         按费用过滤卡牌
         
-        Args:
+        参数：
             cards: 卡牌列表
             max_cost: 最大费用
             
-        Returns:
+        返回：
             List[Dict]: 过滤后的卡牌列表
         """
         return [card for card in cards if card['cost'] <= max_cost]
@@ -216,10 +216,10 @@ class HandCardManager:
         """
         获取卡牌摘要信息
         
-        Args:
+        参数：
             cards: 卡牌列表
             
-        Returns:
+        返回：
             str: 卡牌摘要信息
         """
         if not cards:

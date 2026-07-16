@@ -13,10 +13,10 @@ def resource_path(relative_path: str) -> str:
     """
     获取资源文件的绝对路径，兼容PyInstaller和源码运行
     
-    Args:
+    参数：
         relative_path: 相对路径
         
-    Returns:
+    返回：
         绝对路径
     """
     if is_frozen():
@@ -42,10 +42,10 @@ def ensure_directory(path: str) -> bool:
     """
     确保目录存在，如果不存在则创建
     
-    Args:
+    参数：
         path: 目录路径
         
-    Returns:
+    返回：
         是否成功
     """
     try:
@@ -60,7 +60,7 @@ def get_model_directory() -> str:
     """
     获取模型目录路径
     
-    Returns:
+    返回：
         模型目录的绝对路径
     """
     return resource_path("models")
@@ -70,7 +70,7 @@ def get_templates_directory() -> str:
     """
     获取模板目录路径
     
-    Returns:
+    返回：
         模板目录的绝对路径
     """
     return resource_path("templates")

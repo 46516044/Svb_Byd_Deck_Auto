@@ -1,4 +1,4 @@
-"""Shared drag helpers for game actions."""
+"""游戏动作共用的拖拽辅助函数。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def human_like_drag(
     y2: Any,
     duration: Optional[float] = None,
 ) -> None:
-    """Perform a stable swipe with small jitter to emulate human drag."""
+    """执行带轻微抖动的稳定滑动，以模拟人工拖拽。"""
 
     screen_width = 1280
     screen_height = 720

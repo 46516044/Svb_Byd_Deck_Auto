@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Card effects editor (Step3A 2nd-level UI).
+"""卡牌效果编辑器（Step3A 二级界面）。
 
-This dialog edits `strategy.effects` using the Step3A op schema.
-It only depends on lightweight config registries (no cv/u2/game imports).
+该对话框按 Step3A 操作结构编辑 ``strategy.effects``，仅依赖轻量配置注册表，
+不引入 cv、u2 或 game 模块。
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -26,12 +27,12 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-import json
 import os
 
 from src.config.config_repository import ConfigRepository
@@ -52,7 +53,7 @@ from src.config.strategy_effects import (
 from src.utils.card_filename import normalize_card_base_name, split_enhance_key
 
 
-# PyQt5 stubs vary across environments; keep Qt attribute access flexible.
+# 不同环境的 PyQt5 类型桩存在差异，因此保持 Qt 属性访问方式兼容。
 Qt: Any = _Qt
 
 
@@ -81,20 +82,27 @@ def _norm_select_option(v: Any) -> Optional[int]:
 class TargetSpecEditor(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("TargetSpecEditor")
         self._param_widgets: Dict[str, Any] = {}
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
-        layout.addWidget(QLabel("目标:"))
+        target_label = QLabel("目标")
+        target_label.setObjectName("FieldLabel")
+        target_label.setProperty("muted", True)
+        layout.addWidget(target_label)
 
         self.kind_combo = QComboBox()
+        self.kind_combo.setMinimumWidth(120)
         for kd in get_target_kinds():
             self.kind_combo.addItem(str(kd.get("label") or kd.get("kind") or ""), str(kd.get("kind") or ""))
         self.kind_combo.currentIndexChanged.connect(self._rebuild_selector)
         layout.addWidget(self.kind_combo)
 
         self.selector_combo = QComboBox()
+        self.selector_combo.setMinimumWidth(150)
         self.selector_combo.currentIndexChanged.connect(self._rebuild_params)
         layout.addWidget(self.selector_combo)
 
@@ -210,6 +218,7 @@ def _build_param_widget(param_spec: Dict[str, Any]) -> Optional[QWidget]:
 
     if ptype == "bool":
         cb = QCheckBox(label)
+        cb.setObjectName("EffectCheckBox")
         cb.setChecked(bool(param_spec.get("default", False)))
         return cb
 
@@ -224,7 +233,10 @@ def _build_param_widget(param_spec: Dict[str, Any]) -> Optional[QWidget]:
             lay = QHBoxLayout(w)
             lay.setContentsMargins(0, 0, 0, 0)
             if label:
-                lay.addWidget(QLabel(label))
+                field_label = QLabel(label)
+                field_label.setObjectName("FieldLabel")
+                field_label.setProperty("muted", True)
+                lay.addWidget(field_label)
             box = QSpinBox()
             box.setRange(min_v, max_v)
             box.setValue(default_v)
@@ -253,7 +265,10 @@ def _build_param_widget(param_spec: Dict[str, Any]) -> Optional[QWidget]:
         lay = QHBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         if label:
-            lay.addWidget(QLabel(f"{label}:"))
+            field_label = QLabel(label)
+            field_label.setObjectName("FieldLabel")
+            field_label.setProperty("muted", True)
+            lay.addWidget(field_label)
         le = QLineEdit()
         le.setText(str(param_spec.get("default", "") or ""))
         le.setMaximumWidth(220)
@@ -265,7 +280,10 @@ def _build_param_widget(param_spec: Dict[str, Any]) -> Optional[QWidget]:
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         if label:
-            lay.addWidget(QLabel(f"{label}:"))
+            field_label = QLabel(label)
+            field_label.setObjectName("FieldLabel")
+            field_label.setProperty("muted", True)
+            lay.addWidget(field_label)
         edit = QPlainTextEdit()
         edit.setPlainText(str(param_spec.get("default", "") or ""))
         choices = [str(x).strip() for x in (param_spec.get("choices") or []) if str(x).strip()]
@@ -273,6 +291,7 @@ def _build_param_widget(param_spec: Dict[str, Any]) -> Optional[QWidget]:
         if choices:
             edit.setPlaceholderText(hint or "每行一个卡名，越靠前优先级越高；可自行删除/调整顺序。")
             btn = QPushButton("填入卡组卡名")
+            btn.setObjectName("SecondaryButton")
             btn.clicked.connect(lambda _=False, e=edit, names=choices: e.setPlainText("\n".join(names)))
             lay.addWidget(btn)
         elif hint:
@@ -291,7 +310,10 @@ def _build_param_widget(param_spec: Dict[str, Any]) -> Optional[QWidget]:
         lay = QHBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         if label:
-            lay.addWidget(QLabel(f"{label}:"))
+            field_label = QLabel(label)
+            field_label.setObjectName("FieldLabel")
+            field_label.setProperty("muted", True)
+            lay.addWidget(field_label)
         combo = QComboBox()
         for opt in param_spec.get("options") or []:
             if not isinstance(opt, dict):
@@ -320,6 +342,7 @@ def _find_inner_widget(container: QWidget, widget_type: Any) -> Optional[Any]:
 class CardPriorityListEditor(QWidget):
     def __init__(self, *, choices: List[str], hint: str = "", parent=None):
         super().__init__(parent)
+        self.setObjectName("CardPriorityListEditor")
         self.choices = [str(x).strip() for x in (choices or []) if str(x).strip()]
         self.choice_by_norm: Dict[str, str] = {}
         for name in self.choices:
@@ -330,26 +353,32 @@ class CardPriorityListEditor(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
 
         top = QHBoxLayout()
+        top.setSpacing(8)
         self.combo = QComboBox()
         for name in self.choices:
             self.combo.addItem(name, name)
         self.combo.setEnabled(bool(self.choices))
         top.addWidget(self.combo)
         self.add_btn = QPushButton("添加")
+        self.add_btn.setObjectName("SecondaryButton")
         self.add_btn.setEnabled(bool(self.choices))
         self.add_btn.clicked.connect(self._add_current)
         top.addWidget(self.add_btn)
         layout.addLayout(top)
 
         self.hint_label = QLabel(hint or "越上方优先级越高；同一卡名只能添加一次。")
-        self.hint_label.setStyleSheet("color: #6B7280;")
+        self.hint_label.setObjectName("SubtleText")
+        self.hint_label.setProperty("muted", True)
+        self.hint_label.setWordWrap(True)
         layout.addWidget(self.hint_label)
 
         self.rows_container = QWidget()
         self.rows_layout = QVBoxLayout(self.rows_container)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(6)
         layout.addWidget(self.rows_container)
 
         if not self.choices:
@@ -397,23 +426,32 @@ class CardPriorityListEditor(QWidget):
                 w.deleteLater()
 
         for i, name in enumerate(self.items):
-            row = QWidget()
+            row = QFrame()
+            row.setObjectName("PriorityItemRow")
             lay = QHBoxLayout(row)
-            lay.setContentsMargins(0, 0, 0, 0)
-            lay.addWidget(QLabel(name))
-            lay.addStretch()
+            lay.setContentsMargins(8, 4, 4, 4)
+            lay.setSpacing(4)
+            name_label = QLabel(name)
+            name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            name_label.setToolTip(name)
+            lay.addWidget(name_label, 1)
             up = QPushButton("↑")
-            up.setMaximumWidth(30)
+            up.setObjectName("LinkButton")
+            up.setFixedSize(30, 30)
+            up.setToolTip("上移")
             up.setEnabled(i > 0)
             up.clicked.connect(lambda _=False, idx=i: self._move(idx, -1))
             lay.addWidget(up)
             down = QPushButton("↓")
-            down.setMaximumWidth(30)
+            down.setObjectName("LinkButton")
+            down.setFixedSize(30, 30)
+            down.setToolTip("下移")
             down.setEnabled(i < len(self.items) - 1)
             down.clicked.connect(lambda _=False, idx=i: self._move(idx, 1))
             lay.addWidget(down)
             delete = QPushButton("删除")
-            delete.setMaximumWidth(60)
+            delete.setObjectName("DangerGhostButton")
+            delete.setFixedWidth(58)
             delete.clicked.connect(lambda _=False, idx=i: self._delete(idx))
             lay.addWidget(delete)
             self.rows_layout.addWidget(row)
@@ -505,7 +543,7 @@ def _get_param_widget_value(param_spec: Dict[str, Any], widget: QWidget) -> Any:
     return None
 
 
-class StepRow(QWidget):
+class StepRow(QFrame):
     def __init__(
         self,
         *,
@@ -518,6 +556,8 @@ class StepRow(QWidget):
         parent=None,
     ):
         super().__init__(parent)
+        self.setObjectName("EffectStepRow")
+        self.setProperty("card", True)
         self.context_kind = str(context_kind or "")
         self._on_move_up = on_move_up
         self._on_move_down = on_move_down
@@ -530,38 +570,54 @@ class StepRow(QWidget):
         if "op" not in self.op_spec:
             self.op_spec["op"] = ""
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(9)
 
-        layout.addWidget(QLabel("操作:"))
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(8)
+        operation_label = QLabel("操作")
+        operation_label.setObjectName("FieldLabel")
+        operation_label.setProperty("muted", True)
+        header_layout.addWidget(operation_label)
         self.op_combo = QComboBox()
+        self.op_combo.setMinimumWidth(180)
+        self.op_combo.setMaximumWidth(320)
         for op_def in get_operations(context_kind=self.context_kind):
             self.op_combo.addItem(str(op_def.get("label") or op_def.get("op_id") or ""), str(op_def.get("op_id") or ""))
 
-        layout.addWidget(self.op_combo)
-
-        self.params_container = QWidget()
-        self.params_layout = QHBoxLayout(self.params_container)
-        self.params_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.params_container)
-        layout.addStretch()
+        header_layout.addWidget(self.op_combo)
+        header_layout.addStretch()
 
         btn_up = QPushButton("↑")
-        btn_up.setMaximumWidth(30)
+        btn_up.setObjectName("LinkButton")
+        btn_up.setFixedSize(30, 30)
+        btn_up.setToolTip("上移步骤")
         btn_up.clicked.connect(lambda: self._on_move_up(self))
-        layout.addWidget(btn_up)
+        header_layout.addWidget(btn_up)
 
         btn_down = QPushButton("↓")
-        btn_down.setMaximumWidth(30)
+        btn_down.setObjectName("LinkButton")
+        btn_down.setFixedSize(30, 30)
+        btn_down.setToolTip("下移步骤")
         btn_down.clicked.connect(lambda: self._on_move_down(self))
-        layout.addWidget(btn_down)
+        header_layout.addWidget(btn_down)
 
         btn_del = QPushButton("删除")
-        btn_del.setMaximumWidth(60)
+        btn_del.setObjectName("DangerGhostButton")
+        btn_del.setFixedWidth(58)
         btn_del.clicked.connect(lambda: self._on_delete(self))
-        layout.addWidget(btn_del)
+        header_layout.addWidget(btn_del)
+        layout.addLayout(header_layout)
 
-        # Init selection
+        self.params_container = QWidget()
+        self.params_container.setObjectName("EffectParamsContainer")
+        self.params_layout = QVBoxLayout(self.params_container)
+        self.params_layout.setContentsMargins(0, 0, 0, 0)
+        self.params_layout.setSpacing(8)
+        layout.addWidget(self.params_container)
+
+        # 初始化操作选择。
         op_id = str(self.op_spec.get("op") or "")
         idx = self.op_combo.findData(op_id)
         if idx >= 0:
@@ -575,7 +631,7 @@ class StepRow(QWidget):
 
     def _on_op_changed(self) -> None:
         self.op_spec["op"] = str(self.op_combo.currentData() or "")
-        # Reset params to defaults when op changes.
+        # 操作类型变化时将参数重置为该操作的默认值。
         self.op_spec = {"op": self.op_spec["op"]}
         self._rebuild_params()
 
@@ -609,7 +665,7 @@ class StepRow(QWidget):
             if name:
                 self._param_widgets[name] = (spec, w)
 
-            # Load default / current
+        # 加载默认值或当前值。
             if name in self.op_spec:
                 _set_param_widget_value(spec, w, self.op_spec.get(name))
             elif "default" in spec:
@@ -626,24 +682,32 @@ class StepRow(QWidget):
         return out
 
 
-class RawStepRow(QWidget):
+class RawStepRow(QFrame):
     def __init__(self, *, raw_step: Dict[str, Any], on_delete, parent=None):
         super().__init__(parent)
+        self.setObjectName("RawEffectStepRow")
+        self.setProperty("card", True)
         self.raw_step = dict(raw_step or {})
         self._on_delete = on_delete
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("未知Step:"))
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+        unknown_label = QLabel("未知步骤")
+        unknown_label.setProperty("status", "warning")
+        layout.addWidget(unknown_label)
         preview = json.dumps(self.raw_step, ensure_ascii=False, sort_keys=True)
         lab = QLabel(preview)
         lab.setToolTip(preview)
-        lab.setStyleSheet("color: #7A4B00;")
-        layout.addWidget(lab)
-        layout.addStretch()
+        lab.setObjectName("SubtleText")
+        lab.setProperty("muted", True)
+        lab.setWordWrap(True)
+        lab.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout.addWidget(lab, 1)
 
         btn_del = QPushButton("删除")
-        btn_del.setMaximumWidth(60)
+        btn_del.setObjectName("DangerGhostButton")
+        btn_del.setFixedWidth(58)
         btn_del.clicked.connect(lambda: self._on_delete(self))
         layout.addWidget(btn_del)
 
@@ -654,6 +718,7 @@ class RawStepRow(QWidget):
 class TriggerEditor(QWidget):
     def __init__(self, *, trigger_id: str, context_kind: str, deck_card_names: Optional[List[str]] = None, parent=None):
         super().__init__(parent)
+        self.setObjectName("TriggerEditor")
         self.trigger_id = str(trigger_id or "")
         self.context_kind = str(context_kind or "")
         self.deck_card_names = list(deck_card_names or [])
@@ -661,14 +726,20 @@ class TriggerEditor(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         self.rows_container = QWidget()
         self.rows_layout = QVBoxLayout(self.rows_container)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(8)
         layout.addWidget(self.rows_container)
 
         btn_add = QPushButton("添加步骤")
+        btn_add.setObjectName("SecondaryButton")
         btn_add.clicked.connect(self.add_step)
-        layout.addWidget(btn_add)
+        action_layout = QHBoxLayout()
+        action_layout.addWidget(btn_add)
+        action_layout.addStretch()
+        layout.addLayout(action_layout)
 
     def _move_row(self, row: QWidget, delta: int) -> None:
         try:
@@ -717,7 +788,7 @@ class TriggerEditor(QWidget):
         op_id = str(step.get("op") or "")
         op_def = get_operation(op_id) if op_id else None
         if not op_id or not isinstance(op_def, dict):
-            # default to first op for this context
+            # 默认选择当前上下文允许的第一个操作。
             ops = get_operations(context_kind=self.context_kind)
             if ops:
                 step = {"op": str(ops[0].get("op_id") or "")}
@@ -759,7 +830,7 @@ class TriggerEditor(QWidget):
                     self.add_raw_step(step)
                 continue
 
-            # Legacy Step2B dict: expand to ops but preserve unknown keys.
+            # 将旧 Step2B 字典展开为操作，同时保留未知键，避免数据丢失。
             used_any = False
             if "select_option" in step:
                 opt = _norm_select_option(step.get("select_option"))
@@ -810,18 +881,36 @@ class CardEffectsDialog(QDialog):
         self.deck_card_names = list(deck_card_names or [])
 
         self.setWindowTitle(f"特殊效果 - {self.display_name}")
-        self.resize(920, 520)
-        self.setStyleSheet(
-            """
-            QLabel { color: #1F2937; }
-            QCheckBox { color: #1F2937; }
-            QGroupBox { color: #1F2937; }
-            """
-        )
+        self.setObjectName("CardEffectsDialog")
+        self.setProperty("pageRoot", True)
+        self.resize(1020, 640)
+        self.setMinimumSize(760, 520)
 
         self.repo = ConfigRepository(get_config_path())
 
         main = QVBoxLayout(self)
+        main.setContentsMargins(22, 20, 22, 20)
+        main.setSpacing(14)
+
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(12)
+        heading_layout = QVBoxLayout()
+        heading_layout.setSpacing(3)
+        title = QLabel(self.display_name)
+        title.setObjectName("PageTitle")
+        title.setProperty("heading", "page")
+        title.setWordWrap(True)
+        heading_layout.addWidget(title)
+        subtitle = QLabel("卡牌特殊效果")
+        subtitle.setObjectName("SubtleText")
+        subtitle.setProperty("muted", True)
+        heading_layout.addWidget(subtitle)
+        header_layout.addLayout(heading_layout, 1)
+        if self.is_enhance:
+            variant_badge = QLabel("爆能档位")
+            variant_badge.setProperty("status", "warning")
+            header_layout.addWidget(variant_badge, 0, Qt.AlignTop)
+        main.addLayout(header_layout)
 
         hint = QLabel(
             "选择触发时机，并为每个触发时机配置操作序列。\n"
@@ -829,17 +918,28 @@ class CardEffectsDialog(QDialog):
             "提示：爆能档位默认继承本体同触发效果；若配置了同类效果（如同一BUFF类型）则以爆能档位覆盖。\n"
             "提示：身材BUFF与攻击次数BUFF已拆分为两个独立操作；请分别配置。"
         )
-        hint.setStyleSheet("color: #38527A;")
+        hint.setObjectName("SubtleText")
+        hint.setProperty("muted", True)
+        hint.setWordWrap(True)
         main.addWidget(hint)
 
         if self.is_enhance:
             enhance_notice = QLabel("当前为爆能档位配置：可设置该爆能档位专属的出牌/攻击/进化触发效果。")
-            enhance_notice.setStyleSheet("color: #7A4B00;")
+            enhance_notice.setProperty("status", "warning")
+            enhance_notice.setWordWrap(True)
             main.addWidget(enhance_notice)
 
-        # Trigger multi-select
-        trig_bar = QHBoxLayout()
-        trig_bar.addWidget(QLabel("触发时机:"))
+        # 触发器多选区。
+        trigger_panel = QFrame()
+        trigger_panel.setObjectName("SurfacePanel")
+        trigger_panel.setProperty("card", True)
+        trig_bar = QHBoxLayout(trigger_panel)
+        trig_bar.setContentsMargins(14, 10, 14, 10)
+        trig_bar.setSpacing(14)
+        trigger_label = QLabel("触发时机")
+        trigger_label.setObjectName("SectionTitle")
+        trigger_label.setProperty("heading", "section")
+        trig_bar.addWidget(trigger_label)
         self.trig_checks: Dict[str, QCheckBox] = {}
         self.trig_groups: Dict[str, QGroupBox] = {}
         self.trig_editors: Dict[str, TriggerEditor] = {}
@@ -860,23 +960,30 @@ class CardEffectsDialog(QDialog):
             trig_bar.addWidget(cb)
             self.trig_checks[tid] = cb
         trig_bar.addStretch()
-        main.addLayout(trig_bar)
+        main.addWidget(trigger_panel)
 
-        # Scroll content
+        # 可滚动编辑内容。
         scroll = QScrollArea()
+        scroll.setObjectName("EffectsScrollArea")
+        scroll.setFrameShape(QFrame.NoFrame)
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
+        scroll_content.setObjectName("PriorityScrollContent")
         self.scroll_layout = QVBoxLayout(scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 6, 0)
+        self.scroll_layout.setSpacing(10)
         scroll.setWidget(scroll_content)
-        main.addWidget(scroll)
+        main.addWidget(scroll, 1)
 
-        # Build per-trigger editors
+        # 为每个触发器构建独立编辑器。
         for t in allowed:
             tid = str(t.get("id") or "")
             ck = str(t.get("context_kind") or "")
 
             group = QGroupBox(str(t.get("label") or tid))
             group_lay = QVBoxLayout(group)
+            group_lay.setContentsMargins(12, 14, 12, 12)
+            group_lay.setSpacing(8)
             editor = TriggerEditor(trigger_id=tid, context_kind=ck, deck_card_names=self.deck_card_names)
             group_lay.addWidget(editor)
 
@@ -887,6 +994,16 @@ class CardEffectsDialog(QDialog):
         self.scroll_layout.addStretch()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.setObjectName("EffectsDialogButtons")
+        save_button = buttons.button(QDialogButtonBox.Save)
+        if save_button is not None:
+            save_button.setText("保存")
+            save_button.setObjectName("PrimaryButton")
+            save_button.setProperty("variant", "primary")
+        cancel_button = buttons.button(QDialogButtonBox.Cancel)
+        if cancel_button is not None:
+            cancel_button.setText("取消")
+            cancel_button.setObjectName("SecondaryButton")
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         main.addWidget(buttons)
@@ -943,8 +1060,7 @@ class CardEffectsDialog(QDialog):
         enabled = bool(cb.isChecked())
         group.setVisible(enabled)
 
-        # UX: when a trigger is enabled, prefill one default step so users don't
-        # have to manually click "添加步骤" every time.
+        # 启用触发器时预填一个默认步骤，避免用户每次都要手动点击“添加步骤”。
         if enabled:
             editor = self.trig_editors.get(trigger_id)
             if editor is not None and not getattr(editor, "rows", None):
@@ -980,7 +1096,7 @@ class CardEffectsDialog(QDialog):
             if cb.isChecked():
                 editor = self.trig_editors.get(tid)
                 steps = editor.value() if editor is not None else []
-                # Clean empty
+        # 清理空触发器和空卡牌效果容器。
                 steps = [s for s in steps if isinstance(s, dict) and s]
                 if steps:
                     card_eff[tid] = steps
@@ -1028,7 +1144,7 @@ class CardEffectsDialog(QDialog):
             else:
                 return
 
-            # 获取当前选中的卡组文件（使用新的 current_deck_file 属性）
+        # 通过新的 ``current_deck_file`` 属性获取当前卡组文件。
             deck_file = getattr(card_select_page, "current_deck_file", None)
             if not deck_file:
                 return
@@ -1043,13 +1159,13 @@ class CardEffectsDialog(QDialog):
             with open(deck_path, "r", encoding="utf-8") as f:
                 deck_data = json.load(f)
 
-            # 更新 strategy_config
+        # 更新 ``strategy_config``。
             sc = deck_data.get("strategy_config")
             if not isinstance(sc, dict):
                 sc = {}
                 deck_data["strategy_config"] = sc
 
-            # 获取或创建 strategy.effects
+        # 获取或创建 ``strategy.effects``。
             strategy = sc.get("strategy")
             if not isinstance(strategy, dict):
                 strategy = {}
